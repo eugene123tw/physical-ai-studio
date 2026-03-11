@@ -200,6 +200,8 @@ class PI05(Policy):
         *,
         n_action_steps: int | None = None,
         num_inference_steps: int | None = None,
+        compile_model: bool | None = None,
+        compile_mode: str | None = None,
         device: str | torch.device = "cpu",
         **kwargs: Any,
     ) -> PI05:
@@ -313,6 +315,10 @@ class PI05(Policy):
             config_kwargs["n_action_steps"] = n_action_steps
         if num_inference_steps is not None:
             config_kwargs["num_inference_steps"] = num_inference_steps
+        if compile_model is not None:
+            config_kwargs["compile_model"] = compile_model
+        if compile_mode is not None:
+            config_kwargs["compile_mode"] = compile_mode
 
         # --- build dataset_stats from HF artefacts ---
         dataset_stats = cls._extract_dataset_stats(hf_config, preprocessor_file, preprocessor_dir)

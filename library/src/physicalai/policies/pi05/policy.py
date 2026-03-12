@@ -4,13 +4,12 @@
 # Copyright 2025 Physical Intelligence and The HuggingFace Inc. team.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PI05 Policy - Lightning wrapper for training and inference."""
+"""Pi05 Policy - Lightning wrapper for training and inference."""
 
 from __future__ import annotations
 
 import json
 import logging
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -22,26 +21,28 @@ from physicalai.policies.base import Policy
 from physicalai.train.utils import reformat_dataset_to_match_policy
 from safetensors.torch import load_file
 
-from .config import PI05Config
-from .model import PI05Model
+from .config import Pi05Config
+from .model import Pi05Model
 from .preprocessor import make_pi05_preprocessors
+from .pretrained_utils import extract_dataset_stats as _extract_dataset_stats
+from .pretrained_utils import fix_state_dict_keys as _fix_state_dict_keys
 
 if TYPE_CHECKING:
     from physicalai.data import Observation
 
-    from .preprocessor import PI05Postprocessor, PI05Preprocessor
+    from .preprocessor import Pi05Postprocessor, Pi05Preprocessor
 
 logger = logging.getLogger(__name__)
 
 
-class PI05(Policy):
-    """PI05 Policy - Physical Intelligence's flow matching VLA model.
+class Pi05(Policy):
+    """Pi05 Policy - Physical Intelligence's flow matching VLA model.
 
-    Lightning wrapper for training and inference with PI05 model.
+    Lightning wrapper for training and inference with Pi05 model.
 
     Uses dual-path initialization:
-    - **Lazy path**: `PI05()` + `trainer.fit()` - model built in setup()
-    - **Eager path**: `PI05.load_from_checkpoint()` - model built immediately
+    - **Lazy path**: `Pi05()` + `trainer.fit()` - model built in setup()
+    - **Eager path**: `Pi05.load_from_checkpoint()` - model built immediately
 
     Args:
         paligemma_variant: Gemma variant for VLM backbone. Default: "gemma_2b".
@@ -64,13 +65,13 @@ class PI05(Policy):
     Example:
         Training:
 
-        >>> policy = PI05(optimizer_lr=2.5e-5)
+        >>> policy = Pi05(optimizer_lr=2.5e-5)
         >>> trainer = physicalai.Trainer(max_epochs=100)
         >>> trainer.fit(policy, datamodule)
 
         Inference:
 
-        >>> policy = PI05.load_from_checkpoint("checkpoint.ckpt")
+        >>> policy = Pi05.load_from_checkpoint("checkpoint.ckpt")
         >>> action = policy.select_action(obs)
     """
 
@@ -122,7 +123,7 @@ class PI05(Policy):
     ) -> None:
         super().__init__(n_action_steps=n_action_steps)
 
-        self.config = PI05Config(
+        self.config = Pi05Config(
             paligemma_variant=paligemma_variant,
             action_expert_variant=action_expert_variant,
             dtype=dtype,
@@ -159,10 +160,10 @@ class PI05(Policy):
         self.save_hyperparameters(ignore=["config"])
         self.hparams["config"] = self.config.to_dict()
 
-        self.model: PI05Model | None = None
+        self.model: Pi05Model | None = None
 
-        self._preprocessor: PI05Preprocessor | None = None
-        self._postprocessor: PI05Postprocessor | None = None
+        self._preprocessor: Pi05Preprocessor | None = None
+        self._postprocessor: Pi05Postprocessor | None = None
 
         self._dataset_stats = dataset_stats
 
@@ -177,7 +178,7 @@ class PI05(Policy):
 
         Called by both lazy (setup) and eager (checkpoint) paths.
         """
-        self.model = PI05Model(self.config)
+        self.model = Pi05Model(self.config)
 
         if self.config.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
@@ -200,12 +201,12 @@ class PI05(Policy):
         *,
         n_action_steps: int | None = 10,
         num_inference_steps: int | None = None,
-        compile_model: bool | None = None,
-        compile_mode: str | None = None,
+        compile_model: bool = False,
+        compile_mode: str | None = "default",
         device: str | torch.device = "cpu",
         **kwargs: Any,
-    ) -> PI05:
-        """Load pretrained PI05 from a HuggingFace model repo.
+    ) -> Pi05:
+        """Load pretrained Pi05 from a HuggingFace model repo.
 
         Loads weights from a HuggingFace model ID (e.g. ``lerobot/pi05_libero_finetuned``)
         or a local directory containing ``config.json`` and ``model.safetensors``.
@@ -223,11 +224,11 @@ class PI05(Policy):
             **kwargs: Extra arguments forwarded to ``huggingface_hub.hf_hub_download``.
 
         Returns:
-            Initialized PI05 policy with loaded weights.
+            Initialized Pi05 policy with loaded weights.
 
         Example:
-            >>> policy = PI05.from_pretrained("lerobot/pi05_libero_finetuned")
-            >>> policy = PI05.from_pretrained(
+            >>> policy = Pi05.from_pretrained("lerobot/pi05_libero_finetuned")
+            >>> policy = Pi05.from_pretrained(
             ...     "lerobot/pi05_libero_finetuned",
             ...     n_action_steps=10,
             ...     device="cuda",
@@ -280,36 +281,8 @@ class PI05(Policy):
         with open(config_file) as f:
             hf_config = json.load(f)
 
-        config_kwargs: dict[str, Any] = {}
-        _FIELD_MAP = {
-            "paligemma_variant": "paligemma_variant",
-            "action_expert_variant": "action_expert_variant",
-            "dtype": "dtype",
-            "n_obs_steps": "n_obs_steps",
-            "chunk_size": "chunk_size",
-            "n_action_steps": "n_action_steps",
-            "max_state_dim": "max_state_dim",
-            "max_action_dim": "max_action_dim",
-            "num_inference_steps": "num_inference_steps",
-            "time_sampling_beta_alpha": "time_sampling_beta_alpha",
-            "time_sampling_beta_beta": "time_sampling_beta_beta",
-            "time_sampling_scale": "time_sampling_scale",
-            "time_sampling_offset": "time_sampling_offset",
-            "min_period": "min_period",
-            "max_period": "max_period",
-            "empty_cameras": "empty_cameras",
-            "tokenizer_max_length": "tokenizer_max_length",
-            "gradient_checkpointing": "gradient_checkpointing",
-            "freeze_vision_encoder": "freeze_vision_encoder",
-            "train_expert_only": "train_expert_only",
-        }
-        for hf_key, our_key in _FIELD_MAP.items():
-            if hf_key in hf_config:
-                config_kwargs[our_key] = hf_config[hf_key]
-
-        if "image_resolution" in hf_config:
-            res = hf_config["image_resolution"]
-            config_kwargs["image_resolution"] = tuple(res) if isinstance(res, list) else res
+        # from_dict skips unknown keys and coerces lists→tuples via type hints
+        config_kwargs = Pi05Config.from_dict(hf_config).to_dict()
 
         # Allow caller overrides
         if n_action_steps is not None:
@@ -322,7 +295,7 @@ class PI05(Policy):
             config_kwargs["compile_mode"] = compile_mode
 
         # --- build dataset_stats from HF artefacts ---
-        dataset_stats = cls._extract_dataset_stats(hf_config, preprocessor_file, preprocessor_dir)
+        dataset_stats = _extract_dataset_stats(hf_config, preprocessor_file, preprocessor_dir)
 
         # --- create policy with full initialization (no meta device) ---
         config_kwargs["dataset_stats"] = dataset_stats
@@ -332,18 +305,22 @@ class PI05(Policy):
         original_sd = load_file(str(weights_file))
 
         # fix keys (same logic as lerobot's _fix_pytorch_state_dict_keys)
-        fixed_sd = cls._fix_state_dict_keys(original_sd)
+        fixed_sd = _fix_state_dict_keys(original_sd)
 
         # load into model
         missing, unexpected = policy.model.load_state_dict(fixed_sd, strict=False, assign=True)
         if missing:
-            logger.warning("Missing keys when loading pretrained weights: %d keys", len(missing))
+            msg = f"Missing keys when loading pretrained weights: {len(missing)} keys"
+            logger.warning(msg)
             for k in missing[:10]:
-                logger.warning("  - %s", k)
+                msg = f"  - {k}"
+                logger.warning(msg)
         if unexpected:
-            logger.warning("Unexpected keys when loading pretrained weights: %d keys", len(unexpected))
+            msg = f"Unexpected keys when loading pretrained weights: {len(unexpected)} keys"
+            logger.warning(msg)
             for k in unexpected[:10]:
-                logger.warning("  - %s", k)
+                msg = f"  - {k}"
+                logger.warning(msg)
 
         # Apply dtype/precision
         policy.model.paligemma_with_expert.to_bfloat16_for_selected_params(policy.config.dtype)
@@ -351,239 +328,9 @@ class PI05(Policy):
 
         policy.to(device)
         policy.eval()
-        logger.info("Loaded PI05 from %s", pretrained_name_or_path)
+        msg = f"Loaded Pi05 from {pretrained_name_or_path}"
+        logger.info(msg)
         return policy
-
-    # ------------------------------------------------------------------
-    # Private helpers for from_pretrained
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _extract_dataset_stats(
-        hf_config: dict[str, Any],
-        preprocessor_file: Path | None,
-        preprocessor_dir: Path | None,
-    ) -> dict[str, dict[str, Any]]:
-        """Build ``dataset_stats`` dict that ``make_pi05_preprocessors`` expects.
-
-        The stats format expected by the decoupled preprocessor is:
-        ``{feature_name: {"name": str, "shape": tuple, "mean": list, "std": list}}``
-
-        Lerobot models use QUANTILES normalization with q01/q99 stats.
-        We convert to mean/std that produces an equivalent [-1, 1] mapping:
-        ``mean = (q01 + q99) / 2``  and  ``std = (q99 - q01) / 2``.
-        """
-        stats: dict[str, dict[str, Any]] = {}
-
-        # Try to extract stats from preprocessor config + state file
-        if preprocessor_file is not None and preprocessor_file.exists():
-            try:
-                with open(preprocessor_file) as f:
-                    preproc_config = json.load(f)
-                stats = PI05._parse_preprocessor_stats(preproc_config, hf_config, preprocessor_dir)
-                if stats:
-                    return stats
-            except Exception:
-                logger.debug("Could not parse preprocessor file, falling back to config.json")
-
-        # Fallback: build minimal stats from config.json features
-        stats = PI05._parse_config_features(hf_config)
-        return stats
-
-    @staticmethod
-    def _parse_preprocessor_stats(
-        preproc_config: dict[str, Any],
-        hf_config: dict[str, Any],
-        preprocessor_dir: Path | None,
-    ) -> dict[str, dict[str, Any]]:
-        """Extract normalization stats from lerobot's policy_preprocessor.json.
-
-        Lerobot stores the stats in a separate safetensors file (referenced
-        by ``state_file`` in each pipeline step). The keys are flat:
-        ``"observation.state.q01"``, ``"action.q99"``, etc.
-        """
-        stats: dict[str, dict[str, Any]] = {}
-
-        steps = preproc_config.get("steps", [])
-        if isinstance(steps, dict):
-            steps = list(steps.values())
-
-        for step in steps:
-            step_type = step.get("registry_name", step.get("type", step.get("class_name", "")))
-            if "normalizer" not in step_type.lower():
-                continue
-
-            state_file = step.get("state_file")
-            if not state_file or preprocessor_dir is None:
-                continue
-
-            state_path = preprocessor_dir / state_file
-            if not state_path.exists():
-                logger.warning("Normalizer state file not found: %s", state_path)
-                continue
-
-            # Load the flat tensor dict: {"observation.state.q01": tensor, ...}
-            tensor_stats = load_file(str(state_path))
-
-            # Group by feature name: "observation.state.q01" → key="observation.state", stat="q01"
-            grouped: dict[str, dict[str, list[float]]] = {}
-            for flat_key, tensor in tensor_stats.items():
-                feat_name, stat_name = flat_key.rsplit(".", 1)
-                grouped.setdefault(feat_name, {})[stat_name] = tensor.cpu().tolist()
-
-            # Convert each feature's stats to mean/std
-            for feat_name, feat_stats in grouped.items():
-                shape = PI05._resolve_feature_shape(feat_name, hf_config, feat_stats)
-                mean, std = PI05._convert_normalization_stats(feat_stats)
-                if mean is not None and std is not None:
-                    stats[feat_name] = {
-                        "name": feat_name,
-                        "shape": shape,
-                        "mean": mean,
-                        "std": std,
-                    }
-
-        return stats
-
-    @staticmethod
-    def _parse_config_features(
-        hf_config: dict[str, Any],
-    ) -> dict[str, dict[str, Any]]:
-        """Build stats from config.json ``input_features``/``output_features``.
-
-        When no preprocessor stats file is available, build identity-like stats
-        from feature shapes in the config.
-        """
-        stats: dict[str, dict[str, Any]] = {}
-
-        for section in ("input_features", "output_features"):
-            features = hf_config.get(section, {})
-            if not isinstance(features, dict):
-                continue
-            for feat_name, feat_info in features.items():
-                if not isinstance(feat_info, dict):
-                    continue
-                shape = feat_info.get("shape", None)
-                if shape is None:
-                    continue
-                shape = tuple(shape)
-                dim = shape[0] if shape else 1
-
-                if "state" in feat_name.lower() or feat_name == ACTION or "action" in feat_name.lower():
-                    stats[feat_name] = {
-                        "name": feat_name,
-                        "shape": shape,
-                        "mean": [0.0] * dim,
-                        "std": [1.0] * dim,
-                    }
-
-        return stats
-
-    @staticmethod
-    def _resolve_feature_shape(
-        feat_name: str,
-        hf_config: dict[str, Any],
-        feat_stats: dict[str, Any],
-    ) -> tuple[int, ...]:
-        """Resolve shape for a feature, checking config features then stat tensors."""
-        # Check config features
-        for section in ("input_features", "output_features"):
-            features = hf_config.get(section, {})
-            if isinstance(features, dict) and feat_name in features:
-                feat_info = features[feat_name]
-                if isinstance(feat_info, dict) and "shape" in feat_info:
-                    return tuple(feat_info["shape"])
-
-        # Infer from stats tensor lengths
-        for key in ("mean", "std", "q01", "q99", "min", "max"):
-            val = feat_stats.get(key)
-            if isinstance(val, list):
-                return (len(val),)
-
-        return (1,)
-
-    @staticmethod
-    def _convert_normalization_stats(
-        feat_stats: dict[str, Any],
-    ) -> tuple[list[float] | None, list[float] | None]:
-        """Convert lerobot normalization stats to mean/std.
-
-        Handles QUANTILES (q01/q99), MIN_MAX (min/max), and MEAN_STD (mean/std).
-        QUANTILES conversion: mean = (q01+q99)/2, std = (q99-q01)/2.
-        MIN_MAX conversion:   mean = (min+max)/2, std = (max-min)/2.
-        """
-        # Already has mean/std
-        if "mean" in feat_stats and "std" in feat_stats:
-            mean = feat_stats["mean"]
-            std = feat_stats["std"]
-            if isinstance(mean, list) and isinstance(std, list):
-                return mean, std
-
-        # QUANTILES: q01/q99 → mean/std
-        if "q01" in feat_stats and "q99" in feat_stats:
-            q01 = feat_stats["q01"]
-            q99 = feat_stats["q99"]
-            if isinstance(q01, list) and isinstance(q99, list):
-                mean = [(a + b) / 2.0 for a, b in zip(q01, q99, strict=False)]
-                std = [max((b - a) / 2.0, 1e-8) for a, b in zip(q01, q99, strict=False)]
-                return mean, std
-
-        # MIN_MAX: min/max → mean/std
-        if "min" in feat_stats and "max" in feat_stats:
-            mn = feat_stats["min"]
-            mx = feat_stats["max"]
-            if isinstance(mn, list) and isinstance(mx, list):
-                mean = [(a + b) / 2.0 for a, b in zip(mn, mx, strict=False)]
-                std = [max((b - a) / 2.0, 1e-8) for a, b in zip(mn, mx, strict=False)]
-                return mean, std
-
-        return None, None
-
-    @staticmethod
-    def _fix_state_dict_keys(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """Fix state dict keys to match PI05Model architecture.
-
-        Adapted from lerobot's ``PI05Policy._fix_pytorch_state_dict_keys``.
-        """
-        fixed: dict[str, torch.Tensor] = {}
-
-        for key, value in state_dict.items():
-            new_key = key
-
-            # Strip "model." prefix — HF checkpoint wraps everything
-            # under the policy's `self.model`, but we load into PI05Model directly.
-            new_key = new_key.removeprefix("model.")
-
-            # Skip adaRMS mismatch keys for expert
-            if re.match(
-                r"paligemma_with_expert\.gemma_expert\.model\.layers\.\d+\."
-                r"(input_layernorm|post_attention_layernorm)\.weight$",
-                new_key,
-            ):
-                # PI05 expert uses adaRMS — skip plain layernorm weights
-                continue
-
-            if re.match(r"paligemma_with_expert\.gemma_expert\.model\.norm\.weight$", new_key):
-                continue
-
-            # Rename action_time_mlp_* → time_mlp_*
-            if new_key.startswith("action_time_mlp_in."):
-                new_key = new_key.replace("action_time_mlp_in.", "time_mlp_in.")
-            elif new_key.startswith("action_time_mlp_out."):
-                new_key = new_key.replace("action_time_mlp_out.", "time_mlp_out.")
-
-            # Skip state_proj (not used in pi05)
-            if new_key.startswith("state_proj."):
-                continue
-
-            # Copy lm_head → embed_tokens (weight tying)
-            if new_key == "paligemma_with_expert.paligemma.lm_head.weight":
-                tied_key = "paligemma_with_expert.paligemma.model.language_model.embed_tokens.weight"
-                fixed[tied_key] = value.clone()
-
-            fixed[new_key] = value
-
-        return fixed
 
     def setup(self, stage: str) -> None:
         """Set up model from datamodule (lazy initialization path).

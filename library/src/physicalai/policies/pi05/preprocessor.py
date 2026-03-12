@@ -4,7 +4,7 @@
 # Copyright 2025 Physical Intelligence and The HuggingFace Inc. team.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Preprocessor for PI05 model.
+"""Preprocessor for Pi05 model.
 
 Handles:
 - State normalization and discretization into language tokens
@@ -35,10 +35,10 @@ NORM_MAP = {
 }
 
 
-class PI05Preprocessor(torch.nn.Module):
-    """Preprocessor for PI05 model inputs.
+class Pi05Preprocessor(torch.nn.Module):
+    """Preprocessor for Pi05 model inputs.
 
-    Transforms observations and actions into the format expected by PI05Model:
+    Transforms observations and actions into the format expected by Pi05Model:
     1. Normalizes state/action using mean-std normalization
     2. Discretizes state into 256 bins and embeds in text prompt
     3. Tokenizes text prompt with PaliGemma tokenizer
@@ -80,7 +80,7 @@ class PI05Preprocessor(torch.nn.Module):
             self._state_action_normalizer = torch.nn.Identity()
 
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
-        """Process a batch for PI05 model input.
+        """Process a batch for Pi05 model input.
 
         Args:
             batch: Dictionary containing STATE, TASK (text), image keys, and optionally ACTION.
@@ -142,9 +142,9 @@ class PI05Preprocessor(torch.nn.Module):
         return batch
 
     def _preprocess_images(self, batch: dict[str, Any]) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-        """Process images for PI05 model.
+        """Process images for Pi05 model.
 
-        PI05 uses PaliGemma which expects images in [B, C, H, W] format
+        Pi05 uses PaliGemma which expects images in [B, C, H, W] format
         normalized to [-1, 1].
 
         Returns:
@@ -222,8 +222,8 @@ class PI05Preprocessor(torch.nn.Module):
         return self._tokenizer
 
 
-class PI05Postprocessor(torch.nn.Module):
-    """Postprocessor for PI05 model outputs.
+class Pi05Postprocessor(torch.nn.Module):
+    """Postprocessor for Pi05 model outputs.
 
     Denormalizes predicted actions back to the original action space.
 
@@ -259,8 +259,8 @@ def make_pi05_preprocessors(
     image_resolution: tuple[int, int] = (224, 224),
     max_token_len: int = 200,
     empty_cameras: int = 0,
-) -> tuple[PI05Preprocessor, PI05Postprocessor]:
-    """Create preprocessor and postprocessor pair for PI05.
+) -> tuple[Pi05Preprocessor, Pi05Postprocessor]:
+    """Create preprocessor and postprocessor pair for Pi05.
 
     Args:
         max_state_dim: Maximum state dimension.
@@ -297,7 +297,7 @@ def make_pi05_preprocessors(
                 ),
             )
 
-    preprocessor = PI05Preprocessor(
+    preprocessor = Pi05Preprocessor(
         max_state_dim=max_state_dim,
         max_action_dim=max_action_dim,
         image_resolution=image_resolution,
@@ -306,7 +306,7 @@ def make_pi05_preprocessors(
         empty_cameras=empty_cameras,
     )
 
-    postprocessor = PI05Postprocessor(
+    postprocessor = Pi05Postprocessor(
         features=features,
     )
 

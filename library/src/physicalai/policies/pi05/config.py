@@ -1,17 +1,17 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""Configuration for PI05 model.
+"""Configuration for Pi05 model.
 
-This module provides dataclass configurations for the PI05 flow matching
-vision-language-action model, decoupled from lerobot dependencies.
+This module provides dataclass configurations for the Pi05 flow matching
+vision-language-action model.
 
 For CLI usage, use the YAML config:
     physicalai fit --config configs/physicalai/pi05.yaml
 
 Example (API):
-    >>> from physicalai.policies.pi05_decoupled import PI05Config
-    >>> config = PI05Config()
+    >>> from physicalai.policies.pi05 import Pi05Config
+    >>> config = Pi05Config()
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ DEFAULT_IMAGE_SIZE = 224
 
 
 @dataclass(frozen=True)
-class PI05Config(Config):
-    """Configuration for PI05 flow matching model.
+class Pi05Config(Config):
+    """Configuration for Pi05 flow matching model.
 
     Attributes:
         paligemma_variant: Gemma variant for the VLM backbone. Defaults to "gemma_2b".

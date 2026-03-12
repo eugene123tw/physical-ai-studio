@@ -18,7 +18,7 @@
 """PI Gemma model components with AdaRMS support.
 
 Extends HuggingFace Gemma/PaliGemma with adaptive RMSNorm and gated residuals
-for use as VLM backbone and action expert in PI05.
+for use as VLM backbone and action expert in Pi05.
 
 Requires: transformers library.
 """
@@ -47,7 +47,7 @@ try:
         PaliGemmaModel,
     )
 except ImportError as e:
-    msg = "PI05 requires the transformers library. Install with: uv pip install transformers"
+    msg = "Pi05 requires the transformers library. Install with: uv pip install transformers"
     raise ImportError(msg) from e
 
 

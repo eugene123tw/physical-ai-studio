@@ -15,7 +15,7 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""PI05 model implementation, decoupled from lerobot dependencies."""
+"""Pi05 model implementation."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ import torch.nn.functional as F  # noqa: N812
 from torch import Tensor, nn
 from transformers.cache_utils import DynamicCache
 
-from .config import DEFAULT_IMAGE_SIZE, PI05Config
+from .config import DEFAULT_IMAGE_SIZE, Pi05Config
 from .pi_gemma import (
     PaliGemmaForConditionalGenerationWithPiGemma,
     PiGemmaForCausalLM,
@@ -43,7 +43,7 @@ try:
     from transformers.models.auto import CONFIG_MAPPING
     from transformers.models.gemma import modeling_gemma
 except ImportError as e:
-    msg = "PI05 requires the transformers library. Install with: uv pip install transformers"
+    msg = "Pi05 requires the transformers library. Install with: uv pip install transformers"
     raise ImportError(msg) from e
 
 logger = logging.getLogger(__name__)
@@ -340,7 +340,7 @@ def get_gemma_config(variant: str) -> GemmaVariantConfig:
 
 
 class PaliGemmaWithExpertModel(nn.Module):
-    """PaliGemma model with action expert for PI05."""
+    """PaliGemma model with action expert for Pi05."""
 
     def __init__(
         self,
@@ -550,14 +550,14 @@ class PaliGemmaWithExpertModel(nn.Module):
         return [prefix_output, suffix_output], prefix_past_key_values
 
 
-class PI05Model(nn.Module):
-    """Core PI05 PyTorch model for flow matching VLA.
+class Pi05Model(nn.Module):
+    """Core Pi05 PyTorch model for flow matching VLA.
 
     This is the nn.Module that contains the actual model logic,
     separated from the Lightning wrapper.
     """
 
-    def __init__(self, config: PI05Config):
+    def __init__(self, config: Pi05Config):
         super().__init__()
         self.config = config
 
@@ -599,7 +599,8 @@ class PI05Model(nn.Module):
         self.paligemma_with_expert.paligemma.model.language_model.gradient_checkpointing = True
         self.paligemma_with_expert.paligemma.model.vision_tower.gradient_checkpointing = True
         self.paligemma_with_expert.gemma_expert.model.gradient_checkpointing = True
-        logger.info("Enabled gradient checkpointing for PI05Model")
+        msg = f"Enabled gradient checkpointing for Pi05Model"
+        logger.info(msg)
 
     def gradient_checkpointing_disable(self) -> None:
         """Disable gradient checkpointing."""
@@ -607,7 +608,8 @@ class PI05Model(nn.Module):
         self.paligemma_with_expert.paligemma.model.language_model.gradient_checkpointing = False
         self.paligemma_with_expert.paligemma.model.vision_tower.gradient_checkpointing = False
         self.paligemma_with_expert.gemma_expert.model.gradient_checkpointing = False
-        logger.info("Disabled gradient checkpointing for PI05Model")
+        msg = f"Disabled gradient checkpointing for Pi05Model"
+        logger.info(msg)
 
     def _apply_checkpoint(self, func, *args, **kwargs):
         """Apply gradient checkpointing if enabled."""

@@ -45,6 +45,7 @@ class Pi05(Policy):
     - **Eager path**: `Pi05.load_from_checkpoint()` - model built immediately
 
     Args:
+        pretrained_name_or_path: HuggingFace repo ID or local path for pretrained weights and config.
         paligemma_variant: Gemma variant for VLM backbone. Default: "gemma_2b".
         action_expert_variant: Gemma variant for action expert. Default: "gemma_300m".
         dtype: Model precision. Default: "float32".
@@ -77,6 +78,9 @@ class Pi05(Policy):
 
     def __init__(  # noqa: PLR0913
         self,
+        # Pretrained model id
+        pretrained_name_or_path: str | Path | None = None,
+
         # Model architecture
         paligemma_variant: str = "gemma_2b",
         action_expert_variant: str = "gemma_300m",
@@ -123,39 +127,49 @@ class Pi05(Policy):
     ) -> None:
         super().__init__(n_action_steps=n_action_steps)
 
-        self.config = Pi05Config(
-            paligemma_variant=paligemma_variant,
-            action_expert_variant=action_expert_variant,
-            dtype=dtype,
-            n_obs_steps=n_obs_steps,
-            chunk_size=chunk_size,
-            n_action_steps=n_action_steps,
-            max_state_dim=max_state_dim,
-            max_action_dim=max_action_dim,
-            num_inference_steps=num_inference_steps,
-            time_sampling_beta_alpha=time_sampling_beta_alpha,
-            time_sampling_beta_beta=time_sampling_beta_beta,
-            time_sampling_scale=time_sampling_scale,
-            time_sampling_offset=time_sampling_offset,
-            min_period=min_period,
-            max_period=max_period,
-            image_resolution=image_resolution,
-            empty_cameras=empty_cameras,
-            tokenizer_max_length=tokenizer_max_length,
-            gradient_checkpointing=gradient_checkpointing,
-            compile_model=compile_model,
-            compile_mode=compile_mode,
-            freeze_vision_encoder=freeze_vision_encoder,
-            train_expert_only=train_expert_only,
-            optimizer_lr=optimizer_lr,
-            optimizer_betas=optimizer_betas,
-            optimizer_eps=optimizer_eps,
-            optimizer_weight_decay=optimizer_weight_decay,
-            optimizer_grad_clip_norm=optimizer_grad_clip_norm,
-            scheduler_warmup_steps=scheduler_warmup_steps,
-            scheduler_decay_steps=scheduler_decay_steps,
-            scheduler_decay_lr=scheduler_decay_lr,
-        )
+        weight_file = None
+        if pretrained_name_or_path is not None:
+            self.config, dataset_stats, weight_file = self._from_hf(
+                pretrained_name_or_path,
+                n_action_steps=n_action_steps,
+                num_inference_steps=num_inference_steps,
+                compile_model=compile_model,
+                compile_mode=compile_mode,
+            )
+        else:
+            self.config = Pi05Config(
+                paligemma_variant=paligemma_variant,
+                action_expert_variant=action_expert_variant,
+                dtype=dtype,
+                n_obs_steps=n_obs_steps,
+                chunk_size=chunk_size,
+                n_action_steps=n_action_steps,
+                max_state_dim=max_state_dim,
+                max_action_dim=max_action_dim,
+                num_inference_steps=num_inference_steps,
+                time_sampling_beta_alpha=time_sampling_beta_alpha,
+                time_sampling_beta_beta=time_sampling_beta_beta,
+                time_sampling_scale=time_sampling_scale,
+                time_sampling_offset=time_sampling_offset,
+                min_period=min_period,
+                max_period=max_period,
+                image_resolution=image_resolution,
+                empty_cameras=empty_cameras,
+                tokenizer_max_length=tokenizer_max_length,
+                gradient_checkpointing=gradient_checkpointing,
+                compile_model=compile_model,
+                compile_mode=compile_mode,
+                freeze_vision_encoder=freeze_vision_encoder,
+                train_expert_only=train_expert_only,
+                optimizer_lr=optimizer_lr,
+                optimizer_betas=optimizer_betas,
+                optimizer_eps=optimizer_eps,
+                optimizer_weight_decay=optimizer_weight_decay,
+                optimizer_grad_clip_norm=optimizer_grad_clip_norm,
+                scheduler_warmup_steps=scheduler_warmup_steps,
+                scheduler_decay_steps=scheduler_decay_steps,
+                scheduler_decay_lr=scheduler_decay_lr,
+            )
 
         self.save_hyperparameters(ignore=["config"])
         self.hparams["config"] = self.config.to_dict()
@@ -168,17 +182,45 @@ class Pi05(Policy):
         self._dataset_stats = dataset_stats
 
         if dataset_stats is not None:
-            self._initialize_model(dataset_stats)
+            self._initialize_model(dataset_stats, weight_file)
 
     def _initialize_model(
         self,
         dataset_stats: dict[str, dict[str, list[float] | str | tuple]],
+        weights_file: Path | None = None,
     ) -> None:
         """Initialize model and preprocessors.
 
         Called by both lazy (setup) and eager (checkpoint) paths.
         """
+        
         self.model = Pi05Model(self.config)
+        if weights_file is not None:
+
+            # load raw state dict
+            original_sd = load_file(str(weights_file))
+
+            # fix keys (same logic as lerobot's _fix_pytorch_state_dict_keys)
+            fixed_sd = _fix_state_dict_keys(original_sd)
+
+            # load into model
+            missing, unexpected = self.model.load_state_dict(fixed_sd, strict=False, assign=True)
+            if missing:
+                msg = f"Missing keys when loading pretrained weights: {len(missing)} keys"
+                logger.warning(msg)
+                for k in missing[:10]:
+                    msg = f"  - {k}"
+                    logger.warning(msg)
+            if unexpected:
+                msg = f"Unexpected keys when loading pretrained weights: {len(unexpected)} keys"
+                logger.warning(msg)
+                for k in unexpected[:10]:
+                    msg = f"  - {k}"
+                    logger.warning(msg)
+
+            # Apply dtype/precision
+            self.model.paligemma_with_expert.to_bfloat16_for_selected_params(self.config.dtype)
+            self.model.paligemma_with_expert._set_requires_grad()
 
         if self.config.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
@@ -194,18 +236,16 @@ class Pi05(Policy):
 
         self._dataset_stats = dataset_stats
 
-    @classmethod
-    def from_pretrained(
-        cls,
+    def _from_hf(
+        self,
         pretrained_name_or_path: str | Path,
         *,
         n_action_steps: int | None = 10,
         num_inference_steps: int | None = None,
         compile_model: bool = False,
-        compile_mode: str | None = "default",
-        device: str | torch.device = "cpu",
+        compile_mode: str | None = "max-autotune",
         **kwargs: Any,
-    ) -> Pi05:
+    ) -> tuple[Pi05Config, dict[str, dict[str, list[float] | str | tuple]], Path]:
         """Load pretrained Pi05 from a HuggingFace model repo.
 
         Loads weights from a HuggingFace model ID (e.g. ``lerobot/pi05_libero_finetuned``)
@@ -224,15 +264,10 @@ class Pi05(Policy):
             **kwargs: Extra arguments forwarded to ``huggingface_hub.hf_hub_download``.
 
         Returns:
-            Initialized Pi05 policy with loaded weights.
-
-        Example:
-            >>> policy = Pi05.from_pretrained("lerobot/pi05_libero_finetuned")
-            >>> policy = Pi05.from_pretrained(
-            ...     "lerobot/pi05_libero_finetuned",
-            ...     n_action_steps=10,
-            ...     device="cuda",
-            ... )
+            Tuple of (config_kwargs, dataset_stats, weights_file).
+             - config_kwargs: Dict of arguments to construct Pi05Config.
+             - dataset_stats: Dict of dataset stats for preprocessor construction.
+             - weights_file: Path to the downloaded weights file.
         """
         path = Path(pretrained_name_or_path)
         is_local = path.is_dir()
@@ -293,44 +328,12 @@ class Pi05(Policy):
             config_kwargs["compile_model"] = compile_model
         if compile_mode is not None:
             config_kwargs["compile_mode"] = compile_mode
+        config = Pi05Config(**config_kwargs)            
 
         # --- build dataset_stats from HF artefacts ---
         dataset_stats = _extract_dataset_stats(hf_config, preprocessor_file, preprocessor_dir)
 
-        # --- create policy with full initialization (no meta device) ---
-        config_kwargs["dataset_stats"] = dataset_stats
-        policy = cls(**config_kwargs)
-
-        # load raw state dict
-        original_sd = load_file(str(weights_file))
-
-        # fix keys (same logic as lerobot's _fix_pytorch_state_dict_keys)
-        fixed_sd = _fix_state_dict_keys(original_sd)
-
-        # load into model
-        missing, unexpected = policy.model.load_state_dict(fixed_sd, strict=False, assign=True)
-        if missing:
-            msg = f"Missing keys when loading pretrained weights: {len(missing)} keys"
-            logger.warning(msg)
-            for k in missing[:10]:
-                msg = f"  - {k}"
-                logger.warning(msg)
-        if unexpected:
-            msg = f"Unexpected keys when loading pretrained weights: {len(unexpected)} keys"
-            logger.warning(msg)
-            for k in unexpected[:10]:
-                msg = f"  - {k}"
-                logger.warning(msg)
-
-        # Apply dtype/precision
-        policy.model.paligemma_with_expert.to_bfloat16_for_selected_params(policy.config.dtype)
-        policy.model.paligemma_with_expert._set_requires_grad()
-
-        policy.to(device)
-        policy.eval()
-        msg = f"Loaded Pi05 from {pretrained_name_or_path}"
-        logger.info(msg)
-        return policy
+        return config, dataset_stats, weights_file
 
     def setup(self, stage: str) -> None:
         """Set up model from datamodule (lazy initialization path).

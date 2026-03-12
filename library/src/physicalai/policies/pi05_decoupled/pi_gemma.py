@@ -25,10 +25,10 @@ Requires: transformers library.
 
 from __future__ import annotations
 
+import logging
+
 import torch
 from torch import nn
-
-import logging
 
 try:
     from transformers.cache_utils import DynamicCache

@@ -15,12 +15,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
-from safetensors.torch import load_file
 from huggingface_hub import hf_hub_download
-from physicalai.data.observation import ACTION, IMAGES
 from physicalai.data.dataset import Dataset
+from physicalai.data.observation import ACTION, IMAGES
 from physicalai.policies.base import Policy
 from physicalai.train.utils import reformat_dataset_to_match_policy
+from safetensors.torch import load_file
 
 from .config import PI05Config
 from .model import PI05Model
@@ -233,7 +233,6 @@ class PI05(Policy):
             ...     device="cuda",
             ... )
         """
-
         path = Path(pretrained_name_or_path)
         is_local = path.is_dir()
 
@@ -403,7 +402,6 @@ class PI05(Policy):
         by ``state_file`` in each pipeline step). The keys are flat:
         ``"observation.state.q01"``, ``"action.q99"``, etc.
         """
-
         stats: dict[str, dict[str, Any]] = {}
 
         steps = preproc_config.get("steps", [])

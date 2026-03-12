@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Literal
 import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import Tensor, nn
+from transformers.cache_utils import DynamicCache
 
 from .config import DEFAULT_IMAGE_SIZE, PI05Config
 from .pi_gemma import (
@@ -34,7 +35,6 @@ from .pi_gemma import (
     _gated_residual,
     layernorm_forward,
 )
-from transformers.cache_utils import DynamicCache
 
 if TYPE_CHECKING:
     from transformers.models.gemma import modeling_gemma
@@ -83,7 +83,11 @@ def create_sinusoidal_pos_embedding(
         msg = "The time tensor is expected to be of shape `(batch_size, )`."
         raise ValueError(msg)
 
-    dtype = torch.float32 if torch.onnx.is_in_onnx_export() else get_safe_dtype(torch.float64, device.type)
+    dtype = (
+        torch.float32
+        if torch.jit.is_tracing() or torch.onnx.is_in_onnx_export()
+        else get_safe_dtype(torch.float64, device.type)
+    )
     fraction = torch.linspace(0.0, 1.0, dimension // 2, dtype=dtype, device=device)
     period = min_period * (max_period / min_period) ** fraction
 
@@ -624,6 +628,8 @@ class PI05Model(nn.Module):
 
     def sample_noise(self, shape: tuple, device: torch.device) -> Tensor:
         """Sample noise for the model."""
+        if torch.jit.is_tracing() or torch.onnx.is_in_onnx_export():
+            return torch.zeros(shape, dtype=torch.float32, device=device)
         return torch.normal(
             mean=0.0,
             std=1.0,
@@ -634,12 +640,17 @@ class PI05Model(nn.Module):
 
     def sample_time(self, bsize: int, device: torch.device) -> Tensor:
         """Sample time values for the model."""
-        time_beta = sample_beta(
-            self.config.time_sampling_beta_alpha,
-            self.config.time_sampling_beta_beta,
-            bsize,
-            device,
-        )
+        if torch.jit.is_tracing() or torch.onnx.is_in_onnx_export():
+            alpha = self.config.time_sampling_beta_alpha
+            beta = self.config.time_sampling_beta_beta
+            time_beta = torch.full((bsize,), alpha / (alpha + beta), device=device, dtype=torch.float32)  # Beta mean
+        else:
+            time_beta = sample_beta(
+                self.config.time_sampling_beta_alpha,
+                self.config.time_sampling_beta_beta,
+                bsize,
+                device,
+            )
         time = time_beta * self.config.time_sampling_scale + self.config.time_sampling_offset
         return time.to(dtype=torch.float32, device=device)
 

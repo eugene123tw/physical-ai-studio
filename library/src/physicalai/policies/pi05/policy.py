@@ -81,8 +81,8 @@ class Pi05(Policy):
         # Pretrained model id
         pretrained_name_or_path: str | Path | None = None,
         # Model architecture
-        paligemma_variant: str = "gemma_2b",
-        action_expert_variant: str = "gemma_300m",
+        paligemma_variant: Literal["gemma_300m", "gemma_2b"] = "gemma_2b",
+        action_expert_variant: Literal["gemma_300m", "gemma_2b"] = "gemma_300m",
         dtype: Literal["bfloat16", "float32"] = "float32",
         # Input / output structure
         n_obs_steps: int = 1,

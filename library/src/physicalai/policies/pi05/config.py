@@ -60,8 +60,8 @@ class Pi05Config(Config):
         scheduler_decay_lr: Final learning rate after decay. Defaults to 2.5e-6.
     """
 
-    paligemma_variant: str = "gemma_2b"
-    action_expert_variant: str = "gemma_300m"
+    paligemma_variant: Literal["gemma_300m", "gemma_2b"] = "gemma_2b"
+    action_expert_variant: Literal["gemma_300m", "gemma_2b"] = "gemma_300m"
     dtype: Literal["bfloat16", "float32"] = "float32"
 
     n_obs_steps: int = 1

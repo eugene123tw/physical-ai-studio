@@ -221,7 +221,12 @@ class TestPi05Policy:
                 "std": [1.0] * 7,
             },
         }
-        policy = Pi05(dataset_stats=stats)
+        # Use smallest variants to keep memory usage low in CI (~300M params instead of ~2.6B)
+        policy = Pi05(
+            dataset_stats=stats,
+            paligemma_variant="gemma_300m",
+            action_expert_variant="gemma_300m",
+        )
         assert policy.model is not None
         assert isinstance(policy.model, Pi05Model)
         assert policy._preprocessor is not None

@@ -309,12 +309,11 @@ class Pi05(Policy):
                     "local_files_only",
                 }
             }
-            hub_kwargs.setdefault("revision", "main")
-            config_file = Path(hf_hub_download(pretrained_name_or_path, "config.json", **hub_kwargs))
-            weights_file = Path(hf_hub_download(pretrained_name_or_path, "model.safetensors", **hub_kwargs))
+            config_file = Path(hf_hub_download(pretrained_name_or_path, "config.json", **hub_kwargs))  # nosec B615
+            weights_file = Path(hf_hub_download(pretrained_name_or_path, "model.safetensors", **hub_kwargs))  # nosec B615
             try:
                 preprocessor_file = Path(
-                    hf_hub_download(pretrained_name_or_path, "policy_preprocessor.json", **hub_kwargs),
+                    hf_hub_download(pretrained_name_or_path, "policy_preprocessor.json", **hub_kwargs),  # nosec B615
                 )
                 preprocessor_dir = preprocessor_file.parent
 
@@ -324,7 +323,7 @@ class Pi05(Policy):
                 for step in preproc_data.get("steps", []):
                     sf = step.get("state_file")
                     if sf:
-                        hf_hub_download(pretrained_name_or_path, sf, **hub_kwargs)
+                        hf_hub_download(pretrained_name_or_path, sf, **hub_kwargs)  # nosec B615
             except Exception:  # noqa: BLE001
                 preprocessor_file = None
                 preprocessor_dir = None

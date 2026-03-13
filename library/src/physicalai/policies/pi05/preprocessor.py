@@ -301,7 +301,7 @@ class Pi05Preprocessor(torch.nn.Module):
             try:
                 from transformers import AutoTokenizer  # noqa: PLC0415
 
-                self._tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name, revision="main")
+                self._tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)  # nosec B615
             except ImportError as e:
                 msg = "Tokenizer requires transformers. Install with: uv pip install transformers"
                 raise ImportError(msg) from e

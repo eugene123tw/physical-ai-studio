@@ -309,6 +309,7 @@ class Pi05(Policy):
                     "local_files_only",
                 }
             }
+            hub_kwargs.setdefault("revision", "main")
             config_file = Path(hf_hub_download(pretrained_name_or_path, "config.json", **hub_kwargs))
             weights_file = Path(hf_hub_download(pretrained_name_or_path, "model.safetensors", **hub_kwargs))
             try:

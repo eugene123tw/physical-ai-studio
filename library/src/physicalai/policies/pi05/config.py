@@ -6,7 +6,7 @@
 This module provides dataclass configurations for the Pi05 flow matching
 vision-language-action model.
 
-For CLI usage, use the YAML config:
+Example (CLI):
     physicalai fit --config configs/physicalai/pi05.yaml
 
 Example (API):

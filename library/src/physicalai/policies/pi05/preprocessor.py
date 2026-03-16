@@ -1,7 +1,6 @@
-# Copyright (C) 2026 Intel Corporation
-# SPDX-License-Identifier: Apache-2.0
-#
 # Copyright 2025 Physical Intelligence and The HuggingFace Inc. team.
+
+# Copyright 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
 """Preprocessor for Pi05 model.
@@ -22,7 +21,6 @@ from typing import Any, cast
 import numpy as np
 import torch
 import torch.nn.functional as F  # noqa: N812
-from torch import Tensor
 
 from physicalai.data import Feature, FeatureType, NormalizationParameters
 from physicalai.data.observation import ACTION, IMAGES, STATE, TASK, Observation
@@ -36,7 +34,7 @@ NORM_MAP = {
 }
 
 
-def pad_vector(vector: Tensor, new_dim: int) -> Tensor:
+def pad_vector(vector: torch.Tensor, new_dim: int) -> torch.Tensor:
     """Pad the last dimension of a vector to new_dim with zeros.
 
     Returns:

@@ -1,7 +1,7 @@
-# Copyright 2026 Intel Corporation
-# SPDX-License-Identifier: Apache-2.0
-
 # Copyright 2025 Physical Intelligence and The HuggingFace Inc. team.
+
+# Copyright (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
 
 """Preprocessor for Pi05 model.
 

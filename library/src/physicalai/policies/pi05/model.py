@@ -555,6 +555,7 @@ class Pi05Model(nn.Module):
         image_resolution: tuple[int, int] = (224, 224),
         freeze_vision_encoder: bool = False,
         train_expert_only: bool = True,
+        gradient_checkpointing: bool = False,
         compile_model: bool = False,
     ) -> None:
         """Initialize Pi05Model.
@@ -578,6 +579,7 @@ class Pi05Model(nn.Module):
             image_resolution: Target image resolution (height, width). Must be square.
             freeze_vision_encoder: Whether to freeze the vision encoder during training.
             train_expert_only: Whether to train only the action expert.
+            gradient_checkpointing: Whether to enable gradient checkpointing for memory optimization.
             compile_model: Whether to use torch.compile.
 
         Raises:
@@ -620,6 +622,8 @@ class Pi05Model(nn.Module):
         self.time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
 
         self.gradient_checkpointing_enabled = False
+        if gradient_checkpointing:
+            self.gradient_checkpointing_enable()
 
         if compile_model:
             torch.set_float32_matmul_precision("high")
@@ -1022,3 +1026,32 @@ class Pi05Model(nn.Module):
         suffix_out = suffix_out[:, -self._chunk_size :]  # type: ignore[index]
         suffix_out = suffix_out.to(dtype=torch.float32)
         return self.action_out_proj(suffix_out)
+
+    @property
+    def reward_delta_indices(self) -> None:
+        """Return reward indices.
+
+        Currently returns `None` as rewards are not implemented.
+
+        Returns:
+            None
+        """
+        return None
+
+    @property
+    def action_delta_indices(self) -> list[int]:
+        """Get indices of actions relative to the current timestep.
+
+        Returns:
+            list[int]: A list of relative action indices.
+        """
+        return list(range(self._chunk_size))
+
+    @property
+    def observation_delta_indices(self) -> None:
+        """Get indices of observations relative to the current timestep.
+
+        Returns:
+            None
+        """
+        return None

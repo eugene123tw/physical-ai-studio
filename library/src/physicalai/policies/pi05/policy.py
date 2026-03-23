@@ -105,7 +105,7 @@ class Pi05(Policy):
         tokenizer_max_length: int = 200,
         # Optimization
         *,
-        gradient_checkpointing: bool = False,
+        gradient_checkpointing: bool = True,
         compile_model: bool = False,
         compile_mode: str = "max-autotune",
         # Finetuning
@@ -131,11 +131,23 @@ class Pi05(Policy):
         if pretrained_name_or_path is not None:
             self.config, dataset_stats, weight_file = self._from_hf(
                 pretrained_name_or_path,
+                dtype=dtype,
                 n_action_steps=n_action_steps,
-                num_inference_steps=num_inference_steps,
                 max_state_dim=max_state_dim,
+                num_inference_steps=num_inference_steps,
+                gradient_checkpointing=gradient_checkpointing,
                 compile_model=compile_model,
                 compile_mode=compile_mode,
+                freeze_vision_encoder=freeze_vision_encoder,
+                train_expert_only=train_expert_only,
+                optimizer_lr=optimizer_lr,
+                optimizer_betas=optimizer_betas,
+                optimizer_eps=optimizer_eps,
+                optimizer_weight_decay=optimizer_weight_decay,
+                optimizer_grad_clip_norm=optimizer_grad_clip_norm,
+                scheduler_warmup_steps=scheduler_warmup_steps,
+                scheduler_decay_steps=scheduler_decay_steps,
+                scheduler_decay_lr=scheduler_decay_lr,
             )
         else:
             self.config = Pi05Config(
@@ -212,6 +224,7 @@ class Pi05(Policy):
             image_resolution=self.config.image_resolution,
             freeze_vision_encoder=self.config.freeze_vision_encoder,
             train_expert_only=self.config.train_expert_only,
+            gradient_checkpointing=self.config.gradient_checkpointing,
             compile_model=self.config.compile_model,
         )
         if weights_file is not None:
@@ -240,9 +253,6 @@ class Pi05(Policy):
             self.model.paligemma_with_expert.to_bfloat16_for_selected_params(self.config.dtype)
             self.model.paligemma_with_expert._set_requires_grad()  # noqa: SLF001
 
-        if self.config.gradient_checkpointing:
-            self.model.gradient_checkpointing_enable()
-
         self._preprocessor, self._postprocessor = make_pi05_preprocessors(
             max_state_dim=self.config.max_state_dim,
             max_action_dim=self.config.max_action_dim,
@@ -258,11 +268,23 @@ class Pi05(Policy):
         self,
         pretrained_name_or_path: str | Path,
         *,
+        dtype: Literal["bfloat16", "float32"] = "float32",
         n_action_steps: int | None = 10,
-        num_inference_steps: int | None = None,
         max_state_dim: int | None = None,
+        num_inference_steps: int | None = None,
+        gradient_checkpointing: bool = False,
         compile_model: bool = False,
         compile_mode: str | None = "max-autotune",
+        freeze_vision_encoder: bool = False,
+        train_expert_only: bool = True,
+        optimizer_lr: float = 2.5e-5,
+        optimizer_betas: tuple[float, float] = (0.9, 0.95),
+        optimizer_eps: float = 1e-8,
+        optimizer_weight_decay: float = 0.01,
+        optimizer_grad_clip_norm: float = 1.0,
+        scheduler_warmup_steps: int = 1_000,
+        scheduler_decay_steps: int = 30_000,
+        scheduler_decay_lr: float = 2.5e-6,
         **kwargs: Any,  # noqa: ANN401
     ) -> tuple[Pi05Config, dict[str, dict[str, list[float] | str | tuple]], Path]:
         """Load pretrained Pi05 from a HuggingFace model repo.
@@ -273,13 +295,29 @@ class Pi05(Policy):
         Handles the key remapping and normalization stat conversion
         from the lerobot QUANTILES format (q01/q99) to MEAN_STD (mean/std).
 
+        All caller-provided parameters override values from the pretrained
+        config.json so that training-time settings (dtype, finetuning flags,
+        optimizer/scheduler) are always controlled by the caller.
+
         Args:
             pretrained_name_or_path: HuggingFace repo ID or local path.
+            dtype: Override model precision.
             n_action_steps: Override number of action steps to execute.
+            max_state_dim: Override maximum state dimension.
             num_inference_steps: Override denoising steps for inference.
+            gradient_checkpointing: Override gradient checkpointing.
             compile_model: Override whether to use torch.compile.
             compile_mode: Override torch compile mode.
-            device: Device to place the model on after loading.
+            freeze_vision_encoder: Override whether to freeze the vision encoder.
+            train_expert_only: Override whether to train only the action expert.
+            optimizer_lr: Override learning rate.
+            optimizer_betas: Override Adam beta coefficients.
+            optimizer_eps: Override optimizer epsilon.
+            optimizer_weight_decay: Override weight decay.
+            optimizer_grad_clip_norm: Override gradient clip norm.
+            scheduler_warmup_steps: Override warmup steps.
+            scheduler_decay_steps: Override decay steps.
+            scheduler_decay_lr: Override final decay learning rate.
             **kwargs: Extra arguments forwarded to ``huggingface_hub.hf_hub_download``.
 
         Returns:
@@ -336,16 +374,27 @@ class Pi05(Policy):
             hf_config = json.load(f)
 
         # Apply caller overrides before from_dict so they get coerced properly
+        hf_config["dtype"] = dtype
         if n_action_steps is not None:
             hf_config["n_action_steps"] = n_action_steps
-        if num_inference_steps is not None:
-            hf_config["num_inference_steps"] = num_inference_steps
         if max_state_dim is not None:
             hf_config["max_state_dim"] = max_state_dim
-        if compile_model is not None:
-            hf_config["compile_model"] = compile_model
+        if num_inference_steps is not None:
+            hf_config["num_inference_steps"] = num_inference_steps
+        hf_config["gradient_checkpointing"] = gradient_checkpointing
+        hf_config["compile_model"] = compile_model
         if compile_mode is not None:
             hf_config["compile_mode"] = compile_mode
+        hf_config["freeze_vision_encoder"] = freeze_vision_encoder
+        hf_config["train_expert_only"] = train_expert_only
+        hf_config["optimizer_lr"] = optimizer_lr
+        hf_config["optimizer_betas"] = optimizer_betas
+        hf_config["optimizer_eps"] = optimizer_eps
+        hf_config["optimizer_weight_decay"] = optimizer_weight_decay
+        hf_config["optimizer_grad_clip_norm"] = optimizer_grad_clip_norm
+        hf_config["scheduler_warmup_steps"] = scheduler_warmup_steps
+        hf_config["scheduler_decay_steps"] = scheduler_decay_steps
+        hf_config["scheduler_decay_lr"] = scheduler_decay_lr
 
         # from_dict skips unknown keys and coerces lists→tuples via type hints
         config = Pi05Config.from_dict(hf_config)

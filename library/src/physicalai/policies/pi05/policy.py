@@ -356,17 +356,19 @@ class Pi05(Policy):
         return config, dataset_stats, weights_file
 
     def setup(self, stage: str) -> None:
-        """Set up model from datamodule (lazy initialization path).
+        """Set up model from datamodule (lazy or fine-tuning path).
 
         Called by Lightning before fit/validate/test/predict.
+
+        - **Lazy path**: model is None → build model + preprocessors from dataset stats.
+        - **Fine-tuning path**: model already loaded from pretrained → rebuild
+          preprocessors with the training dataset's stats so normalization
+          matches the new data distribution.
 
         Raises:
             TypeError: If the train dataset is not a physicalai Dataset.
         """
         del stage
-
-        if self.model is not None:
-            return
 
         datamodule = self.trainer.datamodule  # type: ignore[attr-defined]
         train_dataset = datamodule.train_dataset
@@ -377,11 +379,40 @@ class Pi05(Policy):
 
         stats_dict = train_dataset.stats
 
+        if self.model is not None:
+            # Fine-tuning path: model exists from pretrained, but the
+            # preprocessor stats must match the training data distribution.
+            self._update_preprocessor_stats(stats_dict)
+            reformat_dataset_to_match_policy(self, datamodule)
+            return
+
         self.hparams["dataset_stats"] = stats_dict
 
         self._initialize_model(stats_dict)
 
         reformat_dataset_to_match_policy(self, datamodule)
+
+    def _update_preprocessor_stats(
+        self,
+        dataset_stats: dict[str, dict[str, list[float] | str | tuple]],
+    ) -> None:
+        """Rebuild preprocessor/postprocessor with new dataset stats.
+
+        Used when fine-tuning a pretrained model on a new dataset: the model
+        weights come from the checkpoint, but normalization statistics must
+        reflect the training data.
+        """
+        logger.info("Updating preprocessor stats for fine-tuning dataset")
+        self._preprocessor, self._postprocessor = make_pi05_preprocessors(
+            max_state_dim=self.config.max_state_dim,
+            max_action_dim=self.config.max_action_dim,
+            stats=dataset_stats,
+            image_resolution=self.config.image_resolution,
+            max_token_len=self.config.tokenizer_max_length,
+            empty_cameras=self.config.empty_cameras,
+        )
+        self._dataset_stats = dataset_stats
+        self.hparams["dataset_stats"] = dataset_stats
 
     def forward(self, batch: Observation) -> torch.Tensor | tuple[torch.Tensor, dict[str, float]]:
         """Forward pass through the model.

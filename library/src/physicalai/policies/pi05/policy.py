@@ -121,7 +121,7 @@ class Pi05(ExportablePolicyMixin, Policy):
         optimizer_grad_clip_norm: float = 1.0,
         # Scheduler
         scheduler_warmup_steps: int = 1_000,
-        scheduler_decay_steps: int = 30_000,
+        scheduler_decay_steps: int | None = None,
         scheduler_decay_lr: float = 2.5e-6,
         # Eager initialization
         dataset_stats: dict[str, dict[str, list[float] | str | tuple]] | None = None,
@@ -285,7 +285,7 @@ class Pi05(ExportablePolicyMixin, Policy):
         optimizer_weight_decay: float = 0.01,
         optimizer_grad_clip_norm: float = 1.0,
         scheduler_warmup_steps: int = 1_000,
-        scheduler_decay_steps: int = 30_000,
+        scheduler_decay_steps: int | None = None,
         scheduler_decay_lr: float = 2.5e-6,
         **kwargs: Any,  # noqa: ANN401
     ) -> tuple[Pi05Config, dict[str, dict[str, list[float] | str | tuple]], Path]:
@@ -318,7 +318,7 @@ class Pi05(ExportablePolicyMixin, Policy):
             optimizer_weight_decay: Override weight decay.
             optimizer_grad_clip_norm: Override gradient clip norm.
             scheduler_warmup_steps: Override warmup steps.
-            scheduler_decay_steps: Override decay steps.
+            scheduler_decay_steps: Override decay steps. ``None`` means auto.
             scheduler_decay_lr: Override final decay learning rate.
             **kwargs: Extra arguments forwarded to ``huggingface_hub.hf_hub_download``.
 
@@ -524,6 +524,11 @@ class Pi05(ExportablePolicyMixin, Policy):
     def configure_optimizers(self) -> dict[str, Any]:
         """Configure optimizer and scheduler.
 
+        When ``scheduler_decay_steps`` is ``None``, the cosine decay horizon
+        is automatically set to the total training steps
+        (``self.trainer.estimated_stepping_batches``), so the LR reaches
+        ``scheduler_decay_lr`` exactly at the end of training.
+
         Returns:
             Dict with optimizer and lr_scheduler config.
         """
@@ -537,12 +542,18 @@ class Pi05(ExportablePolicyMixin, Policy):
             eps=self.config.optimizer_eps,
         )
 
+        num_decay_steps = self.config.scheduler_decay_steps
+        if num_decay_steps is None:
+            num_decay_steps = self.trainer.estimated_stepping_batches
+            msg = f"scheduler_decay_steps=None, using total training steps: {num_decay_steps}"
+            logger.info(msg)
+
         scheduler = cosine_decay_with_warmup_scheduler(
             optimizer,
             peak_lr=self.config.optimizer_lr,
             decay_lr=self.config.scheduler_decay_lr,
             num_warmup_steps=self.config.scheduler_warmup_steps,
-            num_decay_steps=self.config.scheduler_decay_steps,
+            num_decay_steps=num_decay_steps,
         )
 
         return {

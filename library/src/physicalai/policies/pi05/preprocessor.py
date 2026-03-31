@@ -23,11 +23,20 @@ import torch
 import torch.nn.functional as F  # noqa: N812
 
 from physicalai.data import Feature, FeatureType, NormalizationParameters
-from physicalai.data.constants import IMAGE_MASKS, TOKENIZED_PROMPT, TOKENIZED_PROMPT_MASK
+from physicalai.data.constants import (
+    IMAGE_MASKS,
+    TOKEN_AR_MASK,
+    TOKEN_LOSS_MASK,
+    TOKENIZED_PROMPT,
+    TOKENIZED_PROMPT_MASK,
+)
 from physicalai.data.observation import ACTION, IMAGES, STATE, TASK, Observation
 from physicalai.policies.utils.normalization import FeatureNormalizeTransform, NormalizationType
 
 logger = logging.getLogger(__name__)
+
+# PaliGemma EOS token ID (same as in openpi)
+PALIGEMMA_EOS_TOKEN = 1
 
 NORM_MAP = {
     FeatureType.STATE: NormalizationType.MEAN_STD,
@@ -143,6 +152,7 @@ class Pi05Preprocessor(torch.nn.Module):
         max_token_len: int = 200,
         tokenizer_name: str = "google/paligemma-3b-pt-224",
         empty_cameras: int = 0,
+        enable_subtask: bool = False,
     ) -> None:
         """Initialize Pi05Preprocessor."""
         super().__init__()
@@ -154,6 +164,7 @@ class Pi05Preprocessor(torch.nn.Module):
         self.tokenizer_name = tokenizer_name
         self._tokenizer = None
         self.empty_cameras = empty_cameras
+        self.enable_subtask = enable_subtask
 
         if features is not None:
             self._state_action_normalizer = FeatureNormalizeTransform(features, NORM_MAP)
@@ -200,9 +211,20 @@ class Pi05Preprocessor(torch.nn.Module):
             full_prompts.append(full_prompt)
 
         # Tokenize
-        tokens, masks = self._tokenize(full_prompts)
-        batch[TOKENIZED_PROMPT] = tokens.to(state.device)
-        batch[TOKENIZED_PROMPT_MASK] = masks.to(state.device)
+        if self.enable_subtask and self.training:
+            tokens, masks, ar_mask, loss_mask = self._tokenize_subtask_training(full_prompts)
+            batch[TOKENIZED_PROMPT] = tokens.to(state.device)
+            batch[TOKENIZED_PROMPT_MASK] = masks.to(state.device)
+            batch[TOKEN_AR_MASK] = ar_mask.to(state.device)
+            batch[TOKEN_LOSS_MASK] = loss_mask.to(state.device)
+        elif self.enable_subtask:
+            tokens, masks = self._tokenize_subtask_inference(full_prompts)
+            batch[TOKENIZED_PROMPT] = tokens.to(state.device)
+            batch[TOKENIZED_PROMPT_MASK] = masks.to(state.device)
+        else:
+            tokens, masks = self._tokenize(full_prompts)
+            batch[TOKENIZED_PROMPT] = tokens.to(state.device)
+            batch[TOKENIZED_PROMPT_MASK] = masks.to(state.device)
 
         # Preprocess images
         images, img_masks = self._preprocess_images(batch)
@@ -296,6 +318,112 @@ class Pi05Preprocessor(torch.nn.Module):
 
         return encoded["input_ids"], encoded["attention_mask"].bool()
 
+    def _tokenize_subtask_training(
+        self, prompts: list[str],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Tokenize prompts for subtask training with AR and loss masks.
+
+        For subtask training, the prompt is treated as "Task: {high}. Subtask: {low}"
+        where the identity subtask (high_prompt == low_prompt) is used by default.
+        The prefix portion ("Task: X. Subtask: ") gets bidirectional attention (ar_mask=0)
+        and the subtask continuation gets causal attention (ar_mask=1) with loss mask=True.
+
+        Args:
+            prompts: List of full prompt strings (already contain task + state).
+
+        Returns:
+            Tuple of (token_ids, attention_mask, ar_mask, loss_mask).
+        """
+        import string  # noqa: PLC0415
+
+        all_tokens = []
+        all_masks = []
+        all_ar_masks = []
+        all_loss_masks = []
+
+        for prompt in prompts:
+            # Extract task text from the prompt format "Task: X, State: ...;\nAction: "
+            # For subtask, we reformat as "Task: X. Subtask: X"
+            task_text = prompt
+            if "Task: " in prompt and ", State:" in prompt:
+                task_text = prompt.split("Task: ", 1)[1].split(", State:", 1)[0]
+
+            cleaned = task_text.lower().strip().replace("_", " ").replace("\n", " ")
+            if cleaned and cleaned[-1] in string.punctuation:
+                cleaned = cleaned[:-1]
+
+            prefix_str = f"Task: {cleaned}. Subtask: "
+            # Identity subtask: low_prompt == high_prompt
+            suffix_str = cleaned
+
+            prefix_token_ids = self.tokenizer.encode(prefix_str, add_special_tokens=True)
+            suffix_token_ids = self.tokenizer.encode(suffix_str, add_special_tokens=False)
+            suffix_token_ids = suffix_token_ids + [PALIGEMMA_EOS_TOKEN]
+
+            combined = prefix_token_ids + suffix_token_ids
+            prefix_len = len(prefix_token_ids)
+            suffix_len = len(suffix_token_ids)
+            total_len = prefix_len + suffix_len
+
+            ar_mask_list = [0] * prefix_len + [1] * suffix_len
+            loss_mask_list = [False] * prefix_len + [True] * suffix_len
+            mask_list = [True] * total_len
+
+            # Pad or truncate to max_token_len
+            if total_len > self.max_token_len:
+                combined = combined[: self.max_token_len]
+                ar_mask_list = ar_mask_list[: self.max_token_len]
+                loss_mask_list = loss_mask_list[: self.max_token_len]
+                mask_list = mask_list[: self.max_token_len]
+            else:
+                pad_len = self.max_token_len - total_len
+                combined = combined + [0] * pad_len
+                ar_mask_list = ar_mask_list + [0] * pad_len
+                loss_mask_list = loss_mask_list + [False] * pad_len
+                mask_list = mask_list + [False] * pad_len
+
+            all_tokens.append(combined)
+            all_masks.append(mask_list)
+            all_ar_masks.append(ar_mask_list)
+            all_loss_masks.append(loss_mask_list)
+
+        return (
+            torch.tensor(all_tokens, dtype=torch.long),
+            torch.tensor(all_masks, dtype=torch.bool),
+            torch.tensor(all_ar_masks, dtype=torch.int32),
+            torch.tensor(all_loss_masks, dtype=torch.bool),
+        )
+
+    def _tokenize_subtask_inference(
+        self, prompts: list[str],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Tokenize only the high-level prefix for subtask inference.
+
+        Produces: [BOS] "Task: {high}. Subtask: " [PAD...]
+        The model will autoregressively complete the subtask at inference time.
+
+        Args:
+            prompts: List of full prompt strings.
+
+        Returns:
+            Tuple of (token_ids, attention_mask).
+        """
+        import string  # noqa: PLC0415
+
+        prefix_prompts = []
+        for prompt in prompts:
+            task_text = prompt
+            if "Task: " in prompt and ", State:" in prompt:
+                task_text = prompt.split("Task: ", 1)[1].split(", State:", 1)[0]
+
+            cleaned = task_text.lower().strip().replace("_", " ").replace("\n", " ")
+            if cleaned and cleaned[-1] in string.punctuation:
+                cleaned = cleaned[:-1]
+
+            prefix_prompts.append(f"Task: {cleaned}. Subtask: ")
+
+        return self._tokenize(prefix_prompts)
+
     @property
     def tokenizer(self) -> Any:  # noqa: ANN401
         """Lazy-load PaliGemma tokenizer.
@@ -388,6 +516,7 @@ def make_pi05_preprocessors(
     image_resolution: tuple[int, int] = (224, 224),
     max_token_len: int = 200,
     empty_cameras: int = 0,
+    enable_subtask: bool = False,
 ) -> tuple[Pi05Preprocessor, Pi05Postprocessor]:
     """Create preprocessor and postprocessor pair for Pi05.
 
@@ -398,6 +527,7 @@ def make_pi05_preprocessors(
         image_resolution: Target image resolution.
         max_token_len: Maximum token length.
         empty_cameras: Number of empty camera slots to add.
+        enable_subtask: Enable subtask tokenization.
 
     Returns:
         Tuple of (preprocessor, postprocessor).
@@ -434,6 +564,7 @@ def make_pi05_preprocessors(
         features=features,
         max_token_len=max_token_len,
         empty_cameras=empty_cameras,
+        enable_subtask=enable_subtask,
     )
 
     postprocessor = Pi05Postprocessor(

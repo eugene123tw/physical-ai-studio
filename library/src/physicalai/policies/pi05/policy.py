@@ -16,8 +16,9 @@ import torch
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 
+from physicalai.data.constants import IMAGE_MASKS, TOKENIZED_PROMPT, TOKENIZED_PROMPT_MASK
 from physicalai.data.dataset import Dataset
-from physicalai.data.observation import ACTION
+from physicalai.data.observation import ACTION, IMAGES
 from physicalai.export import ExportablePolicyMixin, ExportBackend
 from physicalai.policies.base import Policy
 from physicalai.train.schedulers import cosine_decay_with_warmup_scheduler
@@ -113,6 +114,10 @@ class Pi05(ExportablePolicyMixin, Policy):
         # Finetuning
         freeze_vision_encoder: bool = False,
         train_expert_only: bool = True,
+        # Subtask (pi0.5 subtask generation)
+        enable_subtask: bool = False,
+        subtask_loss_weight: float = 1.0,
+        subtask_max_generation_tokens: int = 50,
         # Optimizer
         optimizer_lr: float = 2.5e-5,
         optimizer_betas: tuple[float, float] = (0.9, 0.95),
@@ -142,6 +147,9 @@ class Pi05(ExportablePolicyMixin, Policy):
                 compile_mode=compile_mode,
                 freeze_vision_encoder=freeze_vision_encoder,
                 train_expert_only=train_expert_only,
+                enable_subtask=enable_subtask,
+                subtask_loss_weight=subtask_loss_weight,
+                subtask_max_generation_tokens=subtask_max_generation_tokens,
                 optimizer_lr=optimizer_lr,
                 optimizer_betas=optimizer_betas,
                 optimizer_eps=optimizer_eps,
@@ -176,6 +184,9 @@ class Pi05(ExportablePolicyMixin, Policy):
                 compile_mode=compile_mode,
                 freeze_vision_encoder=freeze_vision_encoder,
                 train_expert_only=train_expert_only,
+                enable_subtask=enable_subtask,
+                subtask_loss_weight=subtask_loss_weight,
+                subtask_max_generation_tokens=subtask_max_generation_tokens,
                 optimizer_lr=optimizer_lr,
                 optimizer_betas=optimizer_betas,
                 optimizer_eps=optimizer_eps,
@@ -228,6 +239,10 @@ class Pi05(ExportablePolicyMixin, Policy):
             train_expert_only=self.config.train_expert_only,
             gradient_checkpointing=self.config.gradient_checkpointing,
             compile_model=self.config.compile_model,
+            enable_subtask=self.config.enable_subtask,
+            subtask_loss_weight=self.config.subtask_loss_weight,
+            max_token_len=self.config.tokenizer_max_length,
+            subtask_max_generation_tokens=self.config.subtask_max_generation_tokens,
         )
         if weights_file is not None:
             # load raw state dict
@@ -262,6 +277,7 @@ class Pi05(ExportablePolicyMixin, Policy):
             image_resolution=self.config.image_resolution,
             max_token_len=self.config.tokenizer_max_length,
             empty_cameras=self.config.empty_cameras,
+            enable_subtask=self.config.enable_subtask,
         )
 
         self._dataset_stats = dataset_stats
@@ -279,6 +295,9 @@ class Pi05(ExportablePolicyMixin, Policy):
         compile_mode: str | None = "max-autotune",
         freeze_vision_encoder: bool = False,
         train_expert_only: bool = True,
+        enable_subtask: bool = False,
+        subtask_loss_weight: float = 1.0,
+        subtask_max_generation_tokens: int = 50,
         optimizer_lr: float = 2.5e-5,
         optimizer_betas: tuple[float, float] = (0.9, 0.95),
         optimizer_eps: float = 1e-8,
@@ -389,6 +408,9 @@ class Pi05(ExportablePolicyMixin, Policy):
             hf_config["compile_mode"] = compile_mode
         hf_config["freeze_vision_encoder"] = freeze_vision_encoder
         hf_config["train_expert_only"] = train_expert_only
+        hf_config["enable_subtask"] = enable_subtask
+        hf_config["subtask_loss_weight"] = subtask_loss_weight
+        hf_config["subtask_max_generation_tokens"] = subtask_max_generation_tokens
         hf_config["optimizer_lr"] = optimizer_lr
         hf_config["optimizer_betas"] = optimizer_betas
         hf_config["optimizer_eps"] = optimizer_eps
@@ -461,6 +483,7 @@ class Pi05(ExportablePolicyMixin, Policy):
             image_resolution=self.config.image_resolution,
             max_token_len=self.config.tokenizer_max_length,
             empty_cameras=self.config.empty_cameras,
+            enable_subtask=self.config.enable_subtask,
         )
         self._dataset_stats = dataset_stats
         self.hparams["dataset_stats"] = dataset_stats
@@ -492,6 +515,10 @@ class Pi05(ExportablePolicyMixin, Policy):
     def predict_action_chunk(self, batch: Observation) -> torch.Tensor:
         """Predict a chunk of actions from observation.
 
+        When subtask is enabled, performs two-stage inference:
+        1. Autoregressive subtask generation
+        2. Flow-matching action denoising with full prompt
+
         Args:
             batch: Input observation batch.
 
@@ -506,19 +533,42 @@ class Pi05(ExportablePolicyMixin, Policy):
             raise ValueError(msg)
 
         processed_batch = self._preprocessor(batch.to(self.device).to_dict())
+
+        if self.config.enable_subtask:
+            images = processed_batch[IMAGES]
+            img_masks = processed_batch[IMAGE_MASKS]
+            tokens = processed_batch[TOKENIZED_PROMPT]
+            masks = processed_batch[TOKENIZED_PROMPT_MASK]
+
+            # Stage 1: generate subtask tokens
+            subtask_tokens = self.model.generate_subtask(
+                images, img_masks, tokens, masks,
+            )
+
+            # Stage 2: insert subtask tokens into prompt, then sample actions
+            new_tokens, new_masks = self.model.build_full_prompt(
+                tokens, masks, subtask_tokens,
+            )
+            processed_batch[TOKENIZED_PROMPT] = new_tokens
+            processed_batch[TOKENIZED_PROMPT_MASK] = new_masks
+
         actions = self.model.predict_action_chunk(processed_batch)
 
         return self._postprocessor({ACTION: actions})[ACTION]
 
     def training_step(self, batch: Observation, batch_idx: int) -> torch.Tensor:
         """Lightning training step.
-
+ 
         Returns:
             Training loss tensor.
         """
         del batch_idx
         loss, loss_dict = self(batch)
         self.log("train/loss", loss_dict["loss"], prog_bar=True)
+        if "flow_loss" in loss_dict:
+            self.log("train/flow_loss", loss_dict["flow_loss"])
+        if "subtask_ce_loss" in loss_dict:
+            self.log("train/subtask_ce_loss", loss_dict["subtask_ce_loss"])
         return loss
 
     def configure_optimizers(self) -> dict[str, Any]:

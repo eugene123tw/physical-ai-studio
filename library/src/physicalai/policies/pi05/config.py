@@ -50,6 +50,10 @@ class Pi05Config(Config):
         compile_mode: Torch compile mode. Defaults to "max-autotune".
         freeze_vision_encoder: Whether to freeze vision encoder during training. Defaults to False.
         train_expert_only: Whether to train only the action expert. Defaults to True.
+        enable_subtask: Enable subtask generation (joint CE + flow-matching loss during
+            training, two-stage inference with autoregressive subtask generation). Defaults to False.
+        subtask_loss_weight: Weight for the subtask cross-entropy loss term. Defaults to 1.0.
+        subtask_max_generation_tokens: Maximum tokens to generate during subtask inference. Defaults to 50.
         optimizer_lr: Learning rate for the optimizer. Defaults to 2.5e-5.
         optimizer_betas: Beta coefficients for Adam optimizer. Defaults to (0.9, 0.95).
         optimizer_eps: Epsilon for optimizer numerical stability. Defaults to 1e-8.
@@ -93,6 +97,10 @@ class Pi05Config(Config):
 
     freeze_vision_encoder: bool = False
     train_expert_only: bool = True
+
+    enable_subtask: bool = False
+    subtask_loss_weight: float = 1.0
+    subtask_max_generation_tokens: int = 50
 
     optimizer_lr: float = 2.5e-5
     optimizer_betas: tuple[float, float] = (0.9, 0.95)

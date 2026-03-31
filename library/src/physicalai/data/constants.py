@@ -18,6 +18,8 @@ IMAGES = "images"
 TOKENIZED_PROMPT = "tokenized_prompt"
 TOKENIZED_PROMPT_MASK = "tokenized_prompt_mask"
 IMAGE_MASKS = "image_masks"
+TOKEN_AR_MASK = "token_ar_mask"
+TOKEN_LOSS_MASK = "token_loss_mask"
 
 # Optional RL & metadata fields
 NEXT_REWARD = "next_reward"

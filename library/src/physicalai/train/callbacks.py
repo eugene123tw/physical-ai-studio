@@ -12,9 +12,9 @@ from physicalai.train.utils import reformat_dataset_to_match_policy
 
 
 class IterationTimer(Callback):
-    """Log wall-clock time per training step in milliseconds.
+    """Log wall-clock time per training step in seconds.
 
-    Logs ``train/iter_time_ms`` on every training batch end.
+    Logs ``train/iter_time_s`` on every training batch end.
 
     Example:
         >>> from physicalai.train.callbacks import IterationTimer
@@ -40,8 +40,8 @@ class IterationTimer(Callback):
         batch_idx: int,
     ) -> None:
         """Log elapsed time since batch start."""
-        elapsed_ms = (time.perf_counter() - self._start) * 1000
-        pl_module.log("train/iter_time_ms", elapsed_ms, prog_bar=True)
+        elapsed_s = time.perf_counter() - self._start
+        pl_module.log("train/iter_time_s", elapsed_s, prog_bar=True)
 
 
 class PolicyDatasetInteraction(Callback):

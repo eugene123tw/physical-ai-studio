@@ -15,6 +15,7 @@ import torch
 
 from physicalai.data import Observation
 from physicalai.data.lerobot.datamodule import LeRobotDataModule, _read_total_episodes
+from physicalai.train.utils import reformat_dataset_to_match_policy
 
 
 # ---------------------------------------------------------------------------
@@ -24,12 +25,6 @@ from physicalai.data.lerobot.datamodule import LeRobotDataModule, _read_total_ep
 
 class FakeLeRobotDataset:
     """Minimal LeRobotDataset mock that records which episodes were requested."""
-
-    def __init__(self, repo_id=None, root=None, episodes=None, **kwargs):
-        self.repo_id = repo_id
-        self.root = root
-        self.requested_episodes = episodes
-        self._length = 100
 
     def __len__(self) -> int:
         return self._length
@@ -90,13 +85,20 @@ class FakeLeRobotDataset:
     def tolerance_s(self) -> float:
         return 1e-4
 
+    def __init__(self, repo_id=None, root=None, episodes=None, **kwargs):
+        self.repo_id = repo_id
+        self.root = root
+        self.requested_episodes = episodes
+        self._length = 100
+        self._delta_indices = None
+
     @property
     def delta_indices(self):
-        return None
+        return self._delta_indices
 
     @delta_indices.setter
     def delta_indices(self, value):
-        pass
+        self._delta_indices = value
 
 
 def _create_local_dataset(tmp_path: Path, total_episodes: int = 20) -> Path:
@@ -324,3 +326,66 @@ class TestValSplitValidation:
                 val_split=0.1,
                 val_gym=mock_gym,
             )
+
+
+# ---------------------------------------------------------------------------
+# Tests for reformat_dataset_to_match_policy with val_eval_dataset
+# ---------------------------------------------------------------------------
+
+
+class TestReformatIncludesValDataset:
+    """Tests that reformat_dataset_to_match_policy also reformats val_eval_dataset."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_lerobot(self, monkeypatch):
+        """Patch LeRobotDataset to avoid real downloads/ffmpeg."""
+        monkeypatch.setattr(
+            "physicalai.data.lerobot.dataset.LeRobotDataset", FakeLeRobotDataset
+        )
+
+    def test_val_eval_dataset_gets_delta_indices(self, tmp_path: Path):
+        """reformat_dataset_to_match_policy sets delta_indices on val_eval_dataset."""
+        dataset_dir = _create_local_dataset(tmp_path, total_episodes=20)
+        dm = LeRobotDataModule(
+            root=str(dataset_dir),
+            train_batch_size=4,
+            val_split=0.2,
+        )
+
+        # Both datasets should start without delta_indices
+        assert dm.train_dataset.delta_indices == {}
+        assert dm.val_eval_dataset.delta_indices == {}
+
+        # Create a mock policy with action_delta_indices
+        mock_policy = MagicMock()
+        mock_policy.lerobot_policy = None
+        mock_policy.model.action_delta_indices = list(range(50))
+        mock_policy.model.observation_delta_indices = None
+        mock_policy.model.reward_delta_indices = None
+
+        reformat_dataset_to_match_policy(mock_policy, dm)
+
+        # Both datasets should now have delta_indices set
+        assert "action" in dm.train_dataset.delta_indices
+        assert "action" in dm.val_eval_dataset.delta_indices
+        assert dm.train_dataset.delta_indices == dm.val_eval_dataset.delta_indices
+
+    def test_no_val_eval_dataset_still_works(self, tmp_path: Path):
+        """reformat_dataset_to_match_policy works when val_eval_dataset is None."""
+        dataset_dir = _create_local_dataset(tmp_path, total_episodes=20)
+        dm = LeRobotDataModule(
+            root=str(dataset_dir),
+            train_batch_size=4,
+            val_split=0.0,
+        )
+        assert dm.val_eval_dataset is None
+
+        mock_policy = MagicMock()
+        mock_policy.lerobot_policy = None
+        mock_policy.model.action_delta_indices = list(range(50))
+        mock_policy.model.observation_delta_indices = None
+        mock_policy.model.reward_delta_indices = None
+
+        # Should not raise
+        reformat_dataset_to_match_policy(mock_policy, dm)
+        assert "action" in dm.train_dataset.delta_indices

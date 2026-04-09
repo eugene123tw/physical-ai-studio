@@ -273,6 +273,10 @@ class Policy(L.LightningModule, ABC):
     def _eval_loss_step(self, batch: Observation, batch_idx: int) -> torch.Tensor:
         """Compute validation loss on a dataset batch.
 
+        Temporarily sets the module to training mode so that the forward pass
+        computes and returns the loss (many policies branch on ``self.training``
+        and return only predicted actions in eval mode).
+
         Args:
             batch: Observation batch from the eval dataset.
             batch_idx: Index of the batch.
@@ -281,7 +285,9 @@ class Policy(L.LightningModule, ABC):
             Loss tensor.
         """
         del batch_idx
+        self.train()
         loss, loss_dict = self(batch)
+        self.eval()
         self.log("val/loss", loss_dict["loss"], prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         return loss
 

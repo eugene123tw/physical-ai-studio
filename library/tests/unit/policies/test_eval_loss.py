@@ -80,7 +80,7 @@ def _make_batch() -> Observation:
 
 
 class TestEvalLossTrainModeLeak:
-    """Verify that _eval_loss_step does not leak training-mode behavior."""
+    """Verify that validation_step does not leak training-mode behavior."""
 
     def test_compute_val_loss_override_keeps_eval_mode(self) -> None:
         """Policy with compute_val_loss override stays in eval mode throughout."""
@@ -150,8 +150,8 @@ class TestEvalLossTrainModeLeak:
 
         assert len(set(eval_mode_losses)) == 1, "Eval-mode losses should be identical (no dropout)"
 
-    def test_eval_loss_step_uses_compute_val_loss(self) -> None:
-        """_eval_loss_step delegates to compute_val_loss, not self(batch)."""
+    def test_validation_step_uses_compute_val_loss(self) -> None:
+        """validation_step delegates to compute_val_loss for Observation batches."""
         policy = _DropoutPolicy()
         policy.eval()
 
@@ -161,7 +161,7 @@ class TestEvalLossTrainModeLeak:
         logged: dict[str, float] = {}
         policy.log = lambda name, value, **kwargs: logged.update({name: value})  # type: ignore[assignment]
 
-        loss = policy._eval_loss_step(batch, batch_idx=0)  # noqa: SLF001
+        loss = policy.validation_step(batch, batch_idx=0)
 
         assert "val/loss" in logged
         assert not policy.training, "Should remain in eval mode"

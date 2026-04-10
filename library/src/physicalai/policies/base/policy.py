@@ -267,19 +267,25 @@ class Policy(L.LightningModule, ABC):
             Eval-loss mode: loss tensor.
         """
         if isinstance(batch, Observation):
-            return self._eval_loss_step(batch, batch_idx)
+            loss, loss_dict = self.compute_val_loss(batch)
+            self.log("val/loss", loss_dict["loss"], prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+            return loss
         return self.evaluate_gym(batch, batch_idx, stage="val")
 
-    def compute_loss(self, batch: Observation) -> tuple[torch.Tensor, dict[str, float]]:
-        """Compute forward-pass loss on a batch.
+    def compute_val_loss(self, batch: Observation) -> tuple[torch.Tensor, dict[str, float]]:
+        """Compute validation loss on a batch.
 
-        Override this in subclasses to compute loss without toggling training
-        mode (avoids activating dropout / gradient checkpointing during
-        validation).  The default implementation temporarily enables training
-        mode so that ``forward()`` returns a loss tuple.
+        Override this in subclasses to define how validation loss is computed.
+        For example, diffusion/flow-matching policies should run the full
+        denoising loop and compare predicted vs ground-truth actions (action
+        prediction MSE), rather than reusing the stochastic training loss.
+
+        The default implementation temporarily enables training mode so that
+        ``forward()`` returns a loss tuple.  Subclasses should override this
+        to avoid toggling training mode and to use a more meaningful metric.
 
         Args:
-            batch: Observation batch.
+            batch: Observation batch (must contain ground-truth actions).
 
         Returns:
             Tuple of (loss tensor, dict with at least a ``"loss"`` key).
@@ -289,24 +295,6 @@ class Policy(L.LightningModule, ABC):
             return self(batch)
         finally:
             self.eval()
-
-    def _eval_loss_step(self, batch: Observation, batch_idx: int) -> torch.Tensor:
-        """Compute validation loss on a dataset batch.
-
-        Calls :meth:`compute_loss` which subclasses can override to avoid
-        toggling training mode.
-
-        Args:
-            batch: Observation batch from the eval dataset.
-            batch_idx: Index of the batch.
-
-        Returns:
-            Loss tensor.
-        """
-        del batch_idx
-        loss, loss_dict = self.compute_loss(batch)
-        self.log("val/loss", loss_dict["loss"], prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
-        return loss
 
     def test_step(self, batch: Gym, batch_idx: int) -> dict[str, float]:
         """Test step for the policy.

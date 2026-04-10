@@ -939,31 +939,42 @@ class Pi05Model(ExportableModelMixin, Model):
         self,
         batch: dict[str, Any],
     ) -> tuple[Tensor, dict[str, float]] | Tensor:
-        """Forward pass: delegates to compute_loss (training) or predict_action_chunk (eval).
+        """Forward pass through the model.
+
+        Training mode: computes flow matching loss (with gradients).
+        Eval mode: returns predicted action chunk via denoising.
 
         Args:
             batch: Preprocessed batch dict.
 
         Returns:
-            Training: (loss, loss_dict). Eval: action tensor.
+            Training: (loss tensor, loss dict).  Eval: action tensor.
         """
         if self.training:
             return self.compute_loss(batch)
         return self.predict_action_chunk(batch)
 
-    def compute_loss(self, batch: dict[str, Any]) -> tuple[Tensor, dict[str, float]]:  # noqa: PLR0914
-        """Compute flow matching loss.
+    def compute_loss(self, batch: dict[str, Any]) -> tuple[Tensor, dict[str, float]]:
+        """Compute flow matching training loss.
 
-        Can be called in any mode (train or eval). Does not depend on
-        ``self.training``; gradient checkpointing is used only when the model
-        is in training mode.
+        Delegates to :meth:`_flow_matching_loss`.
+        """
+        return self._flow_matching_loss(batch)
+
+    def _flow_matching_loss(self, batch: dict[str, Any]) -> tuple[Tensor, dict[str, float]]:  # noqa: PLR0914
+        """Compute flow matching training loss.
+
+        Samples random noise and timesteps, interpolates noisy actions,
+        predicts the velocity field, and returns the MSE between predicted
+        and target velocities.  Gradient checkpointing is applied when the
+        model is in training mode.
 
         Args:
             batch: Preprocessed batch dict containing IMAGES, IMAGE_MASKS,
                 TOKENIZED_PROMPT, TOKENIZED_PROMPT_MASK, and ACTION.
 
         Returns:
-            Tuple of (mean loss tensor, loss dict with "loss" key).
+            Tuple of (mean loss tensor, loss dict with ``"loss"`` key).
         """
         images = batch[IMAGES]
         img_masks = batch[IMAGE_MASKS]
@@ -1037,6 +1048,35 @@ class Pi05Model(ExportableModelMixin, Model):
         losses = losses[:, :, :original_action_dim]
 
         loss = losses.mean()
+        return loss, {"loss": loss.item()}
+
+    @torch.no_grad()
+    def compute_val_loss(self, batch: dict[str, Any]) -> tuple[Tensor, dict[str, float]]:
+        """Compute validation loss: MSE between predicted and ground-truth actions.
+
+        Runs the full denoising loop (same as inference) and compares the
+        result with the ground-truth actions from the batch.  This is
+        deterministic and gives a direct measure of action prediction
+        quality — unlike the stochastic flow matching training loss.
+
+        Args:
+            batch: Preprocessed batch dict containing IMAGES, IMAGE_MASKS,
+                TOKENIZED_PROMPT, TOKENIZED_PROMPT_MASK, and ACTION.
+
+        Returns:
+            Tuple of (mean MSE loss tensor, loss dict with ``"loss"`` key).
+        """
+        gt_actions = batch[ACTION]
+        predicted = self.predict_action_chunk(batch)
+
+        # Compare in the original (unpadded) action space
+        original_action_dim = int(self._dataset_stats[ACTION]["shape"][-1])
+        gt_trimmed = gt_actions[:, :, :original_action_dim]
+        pred_trimmed = predicted[:, :, :original_action_dim]
+
+        # Align chunk lengths (predicted may be clipped by n_action_steps)
+        min_len = min(gt_trimmed.shape[1], pred_trimmed.shape[1])
+        loss = F.mse_loss(pred_trimmed[:, :min_len], gt_trimmed[:, :min_len])
         return loss, {"loss": loss.item()}
 
     def predict_action_chunk(self, batch: dict[str, Any]) -> Tensor:

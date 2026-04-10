@@ -350,17 +350,25 @@ class Groot(ExportablePolicyMixin, Policy):
         self.log("train/loss", loss, prog_bar=True)
         return loss
 
-    def validation_step(self, batch: Gym, batch_idx: int) -> dict[str, float]:
-        """Validation step - gym rollout.
+    def compute_val_loss(self, batch: Observation) -> tuple[torch.Tensor, dict[str, float]]:
+        """Compute validation loss on a batch.
+
+        Delegates to the model's ``compute_val_loss``.
 
         Args:
-            batch: Gym environment to evaluate.
-            batch_idx: Batch index.
+            batch: Observation batch (must contain ground-truth actions).
 
         Returns:
-            Metrics from rollout.
+            Tuple of (loss tensor, loss dict).
+
+        Raises:
+            RuntimeError: If model is not initialized.
         """
-        return self.evaluate_gym(batch, batch_idx, stage="val")
+        if self.model is None or self._preprocessor is None:
+            msg = "Model not initialized. Call setup() first."
+            raise RuntimeError(msg)
+        preprocessed = self._preprocessor(batch)
+        return self.model.compute_val_loss(preprocessed)
 
     def test_step(self, batch: Gym, batch_idx: int) -> dict[str, float]:
         """Test step - gym rollout.

@@ -331,6 +331,53 @@ class GrootModel(Model):
             backbone_outputs = self.backbone(groot_inputs)
             return self.action_head(backbone_outputs, groot_inputs)
 
+    def compute_loss(self, batch: Mapping[str, torch.Tensor]) -> tuple[torch.Tensor, dict[str, float]]:
+        """Compute training loss.
+
+        Delegates to :meth:`forward` and reformats the return value.
+
+        Args:
+            batch: Preprocessed batch dict.
+
+        Returns:
+            Tuple of (loss tensor, loss dict with ``"loss"`` key).
+        """
+        result = self.forward(batch)
+        loss = result["loss"]
+        return loss, {"loss": loss.item()}
+
+    @torch.no_grad()
+    def compute_val_loss(self, batch: Mapping[str, torch.Tensor]) -> tuple[torch.Tensor, dict[str, float]]:
+        """Compute validation loss: MSE between predicted and ground-truth actions.
+
+        Runs the full denoising loop and compares predicted actions with
+        ground truth.  Deterministic, unlike the stochastic flow-matching
+        training loss.
+
+        Args:
+            batch: Preprocessed batch dict containing ground-truth ``action``.
+
+        Returns:
+            Tuple of (mean MSE loss tensor, loss dict with ``"loss"`` key).
+        """
+        gt_actions = batch["action"]
+        predicted = self.get_action(batch)
+
+        # Apply action_mask if present to ignore padded dimensions
+        action_mask = batch.get("action_mask")
+
+        min_len = min(gt_actions.shape[1], predicted.shape[1])
+        gt_trimmed = gt_actions[:, :min_len]
+        pred_trimmed = predicted[:, :min_len]
+
+        if action_mask is not None:
+            mask = action_mask[:, :min_len].unsqueeze(-1)
+            loss = (torch.nn.functional.mse_loss(pred_trimmed, gt_trimmed, reduction="none") * mask).sum() / mask.sum()
+        else:
+            loss = torch.nn.functional.mse_loss(pred_trimmed, gt_trimmed)
+
+        return loss, {"loss": loss.item()}
+
     def get_action(self, batch: Mapping[str, torch.Tensor]) -> torch.Tensor:
         """Inference - predict actions.
 

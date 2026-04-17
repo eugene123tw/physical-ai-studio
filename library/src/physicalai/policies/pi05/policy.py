@@ -57,12 +57,31 @@ class Pi05(ExportablePolicyMixin, Policy):
         max_state_dim: Maximum state dimension (padded). Default: 32.
         max_action_dim: Maximum action dimension (padded). Default: 32.
         num_inference_steps: Denoising steps for inference. Default: 10.
+        time_sampling_beta_alpha: Alpha for beta distribution time sampling. Default: 1.5.
+        time_sampling_beta_beta: Beta for beta distribution time sampling. Default: 1.0.
+        time_sampling_scale: Scale factor for time sampling. Default: 0.999.
+        time_sampling_offset: Offset for time sampling. Default: 0.001.
+        min_period: Minimum period for sine-cosine positional encoding. Default: 4e-3.
+        max_period: Maximum period for sine-cosine positional encoding. Default: 4.0.
+        use_random_input_noise: Use random noise as initial denoising input. Default: False.
         image_resolution: Target image resolution. Default: (224, 224).
+        empty_cameras: Number of empty camera slots to add. Default: 0.
         tokenizer_max_length: Maximum tokenizer length. Default: 200.
-        gradient_checkpointing: Enable gradient checkpointing. Default: False.
+        gradient_checkpointing: Enable gradient checkpointing. Default: True.
+        compile_model: Whether to use torch.compile. Default: False.
+        compile_mode: Torch compile mode. Default: "max-autotune".
         freeze_vision_encoder: Freeze vision encoder. Default: False.
         train_expert_only: Train only action expert. Default: True.
+        normalization_mode: Normalization method ("MEAN_STD" or "QUANTILES"). Default: "QUANTILES".
         optimizer_lr: Learning rate. Default: 2.5e-5.
+        optimizer_betas: Adam beta coefficients. Default: (0.9, 0.95).
+        optimizer_eps: Optimizer epsilon for numerical stability. Default: 1e-8.
+        optimizer_weight_decay: Weight decay coefficient. Default: 0.01.
+        optimizer_grad_clip_norm: Maximum gradient norm for clipping. Default: 1.0.
+        scheduler_warmup_steps: Number of linear warmup steps. Default: 1000.
+        scheduler_decay_steps: Cosine decay horizon in steps. ``None`` auto-scales
+            to total training steps. Default: 30000.
+        scheduler_decay_lr: Final learning rate after cosine decay. Default: 2.5e-6.
         dataset_stats: Dataset stats for eager initialization. Default: None.
 
     Example:
@@ -124,7 +143,7 @@ class Pi05(ExportablePolicyMixin, Policy):
         optimizer_grad_clip_norm: float = 1.0,
         # Scheduler
         scheduler_warmup_steps: int = 1_000,
-        scheduler_decay_steps: int | None = None,
+        scheduler_decay_steps: int | None = 30_000,
         scheduler_decay_lr: float = 2.5e-6,
         # Eager initialization
         dataset_stats: dict[str, dict[str, list[float] | str | tuple]] | None = None,
@@ -293,7 +312,7 @@ class Pi05(ExportablePolicyMixin, Policy):
         optimizer_weight_decay: float = 0.01,
         optimizer_grad_clip_norm: float = 1.0,
         scheduler_warmup_steps: int = 1_000,
-        scheduler_decay_steps: int | None = None,
+        scheduler_decay_steps: int | None = 30_000,
         scheduler_decay_lr: float = 2.5e-6,
         **kwargs: Any,  # noqa: ANN401
     ) -> tuple[Pi05Config, dict[str, dict[str, list[float] | str | tuple]], Path]:

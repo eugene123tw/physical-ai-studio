@@ -2155,6 +2155,19 @@ wheels = [
 ]
 
 [[package]]
+name = "loguru"
+version = "0.7.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-16-physicalai-train-cpu' and extra == 'extra-16-physicalai-train-cu128') or (extra == 'extra-16-physicalai-train-cpu' and extra == 'extra-16-physicalai-train-xpu') or (extra == 'extra-16-physicalai-train-cu128' and extra == 'extra-16-physicalai-train-xpu') or (extra == 'extra-16-physicalai-train-executorch' and extra == 'extra-16-physicalai-train-xpu') or (extra == 'extra-16-physicalai-train-executorch-openvino' and extra == 'extra-16-physicalai-train-xpu')" },
+    { name = "win32-setctime", marker = "sys_platform == 'win32' or (extra == 'extra-16-physicalai-train-cpu' and extra == 'extra-16-physicalai-train-cu128') or (extra == 'extra-16-physicalai-train-cpu' and extra == 'extra-16-physicalai-train-xpu') or (extra == 'extra-16-physicalai-train-cu128' and extra == 'extra-16-physicalai-train-xpu') or (extra == 'extra-16-physicalai-train-executorch' and extra == 'extra-16-physicalai-train-xpu') or (extra == 'extra-16-physicalai-train-executorch-openvino' and extra == 'extra-16-physicalai-train-xpu')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3a/05/a1dae3dffd1116099471c643b8924f5aa6524411dc6c63fdae648c4f1aca/loguru-0.7.3.tar.gz", hash = "sha256:19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6", size = 63559, upload-time = "2024-12-06T11:20:56.608Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/29/0348de65b8cc732daa3e33e67806420b2ae89bdce2b04af740289c5c6c8c/loguru-0.7.3-py3-none-any.whl", hash = "sha256:31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c", size = 61595, upload-time = "2024-12-06T11:20:54.538Z" },
+]
+
+[[package]]
 name = "markdown"
 version = "3.10.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3016,6 +3029,11 @@ wheels = [
 ]
 
 [[package]]
+name = "omni-camera"
+version = "0.6.3"
+source = { git = "https://github.com/ArendJanKramer/OmniCamera.git?rev=master#776a1fb9ba6357f18c4159d43babf795153ac483" }
+
+[[package]]
 name = "oneccl"
 version = "2021.16.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3415,6 +3433,72 @@ wheels = [
 ]
 
 [[package]]
+name = "physicalai"
+version = "0.1.0"
+source = { editable = "../physicalai" }
+dependencies = [
+    { name = "loguru" },
+    { name = "num2words" },
+    { name = "numpy" },
+    { name = "omni-camera" },
+    { name = "onnxruntime" },
+    { name = "opencv-python-headless" },
+    { name = "openvino" },
+    { name = "openvino-tokenizers" },
+    { name = "pydantic" },
+    { name = "pyturbojpeg", marker = "sys_platform == 'linux' or (extra == 'extra-16-physicalai-train-cpu' and extra == 'extra-16-physicalai-train-cu128') or (extra == 'extra-16-physicalai-train-cpu' and extra == 'extra-16-physicalai-train-xpu') or (extra == 'extra-16-physicalai-train-cu128' and extra == 'extra-16-physicalai-train-xpu') or (extra == 'extra-16-physicalai-train-executorch' and extra == 'extra-16-physicalai-train-xpu') or (extra == 'extra-16-physicalai-train-executorch-openvino' and extra == 'extra-16-physicalai-train-xpu')" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "transformers" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "feetech-servo-sdk", marker = "extra == 'so101'" },
+    { name = "ipykernel", marker = "extra == 'notebooks'" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "matplotlib", marker = "extra == 'notebooks'" },
+    { name = "matplotlib-inline", marker = "extra == 'notebooks'" },
+    { name = "mypy", marker = "extra == 'tests'" },
+    { name = "num2words", specifier = ">=0.5.14,<0.6.0" },
+    { name = "numpy", specifier = ">=1.24" },
+    { name = "omni-camera", git = "https://github.com/ArendJanKramer/OmniCamera.git?rev=master" },
+    { name = "onnxruntime" },
+    { name = "opencv-python-headless" },
+    { name = "opencv-python-headless", marker = "extra == 'basler'" },
+    { name = "openvino", specifier = ">=2026.0" },
+    { name = "openvino-tokenizers", specifier = ">=2026.0" },
+    { name = "physicalai", extras = ["abb"], marker = "extra == 'robots'" },
+    { name = "physicalai", extras = ["basler"], marker = "extra == 'capture'" },
+    { name = "physicalai", extras = ["franka"], marker = "extra == 'robots'" },
+    { name = "physicalai", extras = ["genicam"], marker = "extra == 'capture'" },
+    { name = "physicalai", extras = ["realsense"], marker = "extra == 'capture'" },
+    { name = "physicalai", extras = ["so101"], marker = "extra == 'robots'" },
+    { name = "physicalai", extras = ["trossen"], marker = "extra == 'robots'" },
+    { name = "physicalai", extras = ["ur"], marker = "extra == 'robots'" },
+    { name = "pydantic", specifier = ">=2.5" },
+    { name = "pypylon", marker = "extra == 'basler'" },
+    { name = "pyrealsense2", marker = "sys_platform != 'darwin' and extra == 'realsense'" },
+    { name = "pyrealsense2-macosx", marker = "sys_platform == 'darwin' and extra == 'realsense'" },
+    { name = "pytest", marker = "extra == 'tests'" },
+    { name = "pyturbojpeg", marker = "sys_platform == 'linux'", specifier = "<2" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "safetensors", specifier = ">=0.4.3,<1.0.0" },
+    { name = "transformers", specifier = ">=5.3.0,<5.4.0" },
+    { name = "trossen-arm", marker = "extra == 'trossen'", specifier = ">=1.9.0" },
+]
+provides-extras = ["tests", "notebooks", "realsense", "basler", "genicam", "capture", "ur", "abb", "franka", "trossen", "so101", "robots"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy" },
+    { name = "prek" },
+    { name = "pyrefly" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[[package]]
 name = "physicalai-train"
 version = "0.1.0"
 source = { editable = "." }
@@ -3426,11 +3510,11 @@ dependencies = [
     { name = "lightning" },
     { name = "lightning-utilities" },
     { name = "onnx" },
-    { name = "onnxruntime" },
     { name = "onnxruntime-extensions" },
     { name = "onnxscript" },
     { name = "openvino" },
     { name = "openvino-tokenizers" },
+    { name = "physicalai" },
     { name = "pillow" },
     { name = "pydantic" },
     { name = "pymunk" },
@@ -3547,13 +3631,13 @@ requires-dist = [
     { name = "nncf", marker = "extra == 'executorch-openvino'", specifier = ">=3.0.0" },
     { name = "num2words", marker = "extra == 'smolvla'", specifier = ">=0.5.14,<0.6.0" },
     { name = "onnx" },
-    { name = "onnxruntime" },
     { name = "onnxruntime-extensions" },
     { name = "onnxscript" },
     { name = "openvino", specifier = ">=2026.0" },
     { name = "openvino-tokenizers", specifier = ">=2026.0" },
     { name = "peft", marker = "extra == 'groot'", specifier = ">=0.13.0,<1.0.0" },
     { name = "peft", marker = "extra == 'pi0'", specifier = ">=0.13.0,<1.0.0" },
+    { name = "physicalai", editable = "../physicalai" },
     { name = "physicalai-train", extras = ["groot"], marker = "extra == 'all'" },
     { name = "physicalai-train", extras = ["libero"], marker = "extra == 'all'" },
     { name = "physicalai-train", extras = ["pi0"], marker = "extra == 'all'" },
@@ -4504,6 +4588,15 @@ wheels = [
     { url = "https://download-r2.pytorch.org/whl/pytorch_triton_xpu-3.5.0-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3db1f86fd6587c5b4c8ee9611dc0f8cae6c848a24ab7b54aac03f0afb853a538", upload-time = "2025-10-14T17:17:21Z" },
     { url = "https://download-r2.pytorch.org/whl/pytorch_triton_xpu-3.5.0-cp314-cp314t-win_amd64.whl", hash = "sha256:78e28bb14d081a75f0a6d2d8332eaedf1fcd4a944d391eacec3f38ba2665d14c", upload-time = "2025-10-14T17:17:23Z" },
 ]
+
+[[package]]
+name = "pyturbojpeg"
+version = "1.8.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f2/2b/5fc7a7f51af947708a5d75d7637e923d2d4e60f43f6a4cfe55ae1ea241a2/pyturbojpeg-1.8.3.tar.gz", hash = "sha256:c131591a3990cc57f45a8b2705d6261c25df913a19b1fe88de5e911dbe04a1d4", size = 12757, upload-time = "2026-02-17T02:32:53.192Z" }
 
 [[package]]
 name = "pytz"
@@ -6245,6 +6338,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/dd/b2/381be8cfdee792dd117872481b6e378f85c957dd7c5bca38897b08f765fd/werkzeug-3.1.8.tar.gz", hash = "sha256:9bad61a4268dac112f1c5cd4630a56ede601b6ed420300677a869083d70a4c44", size = 875852, upload-time = "2026-04-02T18:49:14.268Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/93/8c/2e650f2afeb7ee576912636c23ddb621c91ac6a98e66dc8d29c3c69446e1/werkzeug-3.1.8-py3-none-any.whl", hash = "sha256:63a77fb8892bf28ebc3178683445222aa500e48ebad5ec77b0ad80f8726b1f50", size = 226459, upload-time = "2026-04-02T18:49:12.72Z" },
+]
+
+[[package]]
+name = "win32-setctime"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b3/8f/705086c9d734d3b663af0e9bb3d4de6578d08f46b1b101c2442fd9aecaa2/win32_setctime-1.2.0.tar.gz", hash = "sha256:ae1fdf948f5640aae05c511ade119313fb6a30d7eabe25fef9764dca5873c4c0", size = 4867, upload-time = "2024-12-07T15:28:28.314Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/07/c6fe3ad3e685340704d314d765b7912993bcb8dc198f0e7a89382d37974b/win32_setctime-1.2.0-py3-none-any.whl", hash = "sha256:95d644c4e708aba81dc3704a116d8cbc974d70b3bdb8be1d150e36be6e9d1390", size = 4083, upload-time = "2024-12-07T15:28:26.465Z" },
 ]
 
 [[package]]

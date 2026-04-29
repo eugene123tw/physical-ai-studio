@@ -2392,7 +2392,7 @@ wheels = [
 [[package]]
 name = "omni-camera"
 version = "0.6.3"
-source = { git = "https://github.com/ArendJanKramer/OmniCamera.git?rev=776a1fb9ba6357f18c4159d43babf795153ac483#776a1fb9ba6357f18c4159d43babf795153ac483" }
+source = { git = "https://github.com/ArendJanKramer/OmniCamera.git?rev=master#776a1fb9ba6357f18c4159d43babf795153ac483" }
 
 [[package]]
 name = "oneccl"
@@ -2921,10 +2921,18 @@ version = "0.1.0"
 source = { editable = "../../physicalai" }
 dependencies = [
     { name = "loguru" },
+    { name = "num2words" },
     { name = "numpy" },
     { name = "omni-camera" },
+    { name = "onnxruntime" },
+    { name = "opencv-python-headless" },
+    { name = "openvino" },
+    { name = "openvino-tokenizers" },
     { name = "pydantic" },
     { name = "pyturbojpeg", marker = "sys_platform == 'linux' or (extra == 'extra-18-physical-ai-studio-cpu' and extra == 'extra-18-physical-ai-studio-cuda') or (extra == 'extra-18-physical-ai-studio-cpu' and extra == 'extra-18-physical-ai-studio-xpu') or (extra == 'extra-18-physical-ai-studio-cuda' and extra == 'extra-18-physical-ai-studio-xpu')" },
+    { name = "pyyaml" },
+    { name = "safetensors" },
+    { name = "transformers" },
 ]
 
 [package.optional-dependencies]
@@ -2943,9 +2951,14 @@ requires-dist = [
     { name = "matplotlib", marker = "extra == 'notebooks'" },
     { name = "matplotlib-inline", marker = "extra == 'notebooks'" },
     { name = "mypy", marker = "extra == 'tests'" },
+    { name = "num2words", specifier = ">=0.5.14,<0.6.0" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "omni-camera", git = "https://github.com/ArendJanKramer/OmniCamera.git?rev=master" },
+    { name = "onnxruntime" },
+    { name = "opencv-python-headless" },
     { name = "opencv-python-headless", marker = "extra == 'basler'" },
+    { name = "openvino", specifier = ">=2026.0" },
+    { name = "openvino-tokenizers", specifier = ">=2026.0" },
     { name = "physicalai", extras = ["abb"], marker = "extra == 'robots'" },
     { name = "physicalai", extras = ["basler"], marker = "extra == 'capture'" },
     { name = "physicalai", extras = ["franka"], marker = "extra == 'robots'" },
@@ -2960,6 +2973,9 @@ requires-dist = [
     { name = "pyrealsense2-macosx", marker = "sys_platform == 'darwin' and extra == 'realsense'" },
     { name = "pytest", marker = "extra == 'tests'" },
     { name = "pyturbojpeg", marker = "sys_platform == 'linux'", specifier = "<2" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "safetensors", specifier = ">=0.4.3,<1.0.0" },
+    { name = "transformers", specifier = ">=5.3.0,<5.4.0" },
     { name = "trossen-arm", marker = "extra == 'trossen'", specifier = ">=1.9.0" },
 ]
 provides-extras = ["tests", "notebooks", "realsense", "basler", "genicam", "capture", "ur", "abb", "franka", "trossen", "so101", "robots"]
@@ -2985,11 +3001,11 @@ dependencies = [
     { name = "lightning" },
     { name = "lightning-utilities" },
     { name = "onnx" },
-    { name = "onnxruntime" },
     { name = "onnxruntime-extensions" },
     { name = "onnxscript" },
     { name = "openvino" },
     { name = "openvino-tokenizers" },
+    { name = "physicalai" },
     { name = "pillow" },
     { name = "pydantic" },
     { name = "pymunk" },
@@ -3028,13 +3044,13 @@ requires-dist = [
     { name = "nncf", marker = "extra == 'executorch-openvino'", specifier = ">=3.0.0" },
     { name = "num2words", marker = "extra == 'smolvla'", specifier = ">=0.5.14,<0.6.0" },
     { name = "onnx" },
-    { name = "onnxruntime" },
     { name = "onnxruntime-extensions" },
     { name = "onnxscript" },
     { name = "openvino", specifier = ">=2026.0" },
     { name = "openvino-tokenizers", specifier = ">=2026.0" },
     { name = "peft", marker = "extra == 'groot'", specifier = ">=0.13.0,<1.0.0" },
     { name = "peft", marker = "extra == 'pi0'", specifier = ">=0.13.0,<1.0.0" },
+    { name = "physicalai", editable = "../../physicalai" },
     { name = "physicalai-train", extras = ["groot"], marker = "extra == 'all'" },
     { name = "physicalai-train", extras = ["libero"], marker = "extra == 'all'" },
     { name = "physicalai-train", extras = ["pi0"], marker = "extra == 'all'" },

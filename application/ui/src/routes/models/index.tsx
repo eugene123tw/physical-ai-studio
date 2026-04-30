@@ -5,13 +5,11 @@ import {
     Content,
     DialogContainer,
     DialogTrigger,
-    Divider,
     Flex,
     Heading,
     IllustratedMessage,
     Text,
     View,
-    Well,
 } from '@geti-ui/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import useWebSocket from 'react-use-websocket';
@@ -115,10 +113,12 @@ const JobList = ({ jobs, onViewLogs }: { jobs: SchemaTrainJob[]; onViewLogs: (jo
     );
 };
 
-const useProjectJobs = (project_id: string): SchemaJob[] => {
-    const { data: allJobs } = $api.useQuery('get', '/api/jobs');
+const useProjectJobs = (project_id: string): SchemaTrainJob[] => {
+    const { data: allJobs = [] } = $api.useQuery('get', '/api/jobs');
 
-    return allJobs?.filter((j) => j.project_id === project_id) ?? [];
+    return allJobs
+        .filter((job) => job.project_id === project_id)
+        .filter((job): job is SchemaTrainJob => job.type === 'training');
 };
 
 export const Index = () => {
@@ -128,6 +128,7 @@ export const Index = () => {
     });
 
     const jobs = useProjectJobs(project_id);
+
     const [retrainModel, setRetrainModel] = useState<SchemaModel | null>(null);
     const [logsSourceId, setLogsSourceId] = useState<string | undefined>();
 
@@ -179,10 +180,8 @@ export const Index = () => {
     return (
         <Flex height='100%'>
             <Flex margin={'size-200'} direction={'column'} flex>
-                <Heading level={4}>Models</Heading>
-                <Divider size='S' marginTop='size-100' marginBottom={'size-100'} />
                 {showIllustratedMessage ? (
-                    <Well flex UNSAFE_style={{ backgroundColor: 'rgb(60,62,66)' }}>
+                    <Flex margin={'size-200'} direction={'column'} flex height='100%'>
                         <IllustratedMessage>
                             <EmptyIllustration />
                             <Content> Currently there are no trained models available. </Content>
@@ -195,7 +194,7 @@ export const Index = () => {
                                 </DialogTrigger>
                             </View>
                         </IllustratedMessage>
-                    </Well>
+                    </Flex>
                 ) : (
                     <View margin={'size-300'}>
                         <Flex justifyContent={'end'} marginBottom='size-300'>
@@ -212,7 +211,7 @@ export const Index = () => {
                             </DialogTrigger>
                         </Flex>
                         <JobList
-                            jobs={jobs.filter((m) => m.type === 'training') as SchemaTrainJob[]}
+                            jobs={jobs}
                             onViewLogs={(job) => {
                                 setLogsSourceId(job.id);
                             }}

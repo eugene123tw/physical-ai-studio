@@ -164,7 +164,9 @@ class Pi05Preprocessor(torch.nn.Module):
         self.normalization_mode = normalization_mode
 
         # Cache image feature keys from the features dict
-        self.image_features = [k for k, f in features.items() if f.ftype == FeatureType.VISUAL]
+        self.image_features = (
+            [k for k, f in features.items() if f.ftype == FeatureType.VISUAL] if features else []
+        )
 
         norm_map = _norm_map_for_mode(normalization_mode)
         if features is not None:

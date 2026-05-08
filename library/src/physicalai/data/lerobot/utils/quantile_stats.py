@@ -53,15 +53,23 @@ def augment_dataset_quantile_stats(dataset: LeRobotDataset) -> None:
 
     new_stats = compute_quantile_stats_for_dataset(dataset)
 
-    # Inject only q01/q99 into existing meta.stats
+    # Inject quantile stats into existing meta.stats, and add full stats
+    # for any keys that are newly computed (e.g. image observations that
+    # older datasets omitted from their pre-computed stats).
     for key, feat_stats in new_stats.items():
         if key not in dataset.meta.stats:
-            continue
-        for q_key in ("q01", "q99"):
-            if q_key in feat_stats:
-                val = feat_stats[q_key]
+            # Add full stats entry for features missing from meta.stats
+            dataset.meta.stats[key] = {}
+            for stat_key, val in feat_stats.items():
                 if not isinstance(val, torch.Tensor):
                     val = torch.from_numpy(val).float()
-                dataset.meta.stats[key][q_key] = val
+                dataset.meta.stats[key][stat_key] = val
+        else:
+            for q_key in ("q01", "q99"):
+                if q_key in feat_stats:
+                    val = feat_stats[q_key]
+                    if not isinstance(val, torch.Tensor):
+                        val = torch.from_numpy(val).float()
+                    dataset.meta.stats[key][q_key] = val
 
     logger.info("Quantile stats computed via LeRobot for dataset")

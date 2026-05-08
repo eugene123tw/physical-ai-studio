@@ -20,7 +20,7 @@ from physicalai.inference.manifest import ComponentSpec
 from safetensors.torch import load_file
 
 from physicalai.data.dataset import Dataset
-from physicalai.data.observation import ACTION, STATE, FeatureType
+from physicalai.data.observation import ACTION, IMAGES, STATE, FeatureType
 from physicalai.export import ExportablePolicyMixin, ExportBackend
 from physicalai.export.backends import (
     ExportParameters,
@@ -674,11 +674,14 @@ class Pi05(ExportablePolicyMixin, Policy):
             raise ValueError(msg)
 
         # Map "observation.images.image" → "images.image" to match preprocessor batch keys
-        image_feature_keys = [
-            str(stat.get("name", key)).rsplit("observation.", maxsplit=1)[-1]
-            for key, stat in self._dataset_stats.items()
-            if stat.get("type") == FeatureType.VISUAL.value
-        ]
+        image_feature_keys = []
+        for key, stat in self._dataset_stats.items():
+            if stat.get("type") != FeatureType.VISUAL.value:
+                continue
+            name = str(stat.get("name", key)).rsplit("observation.", maxsplit=1)[-1]
+            if not name.startswith(IMAGES):
+                name = f"{IMAGES}.{name}"
+            image_feature_keys.append(name)
 
         base_preproc_specs = [
             ComponentSpec(

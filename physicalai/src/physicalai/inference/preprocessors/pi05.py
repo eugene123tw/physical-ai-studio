@@ -41,7 +41,11 @@ class Pi05Preprocessor(Preprocessor):
         """Initialize the Pi0.5 preprocessor."""
         super().__init__()
         self._image_resolution = image_resolution
-        self._image_features = image_features
+        # Normalise feature keys so they always carry the "images." prefix,
+        # regardless of how the manifest stored them.
+        self._image_features = [
+            k if k.startswith(IMAGES) else f"{IMAGES}.{k}" for k in image_features
+        ]
 
     def __call__(self, inputs: dict[str, np.ndarray | list[str]]) -> dict[str, np.ndarray | list[str]]:
         """Preprocess images and text for Pi0.5 inference.

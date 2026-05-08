@@ -43,6 +43,7 @@ def _norm_map_for_mode(mode: str) -> dict[FeatureType, NormalizationType]:
     return {
         FeatureType.STATE: norm_type,
         FeatureType.ACTION: norm_type,
+        FeatureType.VISUAL: NormalizationType.IDENTITY,  # No normalization for visual features
     }
 
 
@@ -141,7 +142,6 @@ class Pi05Preprocessor(torch.nn.Module):
         features: Dictionary mapping feature names to Feature objects for normalization.
         max_token_len: Maximum tokenized prompt length.
         tokenizer_name: HuggingFace tokenizer name for PaliGemma.
-        empty_cameras: Number of empty camera slots to add as -1-filled images.
     """
 
     def __init__(
@@ -151,7 +151,6 @@ class Pi05Preprocessor(torch.nn.Module):
         features: dict[str, Feature] | None = None,
         max_token_len: int = 200,
         tokenizer_name: str = "google/paligemma-3b-pt-224",
-        empty_cameras: int = 0,
         normalization_mode: str = "QUANTILES",
     ) -> None:
         """Initialize Pi05Preprocessor."""
@@ -162,8 +161,10 @@ class Pi05Preprocessor(torch.nn.Module):
         self.max_token_len = max_token_len
         self.tokenizer_name = tokenizer_name
         self._tokenizer = None
-        self.empty_cameras = empty_cameras
         self.normalization_mode = normalization_mode
+
+        # Cache image feature keys from the features dict
+        self.image_features = [k for k, f in features.items() if f.ftype == FeatureType.VISUAL]
 
         norm_map = _norm_map_for_mode(normalization_mode)
         if features is not None:
@@ -217,20 +218,6 @@ class Pi05Preprocessor(torch.nn.Module):
 
         # Preprocess images
         images, img_masks = self._preprocess_images(batch)
-
-        # Append empty cameras as -1-filled images with zero masks
-        if self.empty_cameras > 0 and len(images) > 0:
-            for _ in range(self.empty_cameras):
-                images.append(torch.ones_like(images[-1]) * -1)
-                img_masks.append(torch.zeros_like(img_masks[-1]))
-
-        if images:
-            images = torch.stack(images, dim=0)
-            img_masks = torch.stack(img_masks, dim=0)
-        else:
-            images = torch.empty(0, device=batch[STATE].device)
-            img_masks = torch.empty(0, device=batch[STATE].device)
-
         batch[IMAGES] = images
         batch[IMAGE_MASKS] = img_masks
 
@@ -252,13 +239,14 @@ class Pi05Preprocessor(torch.nn.Module):
         images = []
         img_masks = []
 
-        batch_img_keys = Observation.get_flattened_keys(batch, IMAGES)
-        batch_img_keys = [key for key in batch_img_keys if "is_pad" not in key]
-
         device = batch[STATE].device if STATE in batch else torch.device("cpu")
 
+        # Use cached image feature keys if available, else discover from batch
+        present_img_keys = [key for key in self.image_features if key in batch]
+        missing_img_keys = [key for key in self.image_features if key not in batch]
+
         max_image_dim = 5
-        for key in batch_img_keys:
+        for key in present_img_keys:
             img = batch[key][:, -1, :, :, :] if batch[key].ndim == max_image_dim else batch[key]
             batch.pop(key)
 
@@ -285,6 +273,20 @@ class Pi05Preprocessor(torch.nn.Module):
             mask = torch.ones(bsize, dtype=torch.bool, device=device)
             images.append(img)
             img_masks.append(mask)
+
+        # Fill missing image features as -1-padded images with zero masks
+        # (like lerobot's approach for cameras not present in the batch)
+        if missing_img_keys and len(images) > 0:
+            for _ in missing_img_keys:
+                images.append(torch.ones_like(images[-1]) * -1)
+                img_masks.append(torch.zeros_like(img_masks[-1]))
+
+        if images:
+            images = torch.stack(images, dim=0)
+            img_masks = torch.stack(img_masks, dim=0)
+        else:
+            images = torch.empty(0, device=batch[STATE].device)
+            img_masks = torch.empty(0, device=batch[STATE].device)
 
         return images, img_masks
 
@@ -373,7 +375,6 @@ def make_pi05_preprocessors(
     *,
     image_resolution: tuple[int, int] = (224, 224),
     max_token_len: int = 200,
-    empty_cameras: int = 0,
     normalization_mode: str = "QUANTILES",
 ) -> tuple[Pi05Preprocessor, Pi05Postprocessor]:
     """Create preprocessor and postprocessor pair for Pi05.
@@ -383,7 +384,6 @@ def make_pi05_preprocessors(
         stats: Dataset statistics as nested dicts.
         image_resolution: Target image resolution.
         max_token_len: Maximum token length.
-        empty_cameras: Number of empty camera slots to add.
         normalization_mode: ``"MEAN_STD"`` or ``"QUANTILES"``.
 
     Returns:
@@ -396,6 +396,8 @@ def make_pi05_preprocessors(
                 feature_type = FeatureType.ACTION
             elif STATE in key:
                 feature_type = FeatureType.STATE
+            elif stat.get("type") and "VISUAL" in str(stat["type"]):
+                feature_type = FeatureType.VISUAL
             else:
                 continue
 
@@ -428,7 +430,6 @@ def make_pi05_preprocessors(
         image_resolution=image_resolution,
         features=features,
         max_token_len=max_token_len,
-        empty_cameras=empty_cameras,
         normalization_mode=normalization_mode,
     )
 

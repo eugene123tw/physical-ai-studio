@@ -150,6 +150,9 @@ def parse_preprocessor_stats(
             feat_name, stat_name = flat_key.rsplit(".", 1)
             grouped.setdefault(feat_name, {})[stat_name] = tensor.cpu().tolist()
 
+        # Extract feature metadata (type, shape) from the normalizer config
+        step_features = step.get("config", {}).get("features", {})
+
         # Store all available stats directly — the normalization mode
         # (detected from the preprocessor JSON) determines which fields
         # the normalizer actually uses at runtime.
@@ -159,12 +162,29 @@ def parse_preprocessor_stats(
                 "name": feat_name,
                 "shape": shape,
             }
+            # Include type from normalizer config features if available
+            if feat_name in step_features and "type" in step_features[feat_name]:
+                entry["type"] = step_features[feat_name]["type"]
             for stat_key in ("mean", "std", "q01", "q99", "min", "max"):
                 if stat_key in feat_stats and isinstance(feat_stats[stat_key], list):
                     entry[stat_key] = feat_stats[stat_key]
             # Only include features that have at least one stat field
             if len(entry) > 2:  # noqa: PLR2004
                 stats[feat_name] = entry
+
+        # Include features from normalizer config that have no stats
+        # (e.g. image features with IDENTITY normalization)
+        for feat_name, feat_info in step_features.items():
+            if feat_name in stats:
+                continue
+            if not isinstance(feat_info, dict) or "type" not in feat_info:
+                continue
+            shape = tuple(feat_info["shape"]) if "shape" in feat_info else resolve_feature_shape(feat_name, hf_config, {})
+            stats[feat_name] = {
+                "name": feat_name,
+                "shape": shape,
+                "type": feat_info["type"],
+            }
 
     return stats
 
@@ -193,8 +213,10 @@ def parse_config_features(hf_config: dict[str, Any]) -> dict[str, dict[str, Any]
             shape = tuple(shape)
             dim = shape[0] if shape else 1
 
+            feat_type = feat_info.get("type")
+
             if "state" in feat_name.lower() or feat_name == ACTION or "action" in feat_name.lower():
-                stats[feat_name] = {
+                entry: dict[str, Any] = {
                     "name": feat_name,
                     "shape": shape,
                     "mean": [0.0] * dim,
@@ -202,6 +224,15 @@ def parse_config_features(hf_config: dict[str, Any]) -> dict[str, dict[str, Any]
                     # Identity-equivalent quantile stats so QUANTILES mode works
                     "q01": [-1.0] * dim,
                     "q99": [1.0] * dim,
+                }
+                if feat_type:
+                    entry["type"] = feat_type
+                stats[feat_name] = entry
+            elif "image" in feat_name.lower() or (feat_type and "VISUAL" in str(feat_type)):
+                stats[feat_name] = {
+                    "name": feat_name,
+                    "shape": shape,
+                    "type": feat_type or "VISUAL",
                 }
 
     return stats

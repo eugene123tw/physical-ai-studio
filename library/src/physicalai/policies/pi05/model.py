@@ -676,20 +676,28 @@ class Pi05Model(ExportableModelMixin, Model):
 
         sample_input = {}
 
+        def _is_image_feature(key: str, stats: dict[str, Any]) -> bool:
+            if IMAGES in key:
+                return True
+            feat_type = stats.get("type")
+            return feat_type is not None and str(FeatureType.VISUAL) in str(feat_type)
+
         num_image_features = sum(
-            1 for key in self._dataset_stats if str(FeatureType.VISUAL) in self._dataset_stats[key]["type"]
+            1 for key in self._dataset_stats if _is_image_feature(key, self._dataset_stats[key])
         )
 
         for feature_id in self._dataset_stats:
             if STATE in feature_id:
                 state_feature = self._dataset_stats[feature_id]
                 sample_input[STATE] = torch.randn(1, *cast("tuple", state_feature["shape"]), device=device)
-            elif str(FeatureType.VISUAL) in self._dataset_stats[feature_id]["type"]:
+            elif _is_image_feature(feature_id, self._dataset_stats[feature_id]):
                 image_feature = self._dataset_stats[feature_id]
+                raw_name = str(image_feature["name"])
+                mapped_name = raw_name.rsplit("observation.", maxsplit=1)[-1] if "observation." in raw_name else raw_name
                 if num_image_features == 1:
-                    sample_input[IMAGES] = torch.randn(1, *cast("tuple", image_feature["shape"]), device=device)
+                    sample_input[mapped_name] = torch.randn(1, *cast("tuple", image_feature["shape"]), device=device)
                 else:
-                    sample_input[IMAGES + "." + str(image_feature["name"])] = torch.randn(
+                    sample_input[mapped_name] = torch.randn(
                         1,
                         *cast("tuple", image_feature["shape"]),
                         device=device,

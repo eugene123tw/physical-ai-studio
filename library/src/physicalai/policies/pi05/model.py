@@ -695,9 +695,9 @@ class Pi05Model(ExportableModelMixin, Model):
                 obs_images_prefix = "observation.images."
                 obs_prefix = "observation."
                 if raw_name.startswith(obs_images_prefix):
-                    mapped_name = raw_name[len(obs_images_prefix):]
+                    mapped_name = raw_name[len(obs_images_prefix) :]
                 elif raw_name.startswith(obs_prefix):
-                    mapped_name = raw_name[len(obs_prefix):]
+                    mapped_name = raw_name[len(obs_prefix) :]
                 else:
                     mapped_name = raw_name
                 if num_image_features == 1:

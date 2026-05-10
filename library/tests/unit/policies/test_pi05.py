@@ -8,11 +8,29 @@ Fast, self-contained tests with no external dependencies (no HuggingFace model d
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 import torch
 from physicalai.config import Config
-from physicalai.data.observation import IMAGES, STATE
+from physicalai.data import Feature, FeatureType, NormalizationParameters, Observation
+from physicalai.data.observation import ACTION, IMAGES, STATE
+from physicalai.inference.preprocessors.pi05 import Pi05Preprocessor as NumpyPreprocessor
 from physicalai.policies.pi05 import Pi05, Pi05Config, Pi05Model
+from physicalai.policies.pi05.model import (
+    _create_sinusoidal_pos_embedding,
+    _get_safe_dtype,
+    _make_att_2d_masks,
+    _sample_beta,
+    get_gemma_config,
+)
+from physicalai.policies.pi05.pi_gemma import PiGemmaRMSNorm, _gated_residual, layernorm_forward
+from physicalai.policies.pi05.preprocessor import (
+    Pi05Postprocessor,
+    Pi05Preprocessor,
+    _pad_vector,
+    _resize_with_pad_torch,
+    make_pi05_preprocessors,
+)
 from physicalai.policies.pi05.pretrained_utils import (
     fix_state_dict_keys,
     parse_config_features,
@@ -83,7 +101,6 @@ class TestPi05Config:
         """Test image-related configuration values."""
         config = Pi05Config()
         assert config.image_resolution == (224, 224)
-        assert config.empty_cameras == 0
         assert config.tokenizer_max_length == 200
 
     def test_n_action_steps_validation(self) -> None:
@@ -198,7 +215,6 @@ class TestPi05Policy:
     @pytest.mark.parametrize("method", ["forward", "predict_action_chunk"])
     def test_methods_raise_without_model(self, method: str) -> None:
         """Test methods raise ValueError if model not initialized."""
-        from physicalai.data import Observation
 
         policy = Pi05()
         dummy_obs = Observation(state=torch.randn(1, 10))
@@ -264,7 +280,6 @@ class TestModelUtilities:
 
     def test_pad_vector_shorter(self) -> None:
         """Test pad_vector pads shorter vectors."""
-        from physicalai.policies.pi05.preprocessor import _pad_vector
 
         v = torch.randn(2, 7)
         padded = _pad_vector(v, 32)
@@ -274,7 +289,6 @@ class TestModelUtilities:
 
     def test_pad_vector_equal(self) -> None:
         """Test pad_vector with equal dimensions (no-op)."""
-        from physicalai.policies.pi05.preprocessor import _pad_vector
 
         v = torch.randn(2, 32)
         padded = _pad_vector(v, 32)
@@ -283,7 +297,6 @@ class TestModelUtilities:
 
     def test_pad_vector_longer(self) -> None:
         """Test pad_vector with longer vector (no-op)."""
-        from physicalai.policies.pi05.preprocessor import _pad_vector
 
         v = torch.randn(2, 64)
         padded = _pad_vector(v, 32)
@@ -291,7 +304,6 @@ class TestModelUtilities:
 
     def test_resize_with_pad_shape(self) -> None:
         """Test resize_with_pad produces correct output shape."""
-        from physicalai.policies.pi05.preprocessor import _resize_with_pad_torch
 
         img = torch.rand(2, 480, 640, 3)  # [B, H, W, C]
         result = _resize_with_pad_torch(img, 224, 224)
@@ -299,7 +311,6 @@ class TestModelUtilities:
 
     def test_resize_with_pad_channels_first(self) -> None:
         """Test resize_with_pad with channels-first format."""
-        from physicalai.policies.pi05.preprocessor import _resize_with_pad_torch
 
         img = torch.rand(2, 3, 480, 640)  # [B, C, H, W]
         result = _resize_with_pad_torch(img, 224, 224)
@@ -307,7 +318,6 @@ class TestModelUtilities:
 
     def test_resize_with_pad_3d(self) -> None:
         """Test resize_with_pad with 3D input (no batch dim)."""
-        from physicalai.policies.pi05.preprocessor import _resize_with_pad_torch
 
         img = torch.rand(480, 640, 3)  # [H, W, C]
         result = _resize_with_pad_torch(img, 224, 224)
@@ -315,7 +325,6 @@ class TestModelUtilities:
 
     def test_resize_with_pad_uint8(self) -> None:
         """Test resize_with_pad with uint8 images."""
-        from physicalai.policies.pi05.preprocessor import _resize_with_pad_torch
 
         img = torch.randint(0, 256, (2, 480, 640, 3), dtype=torch.uint8)
         result = _resize_with_pad_torch(img, 224, 224)
@@ -324,9 +333,12 @@ class TestModelUtilities:
 
     def test_preprocess_images_pops_source_keys(self) -> None:
         """Test _preprocess_images removes original image keys from batch."""
-        from physicalai.policies.pi05.preprocessor import Pi05Preprocessor
 
-        prep = Pi05Preprocessor(image_resolution=(64, 64))
+        features = {
+            f"{IMAGES}.0": Feature(ftype=FeatureType.VISUAL, shape=(3, 48, 48)),
+            f"{IMAGES}.1": Feature(ftype=FeatureType.VISUAL, shape=(3, 32, 64)),
+        }
+        prep = Pi05Preprocessor(image_resolution=(64, 64), features=features)
         batch = {
             STATE: torch.randn(1, 4),
             f"{IMAGES}.0": torch.rand(1, 3, 48, 48),
@@ -341,7 +353,6 @@ class TestModelUtilities:
 
     def test_resize_with_pad_unsupported_dtype(self) -> None:
         """Test resize_with_pad raises error for unsupported dtype."""
-        from physicalai.policies.pi05.preprocessor import _resize_with_pad_torch
 
         img = torch.rand(2, 480, 640, 3).to(torch.float16)
         with pytest.raises(ValueError, match="Unsupported image dtype"):
@@ -349,7 +360,6 @@ class TestModelUtilities:
 
     def test_create_sinusoidal_pos_embedding_shape(self) -> None:
         """Test sinusoidal positional embedding has correct shape."""
-        from physicalai.policies.pi05.model import _create_sinusoidal_pos_embedding
 
         time = torch.tensor([0.1, 0.5, 0.9])
         emb = _create_sinusoidal_pos_embedding(time, 64, min_period=4e-3, max_period=4.0, device=time.device)
@@ -357,7 +367,6 @@ class TestModelUtilities:
 
     def test_create_sinusoidal_pos_embedding_odd_dim(self) -> None:
         """Test sinusoidal embedding raises for odd dimension."""
-        from physicalai.policies.pi05.model import _create_sinusoidal_pos_embedding
 
         time = torch.tensor([0.5])
         with pytest.raises(ValueError, match="divisible by 2"):
@@ -365,7 +374,6 @@ class TestModelUtilities:
 
     def test_create_sinusoidal_pos_embedding_wrong_ndim(self) -> None:
         """Test sinusoidal embedding raises for wrong ndim."""
-        from physicalai.policies.pi05.model import _create_sinusoidal_pos_embedding
 
         time = torch.tensor([[0.5]])  # 2D instead of 1D
         with pytest.raises(ValueError, match="batch_size"):
@@ -373,7 +381,6 @@ class TestModelUtilities:
 
     def test_sample_beta(self) -> None:
         """Test sample_beta returns correct shape."""
-        from physicalai.policies.pi05.model import _sample_beta
 
         result = _sample_beta(1.5, 1.0, 4, torch.device("cpu"))
         assert result.shape == (4,)
@@ -381,7 +388,6 @@ class TestModelUtilities:
 
     def test_make_att_2d_masks_shape(self) -> None:
         """Test make_att_2d_masks returns correct shape."""
-        from physicalai.policies.pi05.model import _make_att_2d_masks
 
         pad_masks = torch.ones(2, 10, dtype=torch.bool)
         att_masks = torch.zeros(2, 10, dtype=torch.bool)
@@ -391,7 +397,6 @@ class TestModelUtilities:
 
     def test_make_att_2d_masks_wrong_ndim(self) -> None:
         """Test make_att_2d_masks raises for wrong ndim."""
-        from physicalai.policies.pi05.model import _make_att_2d_masks
 
         pad_masks = torch.ones(2, 3, 10, dtype=torch.bool)  # 3D
         att_masks = torch.zeros(2, 10, dtype=torch.bool)
@@ -400,7 +405,6 @@ class TestModelUtilities:
 
     def test_get_gemma_config_300m(self) -> None:
         """Test get_gemma_config for gemma_300m variant."""
-        from physicalai.policies.pi05.model import get_gemma_config
 
         config = get_gemma_config("gemma_300m")
         assert config.width == 1024
@@ -412,7 +416,6 @@ class TestModelUtilities:
 
     def test_get_gemma_config_2b(self) -> None:
         """Test get_gemma_config for gemma_2b variant."""
-        from physicalai.policies.pi05.model import get_gemma_config
 
         config = get_gemma_config("gemma_2b")
         assert config.width == 2048
@@ -421,14 +424,12 @@ class TestModelUtilities:
 
     def test_get_gemma_config_unknown(self) -> None:
         """Test get_gemma_config raises for unknown variant."""
-        from physicalai.policies.pi05.model import get_gemma_config
 
         with pytest.raises(ValueError, match="Unknown variant"):
             get_gemma_config("gemma_7b")
 
     def test_get_safe_dtype_cpu(self) -> None:
         """Test get_safe_dtype returns float32 for bfloat16 on CPU."""
-        from physicalai.policies.pi05.model import _get_safe_dtype
 
         assert _get_safe_dtype(torch.bfloat16, "cpu") == torch.float32
         assert _get_safe_dtype(torch.float64, "cpu") == torch.float64
@@ -436,7 +437,6 @@ class TestModelUtilities:
 
     def test_get_safe_dtype_cuda(self) -> None:
         """Test get_safe_dtype returns target dtype for CUDA."""
-        from physicalai.policies.pi05.model import _get_safe_dtype
 
         assert _get_safe_dtype(torch.bfloat16, "cuda") == torch.bfloat16
         assert _get_safe_dtype(torch.float32, "cuda") == torch.float32
@@ -452,14 +452,12 @@ class TestPiGemmaComponents:
 
     def test_gated_residual_both_none(self) -> None:
         """Test gated_residual with both inputs None."""
-        from physicalai.policies.pi05.pi_gemma import _gated_residual
 
         result = _gated_residual(None, None, None)
         assert result is None
 
     def test_gated_residual_x_none(self) -> None:
         """Test gated_residual with x None."""
-        from physicalai.policies.pi05.pi_gemma import _gated_residual
 
         y = torch.randn(2, 3)
         result = _gated_residual(None, y, None)
@@ -467,7 +465,6 @@ class TestPiGemmaComponents:
 
     def test_gated_residual_y_none(self) -> None:
         """Test gated_residual with y None."""
-        from physicalai.policies.pi05.pi_gemma import _gated_residual
 
         x = torch.randn(2, 3)
         result = _gated_residual(x, None, None)
@@ -475,7 +472,6 @@ class TestPiGemmaComponents:
 
     def test_gated_residual_no_gate(self) -> None:
         """Test gated_residual without gate (simple addition)."""
-        from physicalai.policies.pi05.pi_gemma import _gated_residual
 
         x = torch.randn(2, 3)
         y = torch.randn(2, 3)
@@ -484,7 +480,6 @@ class TestPiGemmaComponents:
 
     def test_gated_residual_with_gate(self) -> None:
         """Test gated_residual with gate modulation."""
-        from physicalai.policies.pi05.pi_gemma import _gated_residual
 
         x = torch.randn(2, 3)
         y = torch.randn(2, 3)
@@ -494,7 +489,6 @@ class TestPiGemmaComponents:
 
     def test_pi_gemma_rms_norm_standard(self) -> None:
         """Test PiGemmaRMSNorm without conditioning (standard mode)."""
-        from physicalai.policies.pi05.pi_gemma import PiGemmaRMSNorm
 
         norm = PiGemmaRMSNorm(dim=16)
         x = torch.randn(2, 10, 16)
@@ -504,7 +498,6 @@ class TestPiGemmaComponents:
 
     def test_pi_gemma_rms_norm_adaptive(self) -> None:
         """Test PiGemmaRMSNorm with adaptive conditioning (AdaRMS)."""
-        from physicalai.policies.pi05.pi_gemma import PiGemmaRMSNorm
 
         norm = PiGemmaRMSNorm(dim=16, cond_dim=32)
         x = torch.randn(2, 10, 16)
@@ -516,7 +509,6 @@ class TestPiGemmaComponents:
 
     def test_pi_gemma_rms_norm_cond_dim_mismatch(self) -> None:
         """Test PiGemmaRMSNorm raises for wrong cond dimension."""
-        from physicalai.policies.pi05.pi_gemma import PiGemmaRMSNorm
 
         norm = PiGemmaRMSNorm(dim=16, cond_dim=32)
         x = torch.randn(2, 10, 16)
@@ -526,7 +518,6 @@ class TestPiGemmaComponents:
 
     def test_pi_gemma_rms_norm_extra_repr(self) -> None:
         """Test PiGemmaRMSNorm extra_repr for both modes."""
-        from physicalai.policies.pi05.pi_gemma import PiGemmaRMSNorm
 
         standard_norm = PiGemmaRMSNorm(dim=16)
         assert "adaptive" not in standard_norm.extra_repr()
@@ -537,7 +528,6 @@ class TestPiGemmaComponents:
 
     def test_layernorm_forward_without_cond(self) -> None:
         """Test layernorm_forward without conditioning."""
-        from physicalai.policies.pi05.pi_gemma import PiGemmaRMSNorm, layernorm_forward
 
         norm = PiGemmaRMSNorm(dim=16)
         x = torch.randn(2, 10, 16)
@@ -547,7 +537,6 @@ class TestPiGemmaComponents:
 
     def test_layernorm_forward_with_cond(self) -> None:
         """Test layernorm_forward with conditioning."""
-        from physicalai.policies.pi05.pi_gemma import PiGemmaRMSNorm, layernorm_forward
 
         norm = PiGemmaRMSNorm(dim=16, cond_dim=32)
         x = torch.randn(2, 10, 16)
@@ -567,7 +556,6 @@ class TestPi05Preprocessor:
 
     def test_make_pi05_preprocessors(self) -> None:
         """Test make_pi05_preprocessors returns callables."""
-        from physicalai.policies.pi05.preprocessor import make_pi05_preprocessors
 
         preprocessor, postprocessor = make_pi05_preprocessors(
             max_action_dim=32,
@@ -580,7 +568,6 @@ class TestPi05Preprocessor:
 
     def test_preprocessor_is_nn_module(self) -> None:
         """Test that preprocessors are nn.Module instances."""
-        from physicalai.policies.pi05.preprocessor import Pi05Postprocessor, Pi05Preprocessor
 
         preprocessor = Pi05Preprocessor()
         postprocessor = Pi05Postprocessor()
@@ -590,7 +577,6 @@ class TestPi05Preprocessor:
 
     def test_preprocessor_default_values(self) -> None:
         """Test preprocessor default configuration values."""
-        from physicalai.policies.pi05.preprocessor import Pi05Preprocessor
 
         preprocessor = Pi05Preprocessor()
 
@@ -598,28 +584,22 @@ class TestPi05Preprocessor:
         assert preprocessor.image_resolution == (224, 224)
         assert preprocessor.max_token_len == 200
         assert preprocessor.tokenizer_name == "google/paligemma-3b-pt-224"
-        assert preprocessor.empty_cameras == 0
 
     def test_preprocessor_custom_values(self) -> None:
         """Test preprocessor with custom configuration values."""
-        from physicalai.policies.pi05.preprocessor import Pi05Preprocessor
 
         preprocessor = Pi05Preprocessor(
             max_action_dim=16,
             image_resolution=(512, 512),
             max_token_len=300,
-            empty_cameras=2,
         )
 
         assert preprocessor.max_action_dim == 16
         assert preprocessor.image_resolution == (512, 512)
         assert preprocessor.max_token_len == 300
-        assert preprocessor.empty_cameras == 2
 
     def test_postprocessor_identity_without_features(self) -> None:
         """Test postprocessor acts as identity without features."""
-        from physicalai.data.observation import ACTION
-        from physicalai.policies.pi05.preprocessor import Pi05Postprocessor
 
         postprocessor = Pi05Postprocessor(features=None)
         action = torch.randn(2, 50, 7)
@@ -630,7 +610,6 @@ class TestPi05Preprocessor:
 
     def test_postprocessor_without_action_key(self) -> None:
         """Test postprocessor handles missing action key gracefully."""
-        from physicalai.policies.pi05.preprocessor import Pi05Postprocessor
 
         postprocessor = Pi05Postprocessor(features=None)
         batch = {"other_key": torch.randn(2, 10)}
@@ -639,7 +618,6 @@ class TestPi05Preprocessor:
 
     def test_make_preprocessors_with_stats(self) -> None:
         """Test make_pi05_preprocessors with dataset statistics."""
-        from physicalai.policies.pi05.preprocessor import make_pi05_preprocessors
 
         stats: dict[str, dict] = {
             "observation.state": {
@@ -672,7 +650,6 @@ class TestPi05Preprocessor:
 
     def test_make_preprocessors_maps_observation_prefix(self) -> None:
         """Test that make_pi05_preprocessors strips 'observation.' prefix from names."""
-        from physicalai.policies.pi05.preprocessor import make_pi05_preprocessors
 
         stats = {
             "observation.state": {
@@ -700,8 +677,6 @@ class TestFeatureNormalization:
 
     def test_preprocessor_with_features(self) -> None:
         """Test preprocessor with feature configuration."""
-        from physicalai.data import Feature, FeatureType, NormalizationParameters
-        from physicalai.policies.pi05.preprocessor import Pi05Preprocessor
 
         features = {
             "state": Feature(
@@ -721,8 +696,6 @@ class TestFeatureNormalization:
 
     def test_postprocessor_with_features(self) -> None:
         """Test postprocessor with feature configuration."""
-        from physicalai.data import Feature, FeatureType, NormalizationParameters
-        from physicalai.policies.pi05.preprocessor import Pi05Postprocessor
 
         features = {
             "action": Feature(
@@ -1111,3 +1084,240 @@ class TestPi05ExtraExportArgs:
             assert types.index("normalize") < types.index("pi05"), (
                 f"{backend}: normalize must precede pi05, got {types}"
             )
+
+    def test_image_features_in_manifest(self) -> None:
+        """image_features list must appear in the pi05 preprocessor spec."""
+
+        stats = self._mock_stats()
+        stats["observation.images.top"] = {
+            "name": "observation.images.top",
+            "shape": (3, 224, 224),
+            "type": FeatureType.VISUAL.value,
+        }
+        policy = Pi05()
+        policy._dataset_stats = stats
+
+        args = policy.extra_export_args
+        for backend in ("onnx", "openvino"):
+            pi05_spec = next(s for s in args[backend].preprocessors_specs if s.type == "pi05")
+            assert hasattr(pi05_spec, "image_features")
+            assert "images.top" in pi05_spec.image_features
+
+    def test_image_features_have_images_prefix(self) -> None:
+        """image_features keys must always carry the 'images.' prefix."""
+
+        stats = self._mock_stats()
+        # Feature name without images prefix — should still get normalized
+        stats["overhead"] = {
+            "name": "overhead",
+            "shape": (3, 224, 224),
+            "type": FeatureType.VISUAL.value,
+        }
+        policy = Pi05()
+        policy._dataset_stats = stats
+
+        args = policy.extra_export_args
+        pi05_spec = next(s for s in args["openvino"].preprocessors_specs if s.type == "pi05")
+        for key in pi05_spec.image_features:
+            assert key.startswith("images."), f"Expected 'images.' prefix, got '{key}'"
+
+
+# ============================================================================ #
+# Cross-Preprocessor Image Parity Tests                                        #
+# ============================================================================ #
+
+
+class TestImagePreprocessingParity:
+    """Tests that numpy (inference) and torch (training) image preprocessing produce equivalent results.
+
+    Covers: resize+pad, normalization, missing camera handling, and key normalization.
+    """
+
+    @staticmethod
+    def _make_image(batch: int = 1, channels: int = 3, h: int = 48, w: int = 64) -> np.ndarray:
+        """Create a deterministic test image in [0, 1] range, channels-first."""
+        rng = np.random.RandomState(42)
+        return rng.rand(batch, channels, h, w).astype(np.float32)
+
+    def test_single_camera_pixel_parity(self) -> None:
+        """Numpy and torch preprocessors produce similar pixel values for the same image."""
+
+        resolution = (64, 64)
+        img = self._make_image(h=64, w=64)  # exact size, no resize needed
+
+        # Numpy path
+        np_prep = NumpyPreprocessor(image_resolution=resolution, image_features=[f"{IMAGES}.cam"])
+        np_input = {STATE: np.zeros((1, 4), dtype=np.float32), f"{IMAGES}.cam": img.copy(), "task": ["test"]}
+        np_result = np_prep(np_input)
+
+        # Torch path
+        features = {f"{IMAGES}.cam": Feature(ftype=FeatureType.VISUAL, shape=(3, 64, 64))}
+        torch_prep = Pi05Preprocessor(image_resolution=resolution, features=features)
+        torch_batch = {STATE: torch.zeros(1, 4), f"{IMAGES}.cam": torch.from_numpy(img.copy())}
+        torch_images, torch_masks = torch_prep._preprocess_images(torch_batch)
+
+        np_images = np_result[IMAGES]  # (n_cameras, B, C, H, W)
+        torch_images_np = torch_images.numpy()  # already stacked: (n_cameras, B, C, H, W)
+
+        np.testing.assert_allclose(np_images, torch_images_np, atol=1e-5)
+
+    def test_resize_with_pad_parity(self) -> None:
+        """Resize+pad produces similar results between cv2 (numpy) and F.interpolate (torch)."""
+
+        resolution = (64, 64)
+        img = self._make_image(h=32, w=48)  # needs resize + padding
+
+        # Numpy path
+        np_prep = NumpyPreprocessor(image_resolution=resolution, image_features=[f"{IMAGES}.cam"])
+        np_input = {STATE: np.zeros((1, 4), dtype=np.float32), f"{IMAGES}.cam": img.copy(), "task": ["test"]}
+        np_result = np_prep(np_input)
+
+        # Torch path
+        features = {f"{IMAGES}.cam": Feature(ftype=FeatureType.VISUAL, shape=(3, 32, 48))}
+        torch_prep = Pi05Preprocessor(image_resolution=resolution, features=features)
+        torch_batch = {STATE: torch.zeros(1, 4), f"{IMAGES}.cam": torch.from_numpy(img.copy())}
+        torch_images, _ = torch_prep._preprocess_images(torch_batch)
+
+        np_images = np_result[IMAGES][0]  # (B, C, H, W)
+        torch_images_np = torch_images[0].numpy()
+
+        # cv2 and F.interpolate use slightly different bilinear implementations
+        np.testing.assert_allclose(np_images, torch_images_np, atol=0.1)
+
+    def test_normalization_range_parity(self) -> None:
+        """Both preprocessors normalize [0,1] -> [-1,1] identically."""
+
+        resolution = (64, 64)
+
+        # All zeros -> -1, all ones -> 1
+        for val, expected in [(0.0, -1.0), (1.0, 1.0)]:
+            img = np.full((1, 3, 64, 64), val, dtype=np.float32)
+
+            np_prep = NumpyPreprocessor(image_resolution=resolution, image_features=[f"{IMAGES}.cam"])
+            np_input = {STATE: np.zeros((1, 4), dtype=np.float32), f"{IMAGES}.cam": img.copy(), "task": ["t"]}
+            np_result = np_prep(np_input)
+
+            features = {f"{IMAGES}.cam": Feature(ftype=FeatureType.VISUAL, shape=(3, 64, 64))}
+            torch_prep = Pi05Preprocessor(image_resolution=resolution, features=features)
+            torch_batch = {STATE: torch.zeros(1, 4), f"{IMAGES}.cam": torch.from_numpy(img.copy())}
+            torch_images, _ = torch_prep._preprocess_images(torch_batch)
+
+            np.testing.assert_allclose(np_result[IMAGES][0], expected, atol=1e-5)
+            np.testing.assert_allclose(torch_images[0].numpy(), expected, atol=1e-5)
+
+    def test_missing_camera_fill_parity(self) -> None:
+        """Both preprocessors pad missing cameras with -1 pixels and zero masks."""
+
+        resolution = (64, 64)
+        img = self._make_image(h=64, w=64)
+        feature_keys = [f"{IMAGES}.cam", f"{IMAGES}.wrist"]
+
+        # Numpy: only provide cam, wrist is missing
+        np_prep = NumpyPreprocessor(image_resolution=resolution, image_features=feature_keys)
+        np_input = {STATE: np.zeros((1, 4), dtype=np.float32), f"{IMAGES}.cam": img.copy(), "task": ["t"]}
+        np_result = np_prep(np_input)
+
+        assert np_result[IMAGES].shape[0] == 2  # 1 real + 1 missing
+        np.testing.assert_allclose(np_result[IMAGES][1], -1.0)
+        assert np_result["image_masks"][0].all()
+        assert not np_result["image_masks"][1].any()
+
+        # Torch: only provide cam, wrist is missing
+        features = {
+            f"{IMAGES}.cam": Feature(ftype=FeatureType.VISUAL, shape=(3, 64, 64)),
+            f"{IMAGES}.wrist": Feature(ftype=FeatureType.VISUAL, shape=(3, 64, 64)),
+        }
+        torch_prep = Pi05Preprocessor(image_resolution=resolution, features=features)
+        torch_batch = {STATE: torch.zeros(1, 4), f"{IMAGES}.cam": torch.from_numpy(img.copy())}
+        torch_images, torch_masks = torch_prep._preprocess_images(torch_batch)
+
+        assert torch_images.shape[0] == 2
+        np.testing.assert_allclose(torch_images[1].numpy(), -1.0)
+        assert torch_masks[0].all()
+        assert not torch_masks[1].any()
+
+    def test_multi_camera_order_parity(self) -> None:
+        """Both preprocessors stack cameras in feature-list order, not dict order."""
+
+        resolution = (64, 64)
+        img_a = np.full((1, 3, 64, 64), 0.2, dtype=np.float32)
+        img_b = np.full((1, 3, 64, 64), 0.8, dtype=np.float32)
+        feature_keys = [f"{IMAGES}.a", f"{IMAGES}.b"]
+
+        # Numpy
+        np_prep = NumpyPreprocessor(image_resolution=resolution, image_features=feature_keys)
+        np_input = {
+            STATE: np.zeros((1, 4), dtype=np.float32),
+            f"{IMAGES}.b": img_b.copy(),  # inserted in reverse order
+            f"{IMAGES}.a": img_a.copy(),
+            "task": ["t"],
+        }
+        np_result = np_prep(np_input)
+
+        # Torch
+        features = {
+            f"{IMAGES}.a": Feature(ftype=FeatureType.VISUAL, shape=(3, 64, 64)),
+            f"{IMAGES}.b": Feature(ftype=FeatureType.VISUAL, shape=(3, 64, 64)),
+        }
+        torch_prep = Pi05Preprocessor(image_resolution=resolution, features=features)
+        torch_batch = {
+            STATE: torch.zeros(1, 4),
+            f"{IMAGES}.b": torch.from_numpy(img_b.copy()),
+            f"{IMAGES}.a": torch.from_numpy(img_a.copy()),
+        }
+        torch_images, _ = torch_prep._preprocess_images(torch_batch)
+
+        # Camera "a" should be first in both (feature_keys order)
+        np_first_cam = np_result[IMAGES][0]
+        torch_first_cam = torch_images[0].numpy()
+        np.testing.assert_allclose(np_first_cam, torch_first_cam, atol=1e-5)
+
+    def test_numpy_preprocessor_normalizes_bare_keys(self) -> None:
+        """Numpy preprocessor adds 'images.' prefix to bare feature keys from manifest."""
+
+        # Manifest stores bare keys like ["overhead", "arm"]
+        prep = NumpyPreprocessor(image_resolution=(64, 64), image_features=["overhead", "arm"])
+        assert all(k.startswith(f"{IMAGES}.") for k in prep._image_features)
+        assert prep._image_features == [f"{IMAGES}.overhead", f"{IMAGES}.arm"]
+
+    def test_nested_dict_images_flattened(self) -> None:
+        """Numpy preprocessor flattens nested image dicts before processing."""
+
+        prep = NumpyPreprocessor(image_resolution=(64, 64), image_features=[f"{IMAGES}.cam"])
+        img = self._make_image(h=64, w=64)
+        np_input = {
+            STATE: np.zeros((1, 4), dtype=np.float32),
+            IMAGES: {"cam": img.copy()},  # nested dict
+            "task": ["t"],
+        }
+        result = prep(np_input)
+        assert IMAGES in result
+        assert result[IMAGES].shape == (1, 1, 3, 64, 64)
+
+    def test_manifest_round_trip(self) -> None:
+        """image_features from manifest correctly initializes numpy preprocessor and processes images."""
+
+        # Simulate a manifest snippet
+        manifest_pi05_spec = {
+            "type": "pi05",
+            "image_resolution": [224, 224],
+            "image_features": ["images.overhead", "images.arm"],
+        }
+
+        prep = NumpyPreprocessor(
+            image_resolution=tuple(manifest_pi05_spec["image_resolution"]),
+            image_features=manifest_pi05_spec["image_features"],
+        )
+
+        img = np.random.rand(1, 3, 224, 224).astype(np.float32)
+        inputs = {
+            STATE: np.zeros((1, 6), dtype=np.float32),
+            "images.overhead": img.copy(),
+            "images.arm": img.copy(),
+            "task": ["pick up cube"],
+        }
+        result = prep(inputs)
+
+        assert result[IMAGES].shape == (2, 1, 3, 224, 224)
+        assert result["image_masks"].shape == (2, 1)
+        assert result["image_masks"].all()

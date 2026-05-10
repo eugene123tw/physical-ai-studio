@@ -682,9 +682,7 @@ class Pi05Model(ExportableModelMixin, Model):
             feat_type = stats.get("type")
             return feat_type is not None and str(FeatureType.VISUAL) in str(feat_type)
 
-        num_image_features = sum(
-            1 for key in self._dataset_stats if _is_image_feature(key, self._dataset_stats[key])
-        )
+        num_image_features = sum(1 for key in self._dataset_stats if _is_image_feature(key, self._dataset_stats[key]))
 
         for feature_id in self._dataset_stats:
             if STATE in feature_id:
@@ -693,11 +691,19 @@ class Pi05Model(ExportableModelMixin, Model):
             elif _is_image_feature(feature_id, self._dataset_stats[feature_id]):
                 image_feature = self._dataset_stats[feature_id]
                 raw_name = str(image_feature["name"])
-                mapped_name = raw_name.rsplit("observation.", maxsplit=1)[-1] if "observation." in raw_name else raw_name
-                if num_image_features == 1:
-                    sample_input[mapped_name] = torch.randn(1, *cast("tuple", image_feature["shape"]), device=device)
+                # Strip "observation.images." or "observation." prefix to get the bare camera name
+                obs_images_prefix = "observation.images."
+                obs_prefix = "observation."
+                if raw_name.startswith(obs_images_prefix):
+                    mapped_name = raw_name[len(obs_images_prefix):]
+                elif raw_name.startswith(obs_prefix):
+                    mapped_name = raw_name[len(obs_prefix):]
                 else:
-                    sample_input[mapped_name] = torch.randn(
+                    mapped_name = raw_name
+                if num_image_features == 1:
+                    sample_input[IMAGES] = torch.randn(1, *cast("tuple", image_feature["shape"]), device=device)
+                else:
+                    sample_input[f"{IMAGES}.{mapped_name}"] = torch.randn(
                         1,
                         *cast("tuple", image_feature["shape"]),
                         device=device,

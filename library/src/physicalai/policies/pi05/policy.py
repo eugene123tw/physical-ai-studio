@@ -9,9 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from os import stat
 from pathlib import Path
-import stat
 from typing import TYPE_CHECKING, Any, Literal
 
 import torch

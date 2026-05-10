@@ -24,7 +24,7 @@ import torch.nn.functional as F  # noqa: N812
 
 from physicalai.data import Feature, FeatureType, NormalizationParameters
 from physicalai.data.constants import IMAGE_MASKS, TOKENIZED_PROMPT, TOKENIZED_PROMPT_MASK
-from physicalai.data.observation import ACTION, IMAGES, STATE, TASK, Observation
+from physicalai.data.observation import ACTION, IMAGES, STATE, TASK
 from physicalai.policies.utils.normalization import FeatureNormalizeTransform, NormalizationType
 
 logger = logging.getLogger(__name__)
@@ -163,10 +163,12 @@ class Pi05Preprocessor(torch.nn.Module):
         self._tokenizer = None
         self.normalization_mode = normalization_mode
 
-        # Cache image feature keys from the features dict
-        self.image_features = (
-            [k for k, f in features.items() if f.ftype == FeatureType.VISUAL] if features else []
-        )
+        # Cache image feature keys from the features dict, ensuring "images." prefix
+        self.image_features = [
+            k if k.startswith(IMAGES) else f"{IMAGES}.{k}"
+            for k, f in features.items()
+            if f.ftype == FeatureType.VISUAL
+        ] if features else []
 
         norm_map = _norm_map_for_mode(normalization_mode)
         if features is not None:
@@ -229,7 +231,7 @@ class Pi05Preprocessor(torch.nn.Module):
 
         return batch
 
-    def _preprocess_images(self, batch: dict[str, Any]) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    def _preprocess_images(self, batch: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
         """Process images for Pi05 model.
 
         Pi05 uses PaliGemma which expects images in [B, C, H, W] format

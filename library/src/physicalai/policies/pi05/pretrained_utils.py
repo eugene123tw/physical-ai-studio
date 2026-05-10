@@ -103,6 +103,49 @@ def extract_dataset_stats(
     return parse_config_features(hf_config)
 
 
+def _collect_grouped_stats(
+    grouped: dict[str, dict[str, list[float]]],
+    step_features: dict[str, Any],
+    hf_config: dict[str, Any],
+    stats: dict[str, dict[str, Any]],
+) -> None:
+    """Build stat entries from grouped tensor data and merge into *stats*."""
+    for feat_name, feat_stats in grouped.items():
+        shape = resolve_feature_shape(feat_name, hf_config, feat_stats)
+        ftype = "VISUAL" if "observation.image" in feat_name.lower() else "UNKNOWN"
+        entry: dict[str, Any] = {
+            "name": feat_name,
+            "shape": shape,
+            "type": ftype,
+        }
+        if feat_name in step_features and "type" in step_features[feat_name]:
+            entry["type"] = step_features[feat_name]["type"]
+        for stat_key in ("mean", "std", "q01", "q99", "min", "max"):
+            if stat_key in feat_stats and isinstance(feat_stats[stat_key], list):
+                entry[stat_key] = feat_stats[stat_key]
+        if len(entry) > 2:  # noqa: PLR2004
+            stats[feat_name] = entry
+
+
+def _collect_identity_features(
+    step_features: dict[str, Any],
+    hf_config: dict[str, Any],
+    stats: dict[str, dict[str, Any]],
+) -> None:
+    """Add features from normalizer config that have no stats (IDENTITY normalization)."""
+    for feat_name, feat_info in step_features.items():
+        if feat_name in stats:
+            continue
+        if not isinstance(feat_info, dict) or "type" not in feat_info:
+            continue
+        shape = tuple(feat_info["shape"]) if "shape" in feat_info else resolve_feature_shape(feat_name, hf_config, {})
+        stats[feat_name] = {
+            "name": feat_name,
+            "shape": shape,
+            "type": feat_info["type"],
+        }
+
+
 def parse_preprocessor_stats(
     preproc_config: dict[str, Any],
     hf_config: dict[str, Any],
@@ -156,37 +199,11 @@ def parse_preprocessor_stats(
         # Store all available stats directly — the normalization mode
         # (detected from the preprocessor JSON) determines which fields
         # the normalizer actually uses at runtime.
-        for feat_name, feat_stats in grouped.items():
-            shape = resolve_feature_shape(feat_name, hf_config, feat_stats)
-            ftype = "VISUAL" if "observation.image" in feat_name.lower() else "UNKNOWN"
-            entry: dict[str, Any] = {
-                "name": feat_name,
-                "shape": shape,
-                "type": ftype,
-            }
-            # Include type from normalizer config features if available
-            if feat_name in step_features and "type" in step_features[feat_name]:
-                entry["type"] = step_features[feat_name]["type"]
-            for stat_key in ("mean", "std", "q01", "q99", "min", "max"):
-                if stat_key in feat_stats and isinstance(feat_stats[stat_key], list):
-                    entry[stat_key] = feat_stats[stat_key]
-            # Only include features that have at least one stat field
-            if len(entry) > 2:  # noqa: PLR2004
-                stats[feat_name] = entry
+        _collect_grouped_stats(grouped, step_features, hf_config, stats)
 
         # Include features from normalizer config that have no stats
         # (e.g. image features with IDENTITY normalization)
-        for feat_name, feat_info in step_features.items():
-            if feat_name in stats:
-                continue
-            if not isinstance(feat_info, dict) or "type" not in feat_info:
-                continue
-            shape = tuple(feat_info["shape"]) if "shape" in feat_info else resolve_feature_shape(feat_name, hf_config, {})
-            stats[feat_name] = {
-                "name": feat_name,
-                "shape": shape,
-                "type": feat_info["type"],
-            }
+        _collect_identity_features(step_features, hf_config, stats)
 
     return stats
 

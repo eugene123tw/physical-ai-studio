@@ -12,7 +12,7 @@ the resulting q01/q99 values are identical to those produced by
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 from lerobot.scripts.augment_dataset_quantile_stats import compute_quantile_stats_for_dataset
@@ -21,6 +21,17 @@ if TYPE_CHECKING:
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 logger = logging.getLogger(__name__)
+
+
+def _to_tensor(val: object) -> torch.Tensor:
+    """Convert a value to a float tensor if it isn't one already.
+
+    Returns:
+        Float tensor representation of *val*.
+    """
+    if isinstance(val, torch.Tensor):
+        return val
+    return torch.from_numpy(val).float()  # type: ignore[arg-type]
 
 
 def has_quantile_stats(dataset: LeRobotDataset) -> bool:
@@ -56,20 +67,13 @@ def augment_dataset_quantile_stats(dataset: LeRobotDataset) -> None:
     # Inject quantile stats into existing meta.stats, and add full stats
     # for any keys that are newly computed (e.g. image observations that
     # older datasets omitted from their pre-computed stats).
+    stats = cast("dict[str, dict[str, Any]]", dataset.meta.stats)
     for key, feat_stats in new_stats.items():
-        if key not in dataset.meta.stats:
-            # Add full stats entry for features missing from meta.stats
-            dataset.meta.stats[key] = {}
-            for stat_key, val in feat_stats.items():
-                if not isinstance(val, torch.Tensor):
-                    val = torch.from_numpy(val).float()
-                dataset.meta.stats[key][stat_key] = val
+        if key not in stats:
+            stats[key] = {stat_key: _to_tensor(v) for stat_key, v in feat_stats.items()}
         else:
             for q_key in ("q01", "q99"):
                 if q_key in feat_stats:
-                    val = feat_stats[q_key]
-                    if not isinstance(val, torch.Tensor):
-                        val = torch.from_numpy(val).float()
-                    dataset.meta.stats[key][q_key] = val
+                    stats[key][q_key] = _to_tensor(feat_stats[q_key])
 
     logger.info("Quantile stats computed via LeRobot for dataset")

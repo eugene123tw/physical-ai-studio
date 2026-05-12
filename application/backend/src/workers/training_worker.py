@@ -91,7 +91,7 @@ class TrainingWorker(BaseProcessWorker):
 
                     self.interrupt_event.clear()
                     await asyncio.create_task(self._train_model(job, model, snapshot, payload, base_model))
-            await asyncio.sleep(0.5)
+            self.stop_aware_sleep(0.5)
 
     async def setup(self) -> None:
         await super().setup()

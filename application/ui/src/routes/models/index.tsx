@@ -114,7 +114,7 @@ const JobList = ({ jobs, onViewLogs }: { jobs: SchemaTrainJob[]; onViewLogs: (jo
     );
 };
 
-const useProjectJobs = (project_id: string): SchemaTrainJob[] => {
+const useProjectTrainingJobs = (project_id: string): SchemaTrainJob[] => {
     const { data: allJobs = [] } = $api.useQuery('get', '/api/jobs');
 
     return allJobs
@@ -128,8 +128,7 @@ export const Index = () => {
         params: { path: { project_id } },
     });
 
-    const jobs = useProjectJobs(project_id);
-
+    const jobs = useProjectTrainingJobs(project_id);
     const [retrainModel, setRetrainModel] = useState<SchemaModel | null>(null);
     const [logsSourceId, setLogsSourceId] = useState<string | undefined>();
 

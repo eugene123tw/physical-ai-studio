@@ -785,7 +785,7 @@ class Pi05(ExportablePolicyMixin, Policy):
         self,
         output_path: str | Path,
         *,
-        max_guidance_weight: float = 5.0,
+        max_guidance_weight: float = 10.0,
         prefix_attention_schedule: str = "exp",
         execution_horizon: int = 10,
         compress_to_fp16: bool = True,
@@ -810,7 +810,6 @@ class Pi05(ExportablePolicyMixin, Policy):
         # --- Build RTC wrapper ---
         wrapper = Pi05RTCWrapper(
             self.model,
-            max_guidance_weight=max_guidance_weight,
             prefix_attention_schedule=prefix_attention_schedule,
             execution_horizon=execution_horizon,
         )

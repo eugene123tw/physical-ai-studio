@@ -823,45 +823,116 @@ class Pi05Model(ExportableModelMixin, Model):
     ) -> tuple[Tensor, Tensor, Tensor]:
         """Embed images with SigLIP and language tokens with embedding layer.
 
+        When tracing (ONNX/OV export), delegates to :meth:`embed_prefix_batched`
+        which uses a single batched encoder call. During training, uses per-image
+        calls with gradient checkpointing support.
+
         Returns:
             Tuple of (embeddings, padding masks, attention masks).
         """
+        return self.embed_prefix_batched(images, img_masks, tokens, masks)
+
+        # embs = []
+        # pad_masks = []
+        # att_masks = []
+
+        # for img, img_mask in zip(images, img_masks, strict=True):
+
+        #     def image_embed_func(img: Tensor) -> Tensor:
+        #         return self.paligemma_with_expert.embed_image(img)
+
+        #     img_emb = self._apply_checkpoint(image_embed_func, img)
+        #     bsize, num_img_embs = img_emb.shape[:2]
+
+        #     embs.append(img_emb)
+        #     pad_masks.append(img_mask[:, None].expand(bsize, num_img_embs))
+        #     att_masks += [0] * num_img_embs
+
+        # def lang_embed_func(tokens: Tensor) -> Tensor:
+        #     lang_emb = self.paligemma_with_expert.embed_language_tokens(tokens)
+        #     lang_emb_dim = lang_emb.shape[-1]
+        #     return lang_emb * math.sqrt(lang_emb_dim)
+
+        # lang_emb = self._apply_checkpoint(lang_embed_func, tokens)
+        # embs.append(lang_emb)
+        # pad_masks.append(masks)
+
+        # num_lang_embs = lang_emb.shape[1]
+        # att_masks += [0] * num_lang_embs
+
+        # embs = torch.cat(embs, dim=1)
+        # pad_masks = torch.cat(pad_masks, dim=1)
+        # att_masks = torch.tensor(att_masks, dtype=torch.bool, device=pad_masks.device)
+
+        # bsize = pad_masks.shape[0]
+        # att_masks = att_masks[None, :].expand(bsize, len(att_masks))
+
+        # return embs, pad_masks, att_masks
+
+    def embed_prefix_batched(
+        self,
+        images: Tensor,
+        img_masks: Tensor,
+        tokens: Tensor,
+        masks: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Embed images with a single batched SigLIP call (export-optimized).
+
+        Instead of calling the vision encoder once per camera (which duplicates
+        the encoder subgraph in the exported IR), this stacks all camera images
+        into one batch and invokes the encoder once:
+        ``[num_cameras, batch, C, H, W]`` → ``[num_cameras * batch, C, H, W]``
+        → single encoder call → split back.
+
+        Use this for OpenVINO/ONNX export paths. For training, use
+        ``embed_prefix`` which supports gradient checkpointing per image.
+
+        Args:
+            images: ``(num_cameras, batch, C, H, W)`` stacked image tensor.
+            img_masks: ``(num_cameras, batch)`` boolean camera masks.
+            tokens: ``(batch, seq_len)`` tokenized prompt.
+            masks: ``(batch, seq_len)`` prompt attention mask.
+
+        Returns:
+            Tuple of (embeddings, padding masks, attention masks).
+        """
+        num_cameras = images.shape[0]
+        bsize = images.shape[1]
+
+        # Batch all cameras into one encoder call: [N*B, C, H, W]
+        imgs_flat = images.reshape(num_cameras * bsize, *images.shape[2:])
+        all_img_embs = self.paligemma_with_expert.embed_image(imgs_flat)
+        # all_img_embs: [N*B, num_patches, hidden_dim]
+        num_img_embs = all_img_embs.shape[1]
+
+        # Reshape back to [N, B, num_patches, hidden_dim]
+        all_img_embs = all_img_embs.reshape(num_cameras, bsize, num_img_embs, -1)
+
         embs = []
         pad_masks = []
-        att_masks = []
+        att_masks: list[int] = []
 
-        for img, img_mask in zip(images, img_masks, strict=True):
-
-            def image_embed_func(img: Tensor) -> Tensor:
-                return self.paligemma_with_expert.embed_image(img)
-
-            img_emb = self._apply_checkpoint(image_embed_func, img)
-            bsize, num_img_embs = img_emb.shape[:2]
+        for cam_idx in range(num_cameras):
+            img_emb = all_img_embs[cam_idx]  # (B, num_patches, hidden_dim)
+            img_mask = img_masks[cam_idx]     # (B,)
 
             embs.append(img_emb)
             pad_masks.append(img_mask[:, None].expand(bsize, num_img_embs))
             att_masks += [0] * num_img_embs
 
-        def lang_embed_func(tokens: Tensor) -> Tensor:
-            lang_emb = self.paligemma_with_expert.embed_language_tokens(tokens)
-            lang_emb_dim = lang_emb.shape[-1]
-            return lang_emb * math.sqrt(lang_emb_dim)
-
-        lang_emb = self._apply_checkpoint(lang_embed_func, tokens)
+        # Language embedding
+        lang_emb = self.paligemma_with_expert.embed_language_tokens(tokens)
+        lang_emb = lang_emb * math.sqrt(lang_emb.shape[-1])
         embs.append(lang_emb)
         pad_masks.append(masks)
+        att_masks += [0] * lang_emb.shape[1]
 
-        num_lang_embs = lang_emb.shape[1]
-        att_masks += [0] * num_lang_embs
+        embs_cat = torch.cat(embs, dim=1)
+        pad_masks_cat = torch.cat(pad_masks, dim=1)
+        att_masks_t = torch.tensor(att_masks, dtype=torch.bool, device=pad_masks_cat.device)
+        att_masks_t = att_masks_t[None, :].expand(bsize, len(att_masks))
 
-        embs = torch.cat(embs, dim=1)
-        pad_masks = torch.cat(pad_masks, dim=1)
-        att_masks = torch.tensor(att_masks, dtype=torch.bool, device=pad_masks.device)
-
-        bsize = pad_masks.shape[0]
-        att_masks = att_masks[None, :].expand(bsize, len(att_masks))
-
-        return embs, pad_masks, att_masks
+        return embs_cat, pad_masks_cat, att_masks_t
 
     def embed_suffix(
         self,
@@ -1210,13 +1281,11 @@ class Pi05RTCWrapper(nn.Module):
     def __init__(
         self,
         model: Pi05Model,
-        max_guidance_weight: float = 5.0,
-        prefix_attention_schedule: str = "exp",
+        prefix_attention_schedule: str = "linear",
         execution_horizon: int = 10,
     ) -> None:
         super().__init__()
         self.model = model
-        self.max_guidance_weight = max_guidance_weight
         self.prefix_attention_schedule = prefix_attention_schedule
         self.execution_horizon = execution_horizon
 
@@ -1253,6 +1322,7 @@ class Pi05RTCWrapper(nn.Module):
         noise: Tensor,
         prev_chunk_left_over: Tensor,
         inference_delay: Tensor,
+        max_guidance_weight: Tensor,
     ) -> Tensor:
         """Full inference pass with RTC guidance, traceable by OV/ONNX.
 
@@ -1266,6 +1336,8 @@ class Pi05RTCWrapper(nn.Module):
                 unconsumed actions from the previous chunk.
             inference_delay: Scalar tensor — estimated latency in action
                 steps (``ceil(latency / frame_time)``).
+            max_guidance_weight: Scalar tensor — clamp for RTC guidance
+                correction strength.
 
         Returns:
             Denoised actions ``(batch, chunk_size, original_action_dim)``.
@@ -1279,7 +1351,7 @@ class Pi05RTCWrapper(nn.Module):
 
         actions = self._sample_actions_rtc(
             images, image_masks, tokenized_prompt, tokenized_prompt_mask,
-            noise, prev_chunk_left_over, prefix_weights,
+            noise, prev_chunk_left_over, prefix_weights, max_guidance_weight,
         )
 
         # Trim padded dims to actual action dimension (same as non-RTC path)
@@ -1296,6 +1368,7 @@ class Pi05RTCWrapper(nn.Module):
         noise: Tensor,
         prev_chunk_left_over: Tensor,
         prefix_weights: Tensor,
+        max_guidance_weight: Tensor,
     ) -> Tensor:
         """Denoising loop with RTC prefix guidance."""
         num_steps = self.model._num_inference_steps  # noqa: SLF001
@@ -1303,7 +1376,9 @@ class Pi05RTCWrapper(nn.Module):
         device = tokens.device
 
         # --- Prefix forward (compute KV cache once) ---
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.model.embed_prefix(
+        # Use batched SigLIP: single encoder call for all cameras instead of
+        # one per camera, halving/thirding the vision subgraph in exported IR.
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.model.embed_prefix_batched(
             images, img_masks, tokens, masks,
         )
         prefix_att_2d_masks = _make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
@@ -1339,7 +1414,7 @@ class Pi05RTCWrapper(nn.Module):
             )
 
             # --- RTC guidance correction ---
-            v_t = self._rtc_correct(x_t, v_t, prev_chunk_left_over, prefix_weights, time)
+            v_t = self._rtc_correct(x_t, v_t, prev_chunk_left_over, prefix_weights, time, max_guidance_weight)
 
             x_t = x_t + dt * v_t
 
@@ -1352,6 +1427,7 @@ class Pi05RTCWrapper(nn.Module):
         prev_chunk_left_over: Tensor,
         prefix_weights: Tensor,
         time: float,
+        max_guidance_weight: Tensor,
     ) -> Tensor:
         """Apply RTC guidance correction to velocity prediction.
 
@@ -1367,7 +1443,7 @@ class Pi05RTCWrapper(nn.Module):
         correction = err
 
         # Adaptive guidance weight
-        max_gw = torch.as_tensor(self.max_guidance_weight)
+        max_gw = max_guidance_weight.float()
         tau_t = torch.as_tensor(tau)
         squared_one_minus_tau = (1.0 - tau_t) ** 2
         inv_r2 = (squared_one_minus_tau + tau_t**2) / squared_one_minus_tau
@@ -1412,4 +1488,5 @@ class Pi05RTCWrapper(nn.Module):
                 1, chunk_size, max_action_dim, device=device, dtype=torch.float32,
             ),
             "inference_delay": torch.tensor(8, device=device, dtype=torch.long),
+            "max_guidance_weight": torch.tensor(10.0, device=device, dtype=torch.float32),
         }

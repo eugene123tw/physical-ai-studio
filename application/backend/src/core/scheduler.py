@@ -27,6 +27,7 @@ class Scheduler:
         logger.info("Scheduler initialized")
 
     def start_workers(self) -> None:
+        # mp.set_start_method("spawn", force=True)
         training_proc = TrainingWorker(
             stop_event=self.mp_stop_event,
             interrupt_event=self.training_interrupt_event,

@@ -836,7 +836,7 @@ class Pi05Model(ExportableModelMixin, Model):
         Returns:
             Tuple of (embeddings, padding masks, attention masks).
         """
-        use_batched = not self.training or torch.jit.is_tracing() or torch.onnx.is_in_onnx_export()
+        use_batched = not self.training
 
         num_cameras = images.shape[0]
         bsize = images.shape[1]
@@ -854,8 +854,9 @@ class Pi05Model(ExportableModelMixin, Model):
 
         for cam_idx in range(num_cameras):
             if use_batched:
-                img_emb = all_img_embs[cam_idx]
+                img_emb = all_img_embs[cam_idx]  # pyrefly: ignore[unbound-name]
             else:
+
                 def image_embed_func(img: Tensor) -> Tensor:
                     return self.paligemma_with_expert.embed_image(img)
 

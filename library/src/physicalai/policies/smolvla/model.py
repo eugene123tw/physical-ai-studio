@@ -356,6 +356,10 @@ class SmolVLAModel(ExportableModelMixin, Model):
         """
         return [0]
 
+    def set_dataset_stats(self, dataset_stats: dict) -> None:
+        """Update dataset statistics used for normalization."""
+        self._dataset_stats = dataset_stats
+
     def _preprocess_batch(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         if self._adapt_to_pi_aloha:
             batch[STATE] = self._pi_aloha_decode_state(batch[STATE])
@@ -1258,7 +1262,7 @@ class _SmolVLMWithExpertModel(nn.Module):
         num_vlm_layers: int = -1,
         self_attn_every_n_layers: int = -1,
         expert_width_multiplier: float = 0.5,
-        device: str = "auto",
+        device: str | None = None,
     ) -> None:
         super().__init__()
 
@@ -1595,7 +1599,7 @@ class _SmolVLMWithExpertModel(nn.Module):
             )
             att_outputs.append(att_output)
         else:
-            expert_position_id = position_ids
+            expert_position_id = position_ids.clone()
 
         if use_cache:
             if past_key_values is None:

@@ -823,69 +823,9 @@ class Pi05Model(ExportableModelMixin, Model):
     ) -> tuple[Tensor, Tensor, Tensor]:
         """Embed images with SigLIP and language tokens with embedding layer.
 
-        When tracing (ONNX/OV export), delegates to :meth:`embed_prefix_batched`
-        which uses a single batched encoder call. During training, uses per-image
+        During inference or tracing (ONNX/OV export), batches all camera images
+        into a single encoder call for efficiency. During training, uses per-image
         calls with gradient checkpointing support.
-
-        Returns:
-            Tuple of (embeddings, padding masks, attention masks).
-        """
-        return self.embed_prefix_batched(images, img_masks, tokens, masks)
-
-        # embs = []
-        # pad_masks = []
-        # att_masks = []
-
-        # for img, img_mask in zip(images, img_masks, strict=True):
-
-        #     def image_embed_func(img: Tensor) -> Tensor:
-        #         return self.paligemma_with_expert.embed_image(img)
-
-        #     img_emb = self._apply_checkpoint(image_embed_func, img)
-        #     bsize, num_img_embs = img_emb.shape[:2]
-
-        #     embs.append(img_emb)
-        #     pad_masks.append(img_mask[:, None].expand(bsize, num_img_embs))
-        #     att_masks += [0] * num_img_embs
-
-        # def lang_embed_func(tokens: Tensor) -> Tensor:
-        #     lang_emb = self.paligemma_with_expert.embed_language_tokens(tokens)
-        #     lang_emb_dim = lang_emb.shape[-1]
-        #     return lang_emb * math.sqrt(lang_emb_dim)
-
-        # lang_emb = self._apply_checkpoint(lang_embed_func, tokens)
-        # embs.append(lang_emb)
-        # pad_masks.append(masks)
-
-        # num_lang_embs = lang_emb.shape[1]
-        # att_masks += [0] * num_lang_embs
-
-        # embs = torch.cat(embs, dim=1)
-        # pad_masks = torch.cat(pad_masks, dim=1)
-        # att_masks = torch.tensor(att_masks, dtype=torch.bool, device=pad_masks.device)
-
-        # bsize = pad_masks.shape[0]
-        # att_masks = att_masks[None, :].expand(bsize, len(att_masks))
-
-        # return embs, pad_masks, att_masks
-
-    def embed_prefix_batched(
-        self,
-        images: Tensor,
-        img_masks: Tensor,
-        tokens: Tensor,
-        masks: Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        """Embed images with a single batched SigLIP call (export-optimized).
-
-        Instead of calling the vision encoder once per camera (which duplicates
-        the encoder subgraph in the exported IR), this stacks all camera images
-        into one batch and invokes the encoder once:
-        ``[num_cameras, batch, C, H, W]`` → ``[num_cameras * batch, C, H, W]``
-        → single encoder call → split back.
-
-        Use this for OpenVINO/ONNX export paths. For training, use
-        ``embed_prefix`` which supports gradient checkpointing per image.
 
         Args:
             images: ``(num_cameras, batch, C, H, W)`` stacked image tensor.
@@ -896,33 +836,42 @@ class Pi05Model(ExportableModelMixin, Model):
         Returns:
             Tuple of (embeddings, padding masks, attention masks).
         """
+        use_batched = not self.training or torch.jit.is_tracing() or torch.onnx.is_in_onnx_export()
+
         num_cameras = images.shape[0]
         bsize = images.shape[1]
-
-        # Batch all cameras into one encoder call: [N*B, C, H, W]
-        imgs_flat = images.reshape(num_cameras * bsize, *images.shape[2:])
-        all_img_embs = self.paligemma_with_expert.embed_image(imgs_flat)
-        # all_img_embs: [N*B, num_patches, hidden_dim]
-        num_img_embs = all_img_embs.shape[1]
-
-        # Reshape back to [N, B, num_patches, hidden_dim]
-        all_img_embs = all_img_embs.reshape(num_cameras, bsize, num_img_embs, -1)
 
         embs = []
         pad_masks = []
         att_masks: list[int] = []
 
-        for cam_idx in range(num_cameras):
-            img_emb = all_img_embs[cam_idx]  # (B, num_patches, hidden_dim)
-            img_mask = img_masks[cam_idx]     # (B,)
+        if use_batched:
+            # Single batched encoder call: [N*B, C, H, W]
+            imgs_flat = images.reshape(num_cameras * bsize, *images.shape[2:])
+            all_img_embs = self.paligemma_with_expert.embed_image(imgs_flat)
+            num_img_embs = all_img_embs.shape[1]
+            all_img_embs = all_img_embs.reshape(num_cameras, bsize, num_img_embs, -1)
 
+        for cam_idx in range(num_cameras):
+            if use_batched:
+                img_emb = all_img_embs[cam_idx]
+            else:
+                def image_embed_func(img: Tensor) -> Tensor:
+                    return self.paligemma_with_expert.embed_image(img)
+
+                img_emb = self._apply_checkpoint(image_embed_func, images[cam_idx])
+
+            num_img_embs = img_emb.shape[1]
             embs.append(img_emb)
-            pad_masks.append(img_mask[:, None].expand(bsize, num_img_embs))
+            pad_masks.append(img_masks[cam_idx][:, None].expand(bsize, num_img_embs))
             att_masks += [0] * num_img_embs
 
-        # Language embedding
-        lang_emb = self.paligemma_with_expert.embed_language_tokens(tokens)
-        lang_emb = lang_emb * math.sqrt(lang_emb.shape[-1])
+        def lang_embed_func(tokens: Tensor) -> Tensor:
+            lang_emb = self.paligemma_with_expert.embed_language_tokens(tokens)
+            return lang_emb * math.sqrt(lang_emb.shape[-1])
+
+        lang_emb = lang_embed_func(tokens) if use_batched else self._apply_checkpoint(lang_embed_func, tokens)
+
         embs.append(lang_emb)
         pad_masks.append(masks)
         att_masks += [0] * lang_emb.shape[1]
@@ -1378,7 +1327,7 @@ class Pi05RTCWrapper(nn.Module):
         # --- Prefix forward (compute KV cache once) ---
         # Use batched SigLIP: single encoder call for all cameras instead of
         # one per camera, halving/thirding the vision subgraph in exported IR.
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.model.embed_prefix_batched(
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.model.embed_prefix(
             images, img_masks, tokens, masks,
         )
         prefix_att_2d_masks = _make_att_2d_masks(prefix_pad_masks, prefix_att_masks)

@@ -677,10 +677,14 @@ class Pi05Model(ExportableModelMixin, Model):
         sample_input = {}
 
         def _is_image_feature(key: str, stats: dict[str, Any]) -> bool:
-            if IMAGES in key:
-                return True
+            """Return True only for real image features (excludes empty cameras which lack norm stats)."""
+            has_visual_key = IMAGES in key
             feat_type = stats.get("type")
-            return feat_type is not None and str(FeatureType.VISUAL) in str(feat_type)
+            is_visual_type = feat_type is not None and str(FeatureType.VISUAL) in str(feat_type)
+            if not (has_visual_key or is_visual_type):
+                return False
+            # Empty cameras have type=VISUAL but no normalization stats — exclude them.
+            return "mean" in stats
 
         num_image_features = sum(1 for key in self._dataset_stats if _is_image_feature(key, self._dataset_stats[key]))
 

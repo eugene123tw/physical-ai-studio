@@ -136,7 +136,7 @@ def _collect_grouped_stats(
             if stat_key in feat_stats and isinstance(feat_stats[stat_key], list):
                 entry[stat_key] = feat_stats[stat_key]
         if len(entry) > 2:  # noqa: PLR2004
-            stats[feat_name] = entry
+            stats[_strip_obs_prefix(feat_name)] = entry
 
 
 def _collect_identity_features(
@@ -146,12 +146,13 @@ def _collect_identity_features(
 ) -> None:
     """Add features from normalizer config that have no stats (IDENTITY normalization)."""
     for feat_name, feat_info in step_features.items():
-        if feat_name in stats:
+        stripped = _strip_obs_prefix(feat_name)
+        if stripped in stats:
             continue
         if not isinstance(feat_info, dict) or "type" not in feat_info:
             continue
         shape = tuple(feat_info["shape"]) if "shape" in feat_info else resolve_feature_shape(feat_name, hf_config, {})
-        stats[feat_name] = {
+        stats[stripped] = {
             "name": _strip_obs_prefix(feat_name),
             "shape": shape,
             "type": feat_info["type"],
@@ -258,9 +259,9 @@ def parse_config_features(hf_config: dict[str, Any]) -> dict[str, dict[str, Any]
                 }
                 if feat_type:
                     entry["type"] = feat_type
-                stats[feat_name] = entry
+                stats[_strip_obs_prefix(feat_name)] = entry
             elif "image" in feat_name.lower() or (feat_type and "VISUAL" in str(feat_type)):
-                stats[feat_name] = {
+                stats[_strip_obs_prefix(feat_name)] = {
                     "name": _strip_obs_prefix(feat_name),
                     "shape": shape,
                     "type": feat_type or "VISUAL",

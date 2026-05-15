@@ -689,7 +689,7 @@ class Pi05(ExportablePolicyMixin, Policy):
         base_preproc_specs = [
             ComponentSpec(
                 type="normalize",
-                stats={STATE: self._dataset_stats[f"observation.{STATE}"]},
+                stats={STATE: self._dataset_stats[STATE]},
                 mode=self.config.normalization_mode.lower(),
             ),
             ComponentSpec(

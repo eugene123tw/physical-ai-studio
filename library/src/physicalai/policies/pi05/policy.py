@@ -811,18 +811,9 @@ class Pi05(ExportablePolicyMixin, Policy):
         wrapper = Pi05RTCWrapper(
             self.model,
             prefix_attention_schedule=prefix_attention_schedule,
-            execution_horizon=execution_horizon,
         )
         wrapper.to("cpu")
         wrapper.eval()
-
-        # Cast bfloat16 → float32 for OV compatibility
-        for buf in wrapper.buffers():
-            if buf.dtype == torch.bfloat16:
-                buf.data = buf.data.float()
-        for param in wrapper.parameters():
-            if param.dtype == torch.bfloat16:
-                param.data = param.data.float()
 
         # --- Generate sample inputs ---
         sample = wrapper.sample_input_rtc
@@ -870,6 +861,7 @@ class Pi05(ExportablePolicyMixin, Policy):
             chunk_size=self.model._chunk_size,  # noqa: SLF001
             rtc_enabled=True,
             rtc_max_guidance_weight=max_guidance_weight,
+            rtc_execution_horizon=execution_horizon,
             rtc_prefix_attention_schedule=prefix_attention_schedule,
             preprocessors=ov_args.preprocessors_specs if ov_args else [],
             postprocessors=ov_args.postprocessors_specs if ov_args else [],

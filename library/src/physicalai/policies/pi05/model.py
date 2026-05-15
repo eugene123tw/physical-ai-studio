@@ -1231,24 +1231,23 @@ class Pi05RTCWrapper(nn.Module):
         self,
         model: Pi05Model,
         prefix_attention_schedule: str = "linear",
-        execution_horizon: int = 10,
     ) -> None:
         super().__init__()
         self.model = model
         self.prefix_attention_schedule = prefix_attention_schedule
-        self.execution_horizon = execution_horizon
 
-    def _compute_prefix_weights(self, inference_delay: Tensor) -> Tensor:
+    def _compute_prefix_weights(self, inference_delay: Tensor, execution_horizon: Tensor) -> Tensor:
         """Compute prefix attention weights inside the graph.
 
         Args:
             inference_delay: Scalar tensor — the dynamic latency estimate.
+            execution_horizon: Scalar tensor — number of fresh actions per chunk.
 
         Returns:
             ``(1, chunk_size, 1)`` weight tensor.
         """
         chunk_size = self.model._chunk_size  # noqa: SLF001
-        end = torch.as_tensor(self.execution_horizon, dtype=torch.float32)
+        end = execution_horizon.float()
         start = torch.minimum(inference_delay.float(), end)
 
         idx = torch.arange(chunk_size, dtype=torch.float32, device=inference_delay.device)
@@ -1272,6 +1271,7 @@ class Pi05RTCWrapper(nn.Module):
         prev_chunk_left_over: Tensor,
         inference_delay: Tensor,
         max_guidance_weight: Tensor,
+        execution_horizon: Tensor,
     ) -> Tensor:
         """Full inference pass with RTC guidance, traceable by OV/ONNX.
 
@@ -1287,6 +1287,8 @@ class Pi05RTCWrapper(nn.Module):
                 steps (``ceil(latency / frame_time)``).
             max_guidance_weight: Scalar tensor — clamp for RTC guidance
                 correction strength.
+            execution_horizon: Scalar tensor — number of fresh actions
+                to execute per chunk.
 
         Returns:
             Denoised actions ``(batch, chunk_size, original_action_dim)``.
@@ -1296,7 +1298,7 @@ class Pi05RTCWrapper(nn.Module):
         image_masks = image_masks.long()
         tokenized_prompt_mask = tokenized_prompt_mask.long()
 
-        prefix_weights = self._compute_prefix_weights(inference_delay)
+        prefix_weights = self._compute_prefix_weights(inference_delay, execution_horizon)
 
         actions = self._sample_actions_rtc(
             images, image_masks, tokenized_prompt, tokenized_prompt_mask,
@@ -1438,4 +1440,5 @@ class Pi05RTCWrapper(nn.Module):
             ),
             "inference_delay": torch.tensor(8, device=device, dtype=torch.long),
             "max_guidance_weight": torch.tensor(10.0, device=device, dtype=torch.float32),
+            "execution_horizon": torch.tensor(10, device=device, dtype=torch.long),
         }

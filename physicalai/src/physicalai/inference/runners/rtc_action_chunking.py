@@ -122,7 +122,7 @@ class RTCActionChunking(InferenceRunner):
     @property
     def runner_provided_keys(self) -> set[str]:
         """RTC-specific inputs injected by the background thread."""
-        return {"noise", "prev_chunk_left_over", "inference_delay", "max_guidance_weight"}
+        return {"noise", "prev_chunk_left_over", "inference_delay", "max_guidance_weight", "execution_horizon"}
 
     def run(
         self,
@@ -253,6 +253,7 @@ class RTCActionChunking(InferenceRunner):
                 1, self._chunk_size, self._action_dim,
             ).astype(np.float32)
             inputs["max_guidance_weight"] = np.float32(self._max_guidance_weight)
+            inputs["execution_horizon"] = np.int64(self._execution_horizon)
 
             # Snapshot cursor before inference for delay cross-check
             action_index_before = self._queue.get_action_index()

@@ -108,6 +108,9 @@ def _strip_obs_prefix(name: str) -> str:
 
     ``"observation.images.image"`` → ``"images.image"``;
     ``"action"`` passes through unchanged.
+
+    Returns:
+        The name with the ``observation.`` prefix removed, if present.
     """
     return name.rsplit("observation.", maxsplit=1)[-1] if "observation." in name else name
 

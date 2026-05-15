@@ -409,10 +409,9 @@ def make_pi05_preprocessors(
             else:
                 continue
 
-            # Map HF feature names (e.g. "observation.state") to Observation
-            # field names (e.g. "state") so the normalizer can match batch keys.
-            raw_name = str(stat["name"])
-            mapped_name = raw_name.rsplit("observation.", maxsplit=1)[-1] if "observation." in raw_name else raw_name
+            # The "name" field is already stripped of the "observation." prefix
+            # by pretrained_utils / dataset.stats, so it matches batch keys directly.
+            mapped_name = str(stat["name"])
 
             mean = cast("list[float] | None", stat.get("mean"))
             std = cast("list[float] | None", stat.get("std"))

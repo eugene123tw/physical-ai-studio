@@ -103,6 +103,15 @@ def extract_dataset_stats(
     return parse_config_features(hf_config)
 
 
+def _strip_obs_prefix(name: str) -> str:
+    """Strip the ``observation.`` prefix so the name matches batch keys.
+
+    ``"observation.images.image"`` → ``"images.image"``;
+    ``"action"`` passes through unchanged.
+    """
+    return name.rsplit("observation.", maxsplit=1)[-1] if "observation." in name else name
+
+
 def _collect_grouped_stats(
     grouped: dict[str, dict[str, list[float]]],
     step_features: dict[str, Any],
@@ -114,7 +123,7 @@ def _collect_grouped_stats(
         shape = resolve_feature_shape(feat_name, hf_config, feat_stats)
         ftype = "VISUAL" if "observation.image" in feat_name.lower() else "UNKNOWN"
         entry: dict[str, Any] = {
-            "name": feat_name,
+            "name": _strip_obs_prefix(feat_name),
             "shape": shape,
             "type": ftype,
         }
@@ -140,7 +149,7 @@ def _collect_identity_features(
             continue
         shape = tuple(feat_info["shape"]) if "shape" in feat_info else resolve_feature_shape(feat_name, hf_config, {})
         stats[feat_name] = {
-            "name": feat_name,
+            "name": _strip_obs_prefix(feat_name),
             "shape": shape,
             "type": feat_info["type"],
         }
@@ -236,7 +245,7 @@ def parse_config_features(hf_config: dict[str, Any]) -> dict[str, dict[str, Any]
 
             if "state" in feat_name.lower() or feat_name == ACTION or "action" in feat_name.lower():
                 entry: dict[str, Any] = {
-                    "name": feat_name,
+                    "name": _strip_obs_prefix(feat_name),
                     "shape": shape,
                     "mean": [0.0] * dim,
                     "std": [1.0] * dim,
@@ -249,7 +258,7 @@ def parse_config_features(hf_config: dict[str, Any]) -> dict[str, dict[str, Any]
                 stats[feat_name] = entry
             elif "image" in feat_name.lower() or (feat_type and "VISUAL" in str(feat_type)):
                 stats[feat_name] = {
-                    "name": feat_name,
+                    "name": _strip_obs_prefix(feat_name),
                     "shape": shape,
                     "type": feat_type or "VISUAL",
                 }

@@ -675,12 +675,13 @@ class Pi05(ExportablePolicyMixin, Policy):
             )
             raise ValueError(msg)
 
-        # Map "observation.images.image" → "images.image" to match preprocessor batch keys
+        # Collect image feature keys from dataset stats (name field is already
+        # stripped of the "observation." prefix by pretrained_utils).
         image_feature_keys = []
         for key, stat in self._dataset_stats.items():
             if stat.get("type") != FeatureType.VISUAL.value:
                 continue
-            name = str(stat.get("name", key)).rsplit("observation.", maxsplit=1)[-1]
+            name = str(stat.get("name", key))
             if not name.startswith(IMAGES):
                 name = f"{IMAGES}.{name}"
             image_feature_keys.append(name)

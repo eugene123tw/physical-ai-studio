@@ -16,6 +16,7 @@ Handles:
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import Any, cast
 
 import numpy as np
@@ -44,6 +45,86 @@ def _norm_map_for_mode(mode: str) -> dict[FeatureType, NormalizationType]:
         FeatureType.STATE: norm_type,
         FeatureType.ACTION: norm_type,
     }
+
+
+def to_relative_actions(actions: torch.Tensor, state: torch.Tensor, mask: Sequence[bool]) -> torch.Tensor:
+    """Convert absolute actions to relative: relative = action - state (for masked dims).
+
+    Args:
+        actions: (B, T, action_dim) or (B, action_dim).
+        state: (B, state_dim). Broadcast across time dimension.
+        mask: Which dims to convert. Can be shorter than action_dim.
+
+    Returns:
+        Relative actions tensor.
+    """
+    mask_t = torch.tensor(mask, dtype=actions.dtype, device=actions.device)
+    dims = mask_t.shape[0]
+    if state.device != actions.device or state.dtype != actions.dtype:
+        state = state.to(device=actions.device, dtype=actions.dtype)
+    state_offset = state[..., :dims] * mask_t
+    if actions.ndim == 3:  # noqa: PLR2004
+        state_offset = state_offset.unsqueeze(-2)
+    actions = actions.clone()
+    actions[..., :dims] -= state_offset
+    return actions
+
+
+def to_absolute_actions(actions: torch.Tensor, state: torch.Tensor, mask: Sequence[bool]) -> torch.Tensor:
+    """Convert relative actions back to absolute: absolute = relative + state (for masked dims).
+
+    Args:
+        actions: (B, T, action_dim) or (B, action_dim).
+        state: (B, state_dim). Broadcast across time dimension.
+        mask: Which dims to convert. Can be shorter than action_dim.
+
+    Returns:
+        Absolute actions tensor.
+    """
+    mask_t = torch.tensor(mask, dtype=actions.dtype, device=actions.device)
+    dims = mask_t.shape[0]
+    if state.device != actions.device or state.dtype != actions.dtype:
+        state = state.to(device=actions.device, dtype=actions.dtype)
+    state_offset = state[..., :dims] * mask_t
+    if actions.ndim == 3:  # noqa: PLR2004
+        state_offset = state_offset.unsqueeze(-2)
+    actions = actions.clone()
+    actions[..., :dims] += state_offset
+    return actions
+
+
+def _build_relative_mask(
+    action_dim: int,
+    exclude_joints: list[str],
+    action_names: list[str] | None,
+) -> list[bool]:
+    """Build a boolean mask for which action dims to convert to relative.
+
+    Args:
+        action_dim: Total number of action dimensions.
+        exclude_joints: Joint names to keep absolute.
+        action_names: Action dimension names from dataset metadata.
+
+    Returns:
+        List of booleans (True = convert to relative).
+    """
+    if not exclude_joints or action_names is None:
+        return [True] * action_dim
+
+    exclude_tokens = [str(name).lower() for name in exclude_joints if name]
+    if not exclude_tokens:
+        return [True] * action_dim
+
+    mask = []
+    for name in action_names[:action_dim]:
+        action_name = str(name).lower()
+        is_excluded = any(token == action_name or token in action_name for token in exclude_tokens)
+        mask.append(not is_excluded)
+
+    if len(mask) < action_dim:
+        mask.extend([True] * (action_dim - len(mask)))
+
+    return mask
 
 
 def _pad_vector(vector: torch.Tensor, new_dim: int) -> torch.Tensor:
@@ -129,11 +210,12 @@ class Pi05Preprocessor(torch.nn.Module):
     """Preprocessor for Pi05 model inputs.
 
     Transforms observations and actions into the format expected by Pi05Model:
-    1. Normalizes state/action using mean-std normalization
-    2. Discretizes state into 256 bins and embeds in text prompt
-    3. Tokenizes text prompt with PaliGemma tokenizer
-    4. Resizes images and normalizes to [-1, 1]
-    5. Pads actions to max dimensions
+    1. Converts actions to relative (if enabled): action -= state
+    2. Normalizes state/action using mean-std normalization
+    3. Discretizes state into 256 bins and embeds in text prompt
+    4. Tokenizes text prompt with PaliGemma tokenizer
+    5. Resizes images and normalizes to [-1, 1]
+    6. Pads actions to max dimensions
 
     Args:
         max_action_dim: Maximum action dimension for padding.
@@ -142,6 +224,9 @@ class Pi05Preprocessor(torch.nn.Module):
         max_token_len: Maximum tokenized prompt length.
         tokenizer_name: HuggingFace tokenizer name for PaliGemma.
         empty_cameras: Number of empty camera slots to add as -1-filled images.
+        use_relative_actions: Whether to convert actions to relative before normalization.
+        relative_exclude_joints: Joint names to keep absolute.
+        action_feature_names: Action dimension names for building the exclusion mask.
     """
 
     def __init__(
@@ -153,6 +238,10 @@ class Pi05Preprocessor(torch.nn.Module):
         tokenizer_name: str = "google/paligemma-3b-pt-224",
         empty_cameras: int = 0,
         normalization_mode: str = "QUANTILES",
+        *,
+        use_relative_actions: bool = False,
+        relative_exclude_joints: list[str] | None = None,
+        action_feature_names: list[str] | None = None,
     ) -> None:
         """Initialize Pi05Preprocessor."""
         super().__init__()
@@ -164,6 +253,12 @@ class Pi05Preprocessor(torch.nn.Module):
         self._tokenizer = None
         self.empty_cameras = empty_cameras
         self.normalization_mode = normalization_mode
+
+        # Relative action settings
+        self.use_relative_actions = use_relative_actions
+        self.relative_exclude_joints = relative_exclude_joints or []
+        self.action_feature_names = action_feature_names
+        self._last_state: torch.Tensor | None = None
 
         norm_map = _norm_map_for_mode(normalization_mode)
         if features is not None:
@@ -181,6 +276,21 @@ class Pi05Preprocessor(torch.nn.Module):
             Dictionary with tokenized_prompt, tokenized_prompt_mask, image tensor lists,
             image_masks, and optionally padded/normalized ACTION.
         """
+        # Cache state for relative action conversion (before any transforms)
+        state_raw = batch.get(STATE)
+        if state_raw is not None:
+            s = state_raw
+            state_dim = 2
+            if s.ndim > state_dim:
+                s = s[:, -1, :]
+            self._last_state = s.clone()
+
+        # Convert actions to relative BEFORE normalization (lerobot order: raw → relative → normalize)
+        if self.use_relative_actions and ACTION in batch and batch[ACTION] is not None and self._last_state is not None:
+            action_dim = batch[ACTION].shape[-1]
+            mask = _build_relative_mask(action_dim, self.relative_exclude_joints, self.action_feature_names)
+            batch[ACTION] = to_relative_actions(batch[ACTION], self._last_state, mask)
+
         # Normalize state/action
         batch = self._state_action_normalizer(batch)
 
@@ -333,20 +443,29 @@ class Pi05Preprocessor(torch.nn.Module):
 class Pi05Postprocessor(torch.nn.Module):
     """Postprocessor for Pi05 model outputs.
 
-    Denormalizes predicted actions back to the original action space.
+    Denormalizes predicted actions back to the original action space and
+    converts relative actions back to absolute if enabled.
 
     Args:
         features: Dictionary mapping feature names to Feature objects.
         normalization_mode: Normalization method matching the preprocessor.
+        use_relative_actions: Whether to convert relative actions back to absolute.
+        preprocessor: Reference to the paired preprocessor (for cached state).
     """
 
     def __init__(
         self,
         features: dict[str, Feature] | None = None,
         normalization_mode: str = "QUANTILES",
+        *,
+        use_relative_actions: bool = False,
+        preprocessor: Pi05Preprocessor | None = None,
     ) -> None:
         """Initialize Pi05Postprocessor."""
         super().__init__()
+
+        self.use_relative_actions = use_relative_actions
+        self._preprocessor = preprocessor
 
         norm_map = _norm_map_for_mode(normalization_mode)
         if features is not None:
@@ -356,14 +475,27 @@ class Pi05Postprocessor(torch.nn.Module):
             self._action_denormalizer = torch.nn.Identity()
 
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
-        """Denormalize actions.
+        """Denormalize and convert relative actions back to absolute.
 
         Returns:
-            Batch dict with denormalized actions.
+            Batch dict with denormalized absolute actions.
         """
         batch = dict(batch)
         if ACTION in batch:
+            # First unnormalize
             batch[ACTION] = self._action_denormalizer({ACTION: batch[ACTION]})[ACTION]
+
+            # Then convert relative back to absolute (lerobot order: unnormalize → absolute)
+            if self.use_relative_actions and self._preprocessor is not None:
+                cached_state = self._preprocessor._last_state  # noqa: SLF001
+                if cached_state is not None:
+                    action_dim = batch[ACTION].shape[-1]
+                    mask = _build_relative_mask(
+                        action_dim,
+                        self._preprocessor.relative_exclude_joints,
+                        self._preprocessor.action_feature_names,
+                    )
+                    batch[ACTION] = to_absolute_actions(batch[ACTION], cached_state, mask)
         return batch
 
 
@@ -375,6 +507,9 @@ def make_pi05_preprocessors(
     max_token_len: int = 200,
     empty_cameras: int = 0,
     normalization_mode: str = "QUANTILES",
+    use_relative_actions: bool = False,
+    relative_exclude_joints: list[str] | None = None,
+    action_feature_names: list[str] | None = None,
 ) -> tuple[Pi05Preprocessor, Pi05Postprocessor]:
     """Create preprocessor and postprocessor pair for Pi05.
 
@@ -385,6 +520,9 @@ def make_pi05_preprocessors(
         max_token_len: Maximum token length.
         empty_cameras: Number of empty camera slots to add.
         normalization_mode: ``"MEAN_STD"`` or ``"QUANTILES"``.
+        use_relative_actions: Whether to use relative action encoding.
+        relative_exclude_joints: Joint names to keep absolute.
+        action_feature_names: Action dimension names for building exclusion mask.
 
     Returns:
         Tuple of (preprocessor, postprocessor).
@@ -430,11 +568,16 @@ def make_pi05_preprocessors(
         max_token_len=max_token_len,
         empty_cameras=empty_cameras,
         normalization_mode=normalization_mode,
+        use_relative_actions=use_relative_actions,
+        relative_exclude_joints=relative_exclude_joints,
+        action_feature_names=action_feature_names,
     )
 
     postprocessor = Pi05Postprocessor(
         features=features,
         normalization_mode=normalization_mode,
+        use_relative_actions=use_relative_actions,
+        preprocessor=preprocessor,
     )
 
     return preprocessor, postprocessor

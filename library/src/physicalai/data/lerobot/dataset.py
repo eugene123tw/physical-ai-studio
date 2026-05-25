@@ -219,6 +219,11 @@ class _LeRobotDatasetAdapter(Dataset):
         return action_features
 
     @property
+    def action_feature_names(self) -> list[str] | None:
+        """Per-dimension action names from the dataset metadata."""
+        return self._lerobot_dataset.features.get("action", {}).get("names")
+
+    @property
     def fps(self) -> int:
         """Frames per second of dataset."""
         return self._lerobot_dataset.fps

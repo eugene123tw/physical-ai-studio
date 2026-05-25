@@ -61,6 +61,15 @@ class Dataset(TorchDataset, ABC):
         """Allows setting delta_indices on the dataset."""
 
     @property
+    def action_feature_names(self) -> list[str] | None:
+        """Per-dimension names for the action feature (e.g. joint names).
+
+        Returns:
+            List of action dimension names, or None if not available.
+        """
+        return None
+
+    @property
     def stats(self) -> dict[str, dict[str, list[float] | tuple | str]]:
         """Normalization statistics extracted from features.
 

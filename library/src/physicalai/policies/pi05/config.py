@@ -16,7 +16,7 @@ Example (API):
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from physicalai.config import Config
@@ -54,6 +54,14 @@ class Pi05Config(Config):
             ``"QUANTILES"`` maps data to [-1, 1] using the 1st and 99th percentiles,
             which is robust to outliers. ``"MEAN_STD"`` uses zero-mean unit-variance
             normalization. Defaults to ``"QUANTILES"`` (matching lerobot pi0/pi05).
+        use_relative_actions: Convert absolute actions to relative (action - state) before
+            normalization. The model trains on relative offsets; during inference the
+            postprocessor converts back to absolute. Defaults to False.
+        relative_exclude_joints: Joint names to exclude from relative conversion (kept absolute).
+            Typically gripper commands are binary and don't benefit from relative encoding.
+            Defaults to ["gripper"].
+        action_feature_names: Action dimension names from dataset metadata, used to build
+            the exclusion mask from ``relative_exclude_joints``. If None, all dims are converted.
 
         optimizer_lr: Learning rate for the optimizer. Defaults to 2.5e-5.
         optimizer_betas: Beta coefficients for Adam optimizer. Defaults to (0.9, 0.95).
@@ -103,6 +111,10 @@ class Pi05Config(Config):
     train_expert_only: bool = False
 
     normalization_mode: Literal["MEAN_STD", "QUANTILES"] = "QUANTILES"
+
+    use_relative_actions: bool = False
+    relative_exclude_joints: list[str] = field(default_factory=lambda: ["gripper"])
+    action_feature_names: list[str] | None = None
 
     optimizer_lr: float = 2.5e-5
     optimizer_betas: tuple[float, float] = (0.9, 0.95)

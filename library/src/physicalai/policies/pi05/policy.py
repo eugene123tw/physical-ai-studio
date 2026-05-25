@@ -82,6 +82,13 @@ class Pi05(ExportablePolicyMixin, Policy):
         train_expert_only: Train only action expert. Default: False.
         normalization_mode: Normalization method for state/action features — ``"QUANTILES"``
             (percentile-based, robust to outliers) or ``"MEAN_STD"``. Default: ``"QUANTILES"``.
+        use_relative_actions: Convert absolute actions to relative (action - state) before
+            normalization. The model trains on relative offsets; during inference the
+            postprocessor converts back to absolute. Default: False.
+        relative_exclude_joints: Joint names to exclude from relative conversion.
+            Typically gripper commands are binary. Default: ["gripper"].
+        action_feature_names: Action dimension names from dataset metadata.
+            Used to build exclusion mask from ``relative_exclude_joints``. Default: None.
 
         optimizer_lr: Learning rate. Default: 2.5e-5.
         optimizer_betas: Adam beta coefficients. Default: (0.9, 0.95).
@@ -145,6 +152,10 @@ class Pi05(ExportablePolicyMixin, Policy):
         train_expert_only: bool = False,
         # Normalization
         normalization_mode: Literal["MEAN_STD", "QUANTILES"] = "QUANTILES",
+        # Relative actions
+        use_relative_actions: bool = False,
+        relative_exclude_joints: list[str] | None = None,
+        action_feature_names: list[str] | None = None,
         # Optimizer
         optimizer_lr: float = 2.5e-5,
         optimizer_betas: tuple[float, float] = (0.9, 0.95),
@@ -183,6 +194,9 @@ class Pi05(ExportablePolicyMixin, Policy):
                 scheduler_warmup_steps=scheduler_warmup_steps,
                 scheduler_decay_steps=scheduler_decay_steps,
                 scheduler_decay_lr=scheduler_decay_lr,
+                use_relative_actions=use_relative_actions,
+                relative_exclude_joints=relative_exclude_joints,
+                action_feature_names=action_feature_names,
             )
         else:
             self.config = Pi05Config(
@@ -211,6 +225,9 @@ class Pi05(ExportablePolicyMixin, Policy):
                 freeze_vision_encoder=freeze_vision_encoder,
                 train_expert_only=train_expert_only,
                 normalization_mode=normalization_mode,
+                use_relative_actions=use_relative_actions,
+                relative_exclude_joints=relative_exclude_joints or ["gripper"],
+                action_feature_names=action_feature_names,
                 optimizer_lr=optimizer_lr,
                 optimizer_betas=optimizer_betas,
                 optimizer_eps=optimizer_eps,
@@ -233,6 +250,37 @@ class Pi05(ExportablePolicyMixin, Policy):
 
         if dataset_stats is not None:
             self._initialize_model(dataset_stats, weight_file)
+
+    def on_load_checkpoint(self, checkpoint: dict) -> None:
+        """Restore action_feature_names from stored config dict (backward compat).
+
+        Older checkpoints stored action_feature_names only inside the config
+        dict but not as a top-level hparam. Lightning passes top-level hparams
+        to __init__, so the names were lost. This hook detects the mismatch
+        and rebuilds the config + preprocessors.
+        """
+        hp = checkpoint.get("hyper_parameters", {})
+        stored_config = hp.get("config", {})
+        stored_names = stored_config.get("action_feature_names")
+
+        if stored_names and self.config.action_feature_names is None:
+            config_dict = self.config.to_dict()
+            config_dict["action_feature_names"] = stored_names
+            self.config = Pi05Config.from_dict(config_dict)
+
+            # Rebuild preprocessors with the correct names
+            if self._dataset_stats is not None:
+                self._preprocessor, self._postprocessor = make_pi05_preprocessors(
+                    max_action_dim=self.config.max_action_dim,
+                    stats=self._dataset_stats,
+                    image_resolution=self.config.image_resolution,
+                    max_token_len=self.config.tokenizer_max_length,
+                    empty_cameras=self.config.empty_cameras,
+                    normalization_mode=self.config.normalization_mode,
+                    use_relative_actions=self.config.use_relative_actions,
+                    relative_exclude_joints=self.config.relative_exclude_joints,
+                    action_feature_names=self.config.action_feature_names,
+                )
 
     def _initialize_model(
         self,
@@ -299,6 +347,9 @@ class Pi05(ExportablePolicyMixin, Policy):
             max_token_len=self.config.tokenizer_max_length,
             empty_cameras=self.config.empty_cameras,
             normalization_mode=self.config.normalization_mode,
+            use_relative_actions=self.config.use_relative_actions,
+            relative_exclude_joints=self.config.relative_exclude_joints,
+            action_feature_names=self.config.action_feature_names,
         )
 
         self._dataset_stats = dataset_stats
@@ -325,6 +376,9 @@ class Pi05(ExportablePolicyMixin, Policy):
         scheduler_warmup_steps: int = 1_000,
         scheduler_decay_steps: int | None = 30_000,
         scheduler_decay_lr: float = 2.5e-6,
+        use_relative_actions: bool = False,
+        relative_exclude_joints: list[str] | None = None,
+        action_feature_names: list[str] | None = None,
         **kwargs: Any,  # noqa: ANN401
     ) -> tuple[Pi05Config, dict[str, dict[str, list[float] | str | tuple]], Path]:
         """Load pretrained Pi05 from a HuggingFace model repo.
@@ -359,6 +413,10 @@ class Pi05(ExportablePolicyMixin, Policy):
             scheduler_warmup_steps: Override warmup steps.
             scheduler_decay_steps: Override decay steps. ``None`` means auto.
             scheduler_decay_lr: Override final decay learning rate.
+            use_relative_actions: Override whether to use relative actions.
+            relative_exclude_joints: Override list of joints to exclude from relative conversion.
+            action_feature_names: Override action feature names from dataset metadata.
+             Used to build exclusion mask for relative actions.
             **kwargs: Extra arguments forwarded to ``huggingface_hub.hf_hub_download``.
 
         Returns:
@@ -437,6 +495,9 @@ class Pi05(ExportablePolicyMixin, Policy):
         hf_config["scheduler_warmup_steps"] = scheduler_warmup_steps
         hf_config["scheduler_decay_steps"] = scheduler_decay_steps
         hf_config["scheduler_decay_lr"] = scheduler_decay_lr
+        hf_config["use_relative_actions"] = use_relative_actions
+        hf_config["relative_exclude_joints"] = relative_exclude_joints or ["gripper"]
+        hf_config["action_feature_names"] = action_feature_names
 
         # Auto-detect normalization_mode from pretrained preprocessor.
         # The pretrained model's mode always wins over caller defaults.
@@ -477,6 +538,20 @@ class Pi05(ExportablePolicyMixin, Policy):
 
         stats_dict = train_dataset.stats
 
+        # Auto-populate action_feature_names from dataset if available
+        if self.config.action_feature_names is None:
+            names = train_dataset.action_feature_names
+            if names is not None:
+                # Config is frozen, so rebuild with the new field
+                config_dict = self.config.to_dict()
+                config_dict["action_feature_names"] = list(names)
+                self.config = Pi05Config.from_dict(config_dict)
+                # Persist in hparams so the checkpoint stores the names.
+                # Both the config dict AND the individual kwarg must be updated
+                # because Lightning passes individual hparams back to __init__.
+                self.hparams["config"] = self.config.to_dict()
+                self.hparams["action_feature_names"] = list(names)
+
         if self.model is not None:
             # Fine-tuning path: model exists from pretrained, but the
             # preprocessor stats must match the training data distribution.
@@ -508,6 +583,9 @@ class Pi05(ExportablePolicyMixin, Policy):
             max_token_len=self.config.tokenizer_max_length,
             empty_cameras=self.config.empty_cameras,
             normalization_mode=self.config.normalization_mode,
+            use_relative_actions=self.config.use_relative_actions,
+            relative_exclude_joints=self.config.relative_exclude_joints,
+            action_feature_names=self.config.action_feature_names,
         )
         self._dataset_stats = dataset_stats
         self.hparams["dataset_stats"] = dataset_stats

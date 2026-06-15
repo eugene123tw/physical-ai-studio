@@ -559,31 +559,70 @@ RLDX-1-FT checkpoint → same number ± a few points as the paper"*.
 
 ### 7.2 Released checkpoints — what each one actually validates
 
-Every public RLDX-1 checkpoint was inspected via its `config.json` on
-the Hub. They split cleanly into three tiers based on which features
-are active. **None of them enable RTC.**
+All 10 RLWRLD model repos were enumerated via the HF API
+(`api/models?author=RLWRLD`) and their `config.json` audited. Branching
+structure:
 
-| Checkpoint | Stage | RTC train | RTC infer | memory | motion | physics | action_horizon | state_dropout | What it validates |
-|---|---|---|---|---|---|---|---|---|---|
-| [`RLWRLD/RLDX-1-PT`](https://huggingface.co/RLWRLD/RLDX-1-PT) | Pre-train | `0` | `none` | off | off | off | 16 | 0.0 | State-dict loader against the 6.9 B base. |
-| [`RLWRLD/RLDX-1-FT-SIMPLER-WIDOWX`](https://huggingface.co/RLWRLD/RLDX-1-FT-SIMPLER-WIDOWX) | Post-train | `0` | `none` | off | off | off | 16 | **0.0** | End-to-end inference parity for the base architecture on SimplerEnv WidowX. |
-| [`RLWRLD/RLDX-1-FT-GR1`](https://huggingface.co/RLWRLD/RLDX-1-FT-GR1) | Post-train | `0` | `none` | off | off | off | 16 | **0.5** | Same architecture as WidowX, only difference is heavier state-dropout (matches paper Table 8: 0.5 for GR-1 Tabletop). Triangulates that our port is not specialized to WidowX dynamics. |
-| [`RLWRLD/RLDX-1-MT-ALLEX`](https://huggingface.co/RLWRLD/RLDX-1-MT-ALLEX) | Mid-train | `0` | `none` | **on** (`memory_video_delta_indices = [-48,-32,-16,0]`, `concat_memory=True`, `memory_n_cog_tokens=16`) | **on** (`motion_insert_layer=9`, vision-encoder injection, avg pool) | **on** (`physics_keys=['torque']`, 48-D, `physics_loss_weight=0.1`, `allow_missing_physics=True`) | **40** | 0.3 | Smoke test that memory + motion + physics submodules load and forward correctly. Not a parity test — no public ALLEX sim or dataset. |
+```
+                                            ┌── FT-LIBERO
+                                            ├── FT-SIMPLER-WIDOWX
+       Qwen3-VL 8B                          ├── FT-SIMPLER-GOOGLE   (state_dropout=0.5)
+       (= RLDX-1-VLM) ──► PT (6.9B, base) ──┼── FT-GR1              (state_dropout=0.5)
+                                            ├── FT-ROBOCASA
+                                            ├── FT-RC365            (250K × 196)
+                                            │
+                                            ├── MT-ALLEX  (8.1B, mem+mot+phys[torque],         ah=40)
+                                            └── MT-DROID  (8.1B, mem+mot+phys[tactile,torque], ah=16)
+```
 
-Two cross-cutting observations:
-- **RTC parity has no released checkpoint at all.** Every public weight
-  was trained with `rtc_training_max_delay = 0`, so even setting
-  `rtc_inference_mode = "trained"` at load time wouldn't help — the
-  model has no training signal for the prefix τ=1 distribution. RTC
-  validation requires either retraining a checkpoint ourselves with
-  `rtc_training_max_delay > 0` (cheapest target: LIBERO) or waiting for
-  an RTC-enabled checkpoint upstream.
-- **ALLEX's memory stride is 16, not H+1.** With `action_horizon=40` and
-  `memory_video_delta_indices=[-48,-32,-16,0]`, the queue stride is 16,
-  not the 41 the paper's §2.1 ("stride = H+1") implies. Snapshots
-  overlap in time. Our `delta_timestamps` wiring must read
-  `memory_video_delta_indices` directly, not derive it from
-  `action_horizon`.
+Full matrix:
+
+| Checkpoint | Size | Stage | Path | Embodiment / Benchmark | mem / mot / phys | state_dropout | action_horizon | Notes |
+|---|---|---|---|---|---|---|---|---|
+| [`RLDX-1-VLM`](https://huggingface.co/RLWRLD/RLDX-1-VLM) | 8B | upstream VLM | (none) | Qwen3-VL 8B Instruct | — | — | — | Bare VLM; the input to PT. Not a policy. |
+| [`RLDX-1-PT`](https://huggingface.co/RLWRLD/RLDX-1-PT) | 6.9B | **pre-train** | `VLM → PT` | multi-embodiment generalist | off / off / off | 0.0 | 16 | The base. All downstream checkpoints branch from here. |
+| [`RLDX-1-MT-ALLEX`](https://huggingface.co/RLWRLD/RLDX-1-MT-ALLEX) | 8.1B | **mid-train** | `PT → MT` | ALLEX humanoid (48 DoF) | **on / on / on** | 0.3 | **40** | `physics_keys=['torque']`, `motion_insert_layer=9`, `memory_video_delta_indices=[-48,-32,-16,0]`. |
+| [`RLDX-1-MT-DROID`](https://huggingface.co/RLWRLD/RLDX-1-MT-DROID) | 8.1B | **mid-train** | `PT → MT` | FR3 single-arm + DROID | **on / on / on** | 0.3 | 16 | `physics_keys=['tactile','torque']` (extra tactile vs ALLEX). |
+| [`RLDX-1-FT-LIBERO`](https://huggingface.co/RLWRLD/RLDX-1-FT-LIBERO) | 6.9B | **post-train** | `PT → FT` | LIBERO (single-arm sim) | off / off / off (explicit) | 0.0 | 16 | Only FT ckpt that ships the full add-on schema with flags explicitly toggled off + both LoRA flags off. |
+| [`RLDX-1-FT-SIMPLER-WIDOWX`](https://huggingface.co/RLWRLD/RLDX-1-FT-SIMPLER-WIDOWX) | 6.9B | **post-train** | `PT → FT` | SIMPLER WidowX (BridgeData) | off / off / off | 0.0 | 16 | **Primary parity target** for our integration (§7.3). |
+| [`RLDX-1-FT-SIMPLER-GOOGLE`](https://huggingface.co/RLWRLD/RLDX-1-FT-SIMPLER-GOOGLE) | 6.9B | **post-train** | `PT → FT` | SIMPLER Google-VM / VA (Fractal) | off / off / off | **0.5** | 16 | Paper Table 8 calls for state_dropout 0.5 on Google-VA, 20 K steps. |
+| [`RLDX-1-FT-GR1`](https://huggingface.co/RLWRLD/RLDX-1-FT-GR1) | 6.9B | **post-train** | `PT → FT` | GR-1 Tabletop (humanoid sim) | off / off / off | **0.5** | 16 | Same shape as WidowX, only difference is stronger state regularization. |
+| [`RLDX-1-FT-ROBOCASA`](https://huggingface.co/RLWRLD/RLDX-1-FT-ROBOCASA) | 6.9B | **post-train** | `PT → FT` | RoboCasa Kitchen | off / off / off | 0.0 | 16 | The benchmark used in App. D PEFT table. |
+| [`RLDX-1-FT-RC365`](https://huggingface.co/RLWRLD/RLDX-1-FT-RC365) | 6.9B | **post-train** | `PT → FT` | RoboCasa365 | off / off / off | 0.0 | 16 | Paper §6.1 calls for 250 K steps × batch 196 instead of the 60 K × 1024 default. |
+
+**Key facts the matrix confirms:**
+
+1. **No `MT → FT` checkpoint is released.** Every paper number in the
+   ALLEX / FR3 real-robot tables (§6.3, §6.4, §G.3, §G.4) uses a
+   task-specific FT on top of `MT-*`, but **those per-task FTs were
+   never uploaded**. The released `MT-*` checkpoints are the pre-FT
+   artifacts.
+2. **All six `FT-*` are sim benchmarks branching directly from PT.**
+   Architecture is identical to PT (6.9 B, no add-on streams) — only
+   weights and 2-3 hparams differ.
+3. **No checkpoint enables RTC.** Every public weight was trained with
+   `rtc_training_max_delay = 0`, so setting
+   `rtc_inference_mode = "trained"` at load time wouldn't help — the
+   model has no training signal for the prefix τ=1 distribution. RTC
+   validation requires retraining a checkpoint ourselves with
+   `rtc_training_max_delay > 0` (cheapest target: LIBERO) or waiting
+   for an RTC-enabled upstream checkpoint.
+4. **Only three knobs change across the FT family:**
+   `state_dropout_prob` (0.0 or 0.5), training steps (20 K / 60 K /
+   250 K), and batch size (256 / 1024 / 196). Everything else inherits
+   from PT.
+5. **ALLEX's memory stride is 16, not H+1.** With `action_horizon=40`
+   and `memory_video_delta_indices=[-48,-32,-16,0]`, snapshots overlap
+   in time (stride 16, not the 41 implied by paper §2.1's "stride =
+   H+1"). Our `delta_timestamps` wiring must read
+   `memory_video_delta_indices` directly, not derive it from
+   `action_horizon`.
+6. **`FT-LIBERO` is the schema outlier.** It's the only FT ckpt that
+   still carries the full add-on / LoRA schema with fields explicitly
+   set, while the other FT configs ship a slimmer schema where those
+   fields are absent (default `false`). Same effective behavior,
+   different config provenance — likely exported with a different
+   config dumper revision. Our loader must tolerate both.
 
 ### 7.3 Validation plan, in order
 

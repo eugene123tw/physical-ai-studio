@@ -11,6 +11,20 @@ we ship into the `physicalai` runtime, and what we leave on the floor.
 > scratch. License is the only true blocker; the code is Apache-2.0 and the
 > codebase is integration-ready.
 
+> **v1 scope decision (2026-06): ship `PT → FT` only.**
+> The paper provides **zero evidence** for any `MT → FT` path that we
+> could reproduce — every public `FT-*` checkpoint branches directly
+> from `RLDX-1-PT`, and the per-task FTs on top of `MT-*` were never
+> released (see [§7.2](#72-released-checkpoints--what-each-one-actually-validates)).
+> Mid-train also requires multi-modal in-house data (tactile / torque /
+> long-horizon memory) that no PAS user has. We therefore drop the
+> entire memory / motion / physics module set + the alignment-warmup
+> trainer plumbing from v1, and ship the same single-stage recipe the
+> released `FT-SIMPLER-WIDOWX` checkpoint uses. MT support is tracked
+> as a phase-2 follow-up. Sections referring to MT, memory, motion,
+> and physics below are kept as **context for that future work**, not
+> as v1 deliverables.
+
 ---
 
 ## 0. Scope summary
@@ -19,16 +33,20 @@ we ship into the `physicalai` runtime, and what we leave on the floor.
 |---|---|---|
 | `RLDX-1-PT` (6.9 B, video PT, no add-ons) as base | ✅ | Sole reproducible entry point. |
 | MSAT action head + Qwen3-VL-8B backbone | ✅ | Pure-torch, exportable. |
-| Motion module (STSS) | ⚠️ optional flag | Requires multi-frame video input. |
-| Memory module (n_mem queue) | ⚠️ optional flag | Stateful — needs runtime session cache. |
-| Physics stream (tactile / torque) | ❌ for v1 | No upstream public sensor-augmented data; revisit with FR3-AnySkin. |
-| Real-Time Chunking — training (`rtc_training_max_delay`) | ✅ | Pure forward pass, **no gradient through RTC**. |
-| RTC inference `trained` mode | ✅ | Hard-inpaint at each Euler step; static-graph safe. |
+| Flow-matching `PT → FT` post-train loop | ✅ | The one and only training path in v1. |
+| LoRA PEFT (paper App. D) | ✅ | Action-LoRA default; backbone-LoRA optional. See §5.3. |
+| SimplerEnv WidowX as the alignment benchmark | ✅ | Primary parity target — matches `RLDX-1-FT-SIMPLER-WIDOWX`. |
+| Motion module (STSS) | ❌ phase 2 | MT-only; no released FT uses it. |
+| Memory module (n_mem queue) | ❌ phase 2 | MT-only; stateful runtime work deferred. |
+| Physics stream (tactile / torque) | ❌ phase 2 | MT-only; no upstream public sensor data. |
+| `new_param_warmup_steps` / alignment-warmup callback | ❌ phase 2 | Only useful when new modality streams exist. |
+| `MT-ALLEX` / `MT-DROID` checkpoint support | ❌ phase 2 | Skipped — no reproducible downstream path. |
+| Real-Time Chunking — training (`rtc_training_max_delay`) | ⚠️ optional | Pure forward pass; defaults to 0. Keep config field, do not validate in v1. |
+| RTC inference `trained` mode | ⚠️ optional | Hard-inpaint, static-graph safe. No released checkpoint has RTC. |
 | RTC inference `guided` mode | ❌ | Jacobian VJP through DiT — incompatible with OV / fullgraph compile. |
-| RECAP post-training (RL) | ❌ | **Not in upstream repo.** Paper-only. |
+| RECAP post-training (RL) | ❌ phase 2+ | **Not in upstream repo.** Paper-only. |
 | Triton kernel chain | ❌ for inference | CUDA-only. We rely on OV/ONNX fusion. |
 | CUDA Graph + Static Graph Conversion | ❌ for inference | Replaced by OV `compile_model` cache. |
-| SimplerEnv WidowX as the alignment benchmark | ✅ | Best reproduction in our notes (−2.4 pts vs paper). |
 
 ---
 
@@ -42,13 +60,10 @@ we ship into the `physicalai` runtime, and what we leave on the floor.
 - Confirmed by every shipped script: [`finetune.sh`](../../RLDX-1/run_scripts/train/examples/finetune.sh),
   [`midtrain_rldx1_droid.sh`](../../RLDX-1/run_scripts/train/examples/midtrain_rldx1_droid.sh),
   and all `run_scripts/train/benchmarks/*` default to `BASE_MODEL_PATH=RLWRLD/RLDX-1-PT`.
-- **Implication for Studio**: our `Rldx1.from_pretrained("RLWRLD/RLDX-1-PT")`
-  must work even when `use_motion = use_memory = use_physics = False`. Load
-  the PT state dict, then conditionally instantiate add-on modules with
-  random init when their flag is true (this is what RLDX-1's
-  `--new-param-warmup-steps 2000` is for — only the new module trains for
-  the first 2 K steps, then everything unfreezes). Mirror that warmup
-  policy in `Rldx1Config`.
+- **Implication for Studio (v1)**: our `Rldx1.from_pretrained("RLWRLD/RLDX-1-PT")`
+  must load the PT state dict cleanly with `use_motion = use_memory = use_physics = False`
+  hard-coded. The conditional add-on instantiation + `new_param_warmup_steps`
+  callback land in phase 2 together with MT support.
 - **Security** ([`lib.security`](../../.github/instructions/lib.security.instructions.md) rules 6, 9, 10): pretrained-load path must
   - Use a **pinned `revision=` SHA**, not `"main"`.
   - Set `weights_only=True` on every `torch.load` (Qwen3-VL upstream uses
@@ -92,7 +107,14 @@ not a custom kernel).
 
 ---
 
-## 3. Memory module — impact on data + runtime
+## 3. Memory module — deferred to phase 2
+
+> **Out of v1 scope.** The memory module only exists on the released
+> `MT-*` checkpoints, which we are not loading in v1. The notes below
+> are kept verbatim from the original integration plan as a reference
+> for the phase-2 MT support — `delta_timestamps` wiring, stateful
+> runtime preprocessor, and manifest extension all stay roughly the
+> same when we revisit.
 
 Spec (paper §2.1 Functionality 2; reproduced for v1):
 - Memory queue **Q_t = [h_{t-n_mem·H}, …, h_{t-H}]**, n_mem = 3, stride =
@@ -152,22 +174,29 @@ token shape. Ship this in the `physicalai` repo alongside the policy.
 
 ## 4. Studio module decomposition — `policies/rldx1/`
 
-Match the standing four-file pattern (see `policies/pi05/`, `policies/groot/`):
+Match the standing four-file pattern (see `policies/pi05/`, `policies/groot/`).
+**v1 layout — PT → FT only**:
 
 ```
 library/src/physicalai/policies/rldx1/
 ├── __init__.py              # re-export Rldx1, Rldx1Config, Rldx1Model
-├── config.py                # @dataclass(frozen=True) Rldx1Config — mirror RLDXConfig
+├── config.py                # @dataclass(frozen=True) Rldx1Config — mirror RLDXConfig (PT-shape only)
 ├── model.py                 # nn.Module — pure torch, exportable
 ├── policy.py                # Lightning wrapper, subclass of policies.base.Policy
-├── preprocessor.py          # image/text/state preprocessors + (optional) memory queue
+├── preprocessor.py          # image/text/state preprocessors (no memory queue in v1)
 ├── pretrained_utils.py      # PT weight loader, key fix-ups, dataset_stats extraction
 └── components/
     ├── msat.py              # Multi-Stream Action Transformer (port from rldx/model/modules/action_model/)
+    ├── lora.py              # PEFT helper — mirror of pi0/components/lora.py (see §5.3)
+    └── backbone.py          # Qwen3-VL-8B adapter (selects layer 18, freezes top-4 etc.)
+```
+
+Phase-2 additions (deferred — pulled in when MT support lands):
+
+```
     ├── memory.py            # TransformerMemory (verbatim port)
     ├── motion.py            # STSS encoder (when use_motion)
-    ├── physics.py           # PhysicsHead + p-stream (when use_physics, future)
-    └── backbone.py          # Qwen3-VL-8B adapter (selects layer 18, freezes top-4 etc.)
+    └── physics.py           # PhysicsHead + p-stream (when use_physics)
 ```
 
 Mapping vs upstream:
@@ -189,39 +218,48 @@ inherited from `policies.base.Policy`.
 
 ---
 
-## 5. `midtrain_rldx1_droid.sh` vs `finetune.sh` — what's different
+## 5. `finetune.sh` — the v1 training script
 
-Both scripts call the **same entrypoint** ([`rldx/experiment/launch_train.py`](../../RLDX-1/rldx/experiment/launch_train.py))
-with the **same Trainer**. The differences are:
+v1 reproduces a single training path: `RLDX-1-PT → FT` on a user's
+LeRobot dataset, equivalent to the recipe that produced every released
+`RLDX-1-FT-*` checkpoint.
 
-| Axis | `finetune.sh` (post-train) | `midtrain_rldx1_droid.sh` (mid-train) |
+Upstream reference: [`rldx/experiment/launch_train.py`](../../RLDX-1/rldx/experiment/launch_train.py)
+driven by [`run_scripts/train/examples/finetune.sh`](../../RLDX-1/run_scripts/train/examples/finetune.sh)
+with all `--use-motion / --use-memory / --use-physics` flags off.
+
+Key hparams (from paper §6.1 "Implementation Details" + the per-benchmark
+FT configs we audited in §7.2):
+
+| Field | Default | Per-benchmark deltas |
 |---|---|---|
-| Add-on flags | All commented out — vanilla flow-matching VLA. | `--use-motion --use-memory --use-physics` all on. |
-| New-param warmup | Implicit 0. | `--new-param-warmup-steps 2000` — only new modules train for the first 2 K steps. |
-| Modality config | Single-dataset (`your_dataset_config.py`). | Multi-modality (DROID + tactile/torque mix via `midtrain_allex_data_config.py`). |
-| Dataset shape | Single LeRobot path or a few paths via `--dataset-paths`. | Sharded mixture loader (`--pt-dataset-root + --pt-dataset-mix`). |
-| Steps / batch | 60 K @ batch 256 (single-task). | 30 K @ batch 512 × 4-step grad-accum (8 nodes × 8 GPUs). |
-| Missing-modality handling | N/A. | `--allow-missing-physics` — physics stream sees zero tokens when dataset row has no tactile/torque. |
-| LR | task-dependent (1e-4 typical). | 5e-5 (carries forward from PT). |
+| `BASE_MODEL_PATH` | `RLWRLD/RLDX-1-PT` | fixed for every v1 FT |
+| Optimizer | AdamW, lr 1e-4, cosine + 5 % linear warmup | fixed |
+| `max_steps` | 60 000 | 20 K for SIMPLER Google, 250 K for RC365 |
+| `global_batch_size` | 1024 | 256 for LIBERO, 196 for RC365 |
+| `state_dropout_prob` | 0.0 | 0.5 for SIMPLER-Google and GR-1 |
+| Frozen layers | vision encoder + LLM except top-4 LLM layers | fixed |
+| `action_horizon` | 16 | fixed in v1 |
+| Action backbone PEFT | LoRA r=64 (paper App. D free-lunch) | see §5.3 |
 
-**There is no `Trainer` divergence — only configuration.** Both should map
-to a **single `Rldx1` policy class** in Studio, with `trainer.fit()`
-driven by two YAML configs:
+Three YAML presets ship together with the policy:
 
 ```
-configs/physicalai/rldx1-finetune-libero.yaml      # vanilla, single dataset
-configs/physicalai/rldx1-midtrain-droid.yaml       # motion + memory + physics + new-param warmup
-configs/physicalai/rldx1-posttrain-simpler-widowx.yaml  # post-train BC fine-tune
+configs/physicalai/rldx1-ft-default.yaml          # full backbone + LoRA action (paper App. D free-lunch)
+configs/physicalai/rldx1-ft-consumer-gpu.yaml     # LoRA both, fits 24 GiB single GPU
+configs/physicalai/rldx1-ft-paper-baseline.yaml   # full FT both (parity-run only)
 ```
 
-`new_param_warmup_steps` becomes a config field on `Rldx1Config`, applied
-via a Lightning callback that freezes the pre-trained submodules for the
-first N steps and unfreezes them at step N. Look at
-[`physicalai/train/callbacks.py`](../src/physicalai/train/callbacks.py) for prior
-art (LR schedulers, gradient clipping); add `NewParamUnfreezeCallback`
-there.
+**Mid-train (`midtrain_rldx1_*.sh`) is deferred to phase 2.** The
+comparison between mid-train and post-train scripts, the
+`new_param_warmup_steps` callback, and the modality-mixture data loader
+are not implemented in v1 — see the scope banner at the top of this
+doc.
 
-### 5.1 Training stages — when to use which (PT → MT → FT)
+### 5.1 Training stages — context only (PT → MT → FT)
+
+> **v1 only ships `PT → FT`.** This subsection is retained as
+> background for phase-2 MT work. Skip on first read.
 
 The paper defines three stages but the released checkpoint names only
 expose two of them. Quick terminology fix:
@@ -303,28 +341,15 @@ These are plausible but unmeasured. If you want to test MT-as-deployment
 empirically, that's an interesting ablation to run during validation
 (see §7.3).
 
-### 5.2 SO-101 user — recommended recipe
+### 5.2 SO-101 user — v1 recipe
 
 A typical SO-101 setup is a single-arm 6-DoF parallel gripper, no
 tactile, no torque, and one or two cameras. The user records one
 LeRobot dataset for one task.
 
-**Recipe: skip mid-train, go `PT → post-train (BC fine-tune)`** — the
-same shape as `RLDX-1-FT-SIMPLER-WIDOWX`.
-
-Reasoning:
-
-- SO-101 has no tactile or torque sensors → nothing to feed the physics
-  stream → mid-train's `use_physics` add-on is useless.
-- A single-task dataset has no diversity to support mid-train's
-  alignment-warmup recipe → catastrophic forgetting of PT priors.
-- Memory and motion streams require multi-frame inputs over windows
-  (`memory_video_delta_indices = [-48, -32, -16, 0]` for ALLEX) that
-  typical SO-101 teleop datasets are too short / too repetitive to
-  exploit.
-- This is exactly what the released `FT-SIMPLER-WIDOWX` checkpoint does
-  (single-arm gripper, no add-ons, state_dropout 0.0), so we know the
-  PT-only init is sufficient.
+**v1 recipe: `PT → FT`**, the only path we support. Identical shape to
+the released `RLDX-1-FT-SIMPLER-WIDOWX` checkpoint (single-arm gripper,
+no add-ons, state_dropout 0.0) — only the dataset changes.
 
 Concrete config:
 
@@ -363,20 +388,14 @@ datamodule:
     observation.images.front: [0]
 ```
 
-**When would an SO-101 user actually want mid-train?** Two narrow cases:
+Phase-2 SO-101 use cases that would justify mid-train (deferred):
 
-1. **Multi-task SO-101 corpus** (20+ tasks, hundreds of episodes each)
-   where they want long-horizon memory. Enable `use_memory=true`,
-   lr 5e-5, `new_param_warmup_steps=2000`, train on the multi-task
-   mixture → produces an `MT-SO101` checkpoint that they then
-   post-train per task.
-2. **Tactile retrofit** (e.g., AnySkin on the gripper). Mid-train with
-   `use_physics=true` + `allow_missing_physics=true` on a mixture of
-   (tactile-equipped episodes + plain SO-101 episodes) → adds the
-   physics stream without losing breadth.
+1. **Multi-task SO-101 corpus** with 20+ tasks — enable `use_memory=true`,
+   alignment-warmup callback, lr 5e-5 on the mixture.
+2. **Tactile retrofit** (e.g., AnySkin on the gripper) — enable
+   `use_physics=true` + `allow_missing_physics=true`.
 
-Neither applies to the default SO-101 user. Default path is `PT → FT`,
-one config, one `trainer.fit()` call.
+Neither is in v1.
 
 ### 5.3 PEFT — paper Appendix D applied
 
@@ -541,20 +560,22 @@ applies. The `apply_lora` helper takes only typed config fields, no
 
 ---
 
-## 7. Evaluation harness — tiered validation, three released checkpoints
+## 7. Evaluation harness — tiered validation, PT → FT checkpoints
 
 We want an environment that lets us close the loop *"PAS Rldx1 +
-RLDX-1-FT checkpoint → same number ± a few points as the paper"*.
+RLDX-1-FT checkpoint → same number ± a few points as the paper"*. v1
+validates only checkpoints on the `PT → FT` path (all six released
+`FT-*` are eligible); `MT-*` validation is deferred to phase 2.
 
 ### 7.1 Sim env candidates
 
 | Candidate | Vendored upstream? | Numerical baseline in our notes | Stability | Recommendation |
 |---|---|---|---|---|
-| **SimplerEnv WidowX** ([`external_dependencies/SimplerEnv`](../../RLDX-1/external_dependencies/SimplerEnv)) | ✅ uv-managed venv, runs out of the box. | **−2.4 pts** vs paper (69.5 vs 71.9). 4 tasks, 200 episodes each. | High — ManiSkill2 / SAPIEN; no GPU sim, deterministic seeds. | **Pick this as primary**. Fastest path to a known-good number. |
-| SimplerEnv Google-VM | ✅ same venv. | −5.25 pts vs paper (76.25 vs 81.5). | Same as WidowX. | Useful for triangulation; larger reproduction gap. |
-| GR-1 Tabletop | ✅ [`external_dependencies/robocasa-gr1-tabletop-tasks`](../../RLDX-1/external_dependencies/robocasa-gr1-tabletop-tasks) | None yet. | Heavy — humanoid + dexterous hands, Mujoco-based. | **Secondary parity test** (matches the FT-GR1 checkpoint — see §7.3). Low priority unless WidowX number drifts unexplained. |
+| **SimplerEnv WidowX** ([`external_dependencies/SimplerEnv`](../../RLDX-1/external_dependencies/SimplerEnv)) | ✅ uv-managed venv, runs out of the box. | **−2.4 pts** vs paper (69.5 vs 71.9). 4 tasks, 200 episodes each. | High — ManiSkill2 / SAPIEN; no GPU sim, deterministic seeds. | **Primary v1 target** (matches `FT-SIMPLER-WIDOWX`). |
+| **LIBERO** ([`external_dependencies/LIBERO`](../../RLDX-1/external_dependencies/LIBERO)) | ✅ | None for RLDX-1; we already have PI0.5 baselines + a working gym. | High — most stable Studio integration target overall. | **Secondary v1 target** (matches `FT-LIBERO`, exercises the full add-on schema loader). |
+| SimplerEnv Google-VM | ✅ same venv as WidowX. | −5.25 pts vs paper (76.25 vs 81.5). | Same as WidowX. | Triangulation; larger reproduction gap. |
+| GR-1 Tabletop | ✅ [`external_dependencies/robocasa-gr1-tabletop-tasks`](../../RLDX-1/external_dependencies/robocasa-gr1-tabletop-tasks) | None yet. | Heavy — humanoid + dexterous hands, Mujoco-based. | Tertiary (matches `FT-GR1`). Low priority unless WidowX drifts. |
 | RoboCasa Kitchen | ✅ [`external_dependencies/robocasa`](../../RLDX-1/external_dependencies/robocasa) + own uv venv. | Not in our notes. | Medium — Mujoco-based, more flaky than SimplerEnv. | Skip for v1. |
-| LIBERO | ✅ [`external_dependencies/LIBERO`](../../RLDX-1/external_dependencies/LIBERO) | None for RLDX-1; we have PI0.5 baselines. | High — most stable Studio integration target overall. | Add once `Rldx1` is wired to our LIBERO gym (we already have it for pi05). |
 | RoboCasa365 | ✅ [`external_dependencies/robocasa365`](../../RLDX-1/external_dependencies/robocasa365) | None. | Largest, longest-horizon. | Skip — composite tasks pollute the alignment signal. |
 
 ### 7.2 Released checkpoints — what each one actually validates
@@ -626,6 +647,9 @@ Full matrix:
 
 ### 7.3 Validation plan, in order
 
+v1 only validates the `PT → FT` path. MT smoke tests and the
+MT-as-deployment ablation are deferred to phase 2.
+
 1. **PT load** — `Rldx1.from_pretrained("RLWRLD/RLDX-1-PT")` on CPU,
    verify every weight maps, no orphans, no shape mismatches.
 2. **WidowX parity** — primary milestone:
@@ -637,43 +661,41 @@ Full matrix:
       same `n_episodes=200`, same `DENOISE_STEP=10`, same `ACTION_STEPS=2`.
    4. Hit ≥ 67 % mean (within 3 pts of paper) → base-architecture
       integration validated.
-3. **ALLEX smoke test** — mandatory before declaring the add-ons working:
-   1. Pull `RLWRLD/RLDX-1-MT-ALLEX`.
-   2. Load with `use_memory=use_motion=use_physics=True` via our `Rldx1`
-      class, run `predict_action_chunk` on a synthetic batch.
-   3. Verify shape `(B, 40, action_dim)`, no NaN, all four sub-streams
-      contribute to output (gradient-flow check on a dummy loss).
-   4. State-dict map: every parameter in the checkpoint binds to an
-      `Rldx1Model` parameter; no orphan keys; no missing tensors.
-   *No parity number to hit — no public ALLEX sim or dataset.*
-4. **GR1 parity** (optional, low priority) — secondary milestone:
+3. **LIBERO parity** — secondary milestone, exercises the smallest FT
+   schema variant we have to load:
+   1. Pull `RLWRLD/RLDX-1-FT-LIBERO`. This is the only FT ckpt that
+      ships the full add-on schema fields explicitly toggled off — good
+      coverage for the loader.
+   2. Run through our existing LIBERO gym (the one used for pi05).
+   3. Hit paper Table 1 ± 3 pts.
+4. **GR1 parity** (optional, low priority):
    1. Vendor `robocasa-gr1-tabletop-tasks` into PAS following the same
       pattern as SimplerEnv.
    2. Run `RLDX-1-FT-GR1` through PAS; expect the paper's mean ± 3 pts.
    3. Only pursue if WidowX shows unexplained drift — GR1 differs from
       WidowX only by state-dropout, so it's a triangulation, not a new
       capability test.
-5. **LIBERO retrain** — only validation path for RTC:
-   1. Train an `Rldx1` on LIBERO with `rtc_training_max_delay=4`.
-   2. Eval with `rtc_inference_mode="trained"` and various
-      `rtc_inference_delay` values.
-   3. Confirm graceful degradation as delay increases (paper Table 4
-      pattern).
-   4. Repeat with `guided-approx` mode (see §8) to validate the
-      identity-Jacobian shortcut for export.
-6. **MT-as-deployment ablation** (paper gap — interesting to measure):
-   1. Pull `RLWRLD/RLDX-1-MT-ALLEX` and `RLWRLD/RLDX-1-FT-SIMPLER-WIDOWX`.
-   2. Pick a benchmark in PAS that overlaps both checkpoints' supported
-      embodiments — realistically only **SimplerEnv WidowX-style
-      single-arm pick-and-place**, since ALLEX has no public sim.
-   3. Best feasible substitute: run `MT-DROID` (FR3 single-arm) through
-      a Franka-compatible sim if/when we vendor one, vs `FT-SIMPLER-WIDOWX`.
-   4. Goal: measure how much SR is lost by deploying the mid-trained
-      checkpoint directly vs post-training first. The paper never reports
-      this; an answer would inform whether MT-only deployment is viable
-      for users without per-task data.
-   5. Defer until §7.3 steps 2 + 3 are green — this is a research bonus,
-      not a release gate.
+5. **Train-from-PT smoke** — end-to-end recipe validation:
+   1. `Rldx1.from_pretrained("RLWRLD/RLDX-1-PT")`, freeze vision + LLM
+      except top-4, attach action-LoRA r=64.
+   2. Run 500 `trainer.fit()` steps on a small LeRobot dataset (LIBERO
+      goal subset or a SO-101 sample).
+   3. Verify: loss decreases, no NaN, checkpoint saves + reloads, single
+      `predict_action_chunk` post-train returns sane action shape.
+   *This is the only step that actually exercises the new training
+   plumbing \u2014 steps 1\u20134 are pure inference.*
+
+Phase-2 validation steps (deferred — kept for reference):
+
+- **ALLEX smoke test** — load `RLWRLD/RLDX-1-MT-ALLEX` with
+  `use_memory=use_motion=use_physics=True`, verify state-dict map,
+  shapes, and gradient flow.
+- **LIBERO RTC retrain** — train with `rtc_training_max_delay=4`,
+  validate `rtc_inference_mode="trained"` degradation curve. Optional
+  identity-Jacobian (`guided-approx`) check for export.
+- **MT-as-deployment ablation** — measure SR gap between
+  `RLDX-1-MT-DROID` deployed directly and a `FT-*` of the same task.
+  Paper never reports this number.
 
 ---
 
@@ -860,10 +882,12 @@ has no OV/ONNX analogue and does not need one.
 
 ## Validation checklist (in execution order)
 
+**v1 — PT → FT only:**
+
 1. ✅ License posture documented (this file + [rldx-1.md](rldx-1.md) verdict).
 2. ⬜ Reproduce paper SimplerEnv WidowX score (69.5–72%) inside RLDX-1 repo
    to lock the baseline.
-3. ⬜ Land `Rldx1` Studio package per §4 with `use_memory = use_motion = use_physics = False`.
+3. ⬜ Land `Rldx1` Studio package per §4 (v1 layout — no memory / motion / physics components).
 4. ⬜ Load `RLWRLD/RLDX-1-PT` into `Rldx1` and verify per-tensor weight match
    (allow renames; reject shape mismatches).
 5. ⬜ Smoke train: BC fine-tune on a 1 K-step LIBERO subset; loss curve sane.
@@ -872,33 +896,45 @@ has no OV/ONNX analogue and does not need one.
 7. ⬜ **WidowX parity** (per §7.3 step 2): `Rldx1` + `RLDX-1-FT-SIMPLER-WIDOWX`
     through PAS benchmark on SimplerEnv; expect mean ≥ 67 % across 4
     tasks × 200 episodes. **Locks base-architecture integration.**
-8. ⬜ Add `use_motion=True` path, train on small video dataset, validate
-    parity with upstream within a fixed-seed run.
-9. ⬜ Add `use_memory=True` + the multi-stride `delta_timestamps` config
-    (reading from `memory_video_delta_indices`, not derived from
-    `action_horizon`); validate the memory queue is filled correctly via
-    a unit test on a synthetic episode.
-10. ⬜ **ALLEX smoke test** (per §7.3 step 3): `RLDX-1-MT-ALLEX` loads
-     into `Rldx1` with all three add-ons on; `predict_action_chunk`
-     returns `(B, 40, D)`, no NaN; every checkpoint tensor binds; gradient
-     flows through memory / motion / physics streams on a dummy loss.
-     **Locks the add-on subsystems.**
-11. ⬜ Add RTC training (`rtc_training_max_delay=4`) on LIBERO, verify
-     loss decreases similarly to the non-RTC baseline (sanity check, not
-     parity).
-12. ⬜ Eval RTC-trained LIBERO checkpoint with `rtc_inference_mode ∈
-     {none, trained, guided-approx}`; confirm graceful degradation as
-     `inference_delay` grows (paper Table 4 pattern).
-13. ⬜ Export `Rldx1` (no add-ons) to OpenVINO via
-     `ExportablePolicyMixin`. Run on Intel iGPU + dGPU; measure latency.
-14. ⬜ Repeat OV export with `use_memory=True` and the new manifest runner
-     type (`action_chunking_with_memory`). Validate the session queue
-     survives across `select_action()` calls.
-15. ⬜ (Optional) **GR1 parity** (per §7.3 step 4): vendor
+8. ⬜ **LIBERO parity** (per §7.3 step 3): `RLDX-1-FT-LIBERO` through our
+    LIBERO gym; expect paper Table 1 ± 3 pts. Also exercises the
+    add-on-fields-explicitly-off schema variant in the loader.
+9. ⬜ **Train-from-PT smoke** (per §7.3 step 5): 500-step fine-tune from
+    `RLDX-1-PT` with action-LoRA r=64; loss decreases, checkpoint round-trips.
+10. ⬜ Export `Rldx1` to OpenVINO via `ExportablePolicyMixin`
+     (`merge_and_unload()` PEFT first per §5.3). Run on Intel iGPU + dGPU;
+     measure latency.
+11. ⬜ (Optional) **GR1 parity** (per §7.3 step 4): vendor
      `robocasa-gr1-tabletop-tasks`, run `RLDX-1-FT-GR1`, expect paper
      mean ± 3 pts. Only chase if WidowX shows unexplained drift.
-16. ⬜ Phase 2: RECAP RL post-training (see §6 — punted).
-17. ⬜ Phase 2: Physics stream training data (FR3 AnySkin or ALLEX
+
+**Phase 2 — MT / RTC / add-on streams (deferred):**
+
+12. ⬜ Add `use_motion=True` path, train on small video dataset, validate
+     parity with upstream within a fixed-seed run.
+13. ⬜ Add `use_memory=True` + the multi-stride `delta_timestamps` config
+     (reading from `memory_video_delta_indices`, not derived from
+     `action_horizon`); validate the memory queue is filled correctly via
+     a unit test on a synthetic episode.
+14. ⬜ **ALLEX smoke test**: `RLDX-1-MT-ALLEX` loads into `Rldx1` with all
+     three add-ons on; `predict_action_chunk` returns `(B, 40, D)`,
+     no NaN; every checkpoint tensor binds; gradient flows through
+     memory / motion / physics streams on a dummy loss. **Locks the
+     add-on subsystems.**
+15. ⬜ Add `new_param_warmup_steps` Lightning callback + retrain a small
+     MT run on a public mixture (DROID slice + a small in-house substitute);
+     loss curve sane.
+16. ⬜ Add RTC training (`rtc_training_max_delay=4`) on LIBERO, verify
+     loss decreases similarly to the non-RTC baseline (sanity check, not
+     parity).
+17. ⬜ Eval RTC-trained LIBERO checkpoint with `rtc_inference_mode ∈
+     {none, trained, guided-approx}`; confirm graceful degradation as
+     `inference_delay` grows (paper Table 4 pattern).
+18. ⬜ Repeat OV export with `use_memory=True` and the new manifest runner
+     type (`action_chunking_with_memory`). Validate the session queue
+     survives across `select_action()` calls.
+19. ⬜ RECAP RL post-training (see §6 — punted).
+20. ⬜ Physics stream training data (FR3 AnySkin or ALLEX
      tactile — requires a public dataset path).
 
 ---

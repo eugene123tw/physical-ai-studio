@@ -4,6 +4,14 @@ Wrapper for the [RoboCasa Kitchen](https://github.com/robocasa/robocasa) benchma
 Ported from `lerobot/src/lerobot/envs/robocasa.py` with PAS-native types and the lerobot
 `AsyncVectorEnv` plumbing removed.
 
+## Scope
+
+Current implementation is **RoboCasa Kitchen-only** (robocasa v1.0 task groups and named kitchen tasks).
+It does **not** implement the full RoboCasa365 benchmark surface.
+
+This is intentional: RoboCasa365 asset footprint and setup/runtime cost are much larger than the
+Kitchen subset, so we keep CI and local development on the smaller Kitchen path first.
+
 ## Why a separate venv
 
 RoboCasa is **not** a `pyproject.toml` extra. The unified uv resolve is unsolvable:
@@ -144,6 +152,45 @@ The paper benchmark used 24 tasks; robocasa v1.0 renamed/merged some of them.
 | ❌ dropped | 1     | `CoffeePressButton` — no v1.0 equivalent                       |
 
 Use `atomic_seen` for smoke-testing; use the 19 ✅ tasks for paper parity runs.
+
+## Future: RoboCasa365 support plan
+
+To extend from Kitchen-only to RoboCasa365, keep the current API stable and add capability in layers:
+
+1. **Asset/profile layering**
+
+   - Add explicit install profiles in `install_robocasa.sh` (for example: `kitchen`, `robocasa365`).
+   - Keep `kitchen` as the default profile.
+   - Add profile-specific download commands and disk-size estimates in this doc.
+
+2. **Task catalog separation**
+
+   - Add a versioned task catalog module for RoboCasa365 task groups.
+   - Keep Kitchen mappings in `_TASK_GROUP_SPLITS` and add a parallel mapping for 365 groups.
+   - Expose a strict validation error when a 365 group is requested but 365 assets are not installed.
+
+3. **Config surface extension (backward compatible)**
+
+   - Add an optional benchmark selector (for example `benchmark="kitchen" | "robocasa365"`).
+   - Default remains `kitchen` so existing users are unaffected.
+   - Keep `RoboCasaGym(task=...)` behavior unchanged for Kitchen users.
+
+4. **Resource-aware CI strategy**
+
+   - Keep existing `integration-tests-robocasa` as Kitchen-only.
+   - Add a separate, non-required RoboCasa365 nightly workflow (or manually triggered workflow) to avoid
+     blocking regular PR latency with large downloads.
+   - Cache heavy assets/artifacts aggressively and pin SHAs for reproducibility.
+
+5. **Validation matrix**
+
+   - Add unit tests for 365 task resolution and split mapping.
+   - Add one smoke E2E task for RoboCasa365 first, then expand coverage gradually.
+   - Publish a parity table similar to the Paper-24 section once a stable 365 subset is defined.
+
+6. **Docs and migration notes**
+   - Document asset requirements, expected setup time, and minimum hardware.
+   - Add clear guidance on choosing Kitchen vs RoboCasa365 depending on use case (CI, local dev, full benchmark).
 
 ## CI
 

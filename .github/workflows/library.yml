@@ -177,6 +177,9 @@ jobs:
         env:
           # Headless rendering for MuJoCo/OpenGL (must be set before any imports)
           MUJOCO_GL: egl
+          # Avoid robosuite defaulting to device_id=-1, which can fail EGL init
+          # on some GPU runners.
+          MUJOCO_EGL_DEVICE_ID: "0"
           PYOPENGL_PLATFORM: egl
           # Force GLVND to dispatch EGL to the NVIDIA vendor driver. Mesa's EGL does
           # not support EGL_EXT_platform_device, which MuJoCo's EGL backend needs for
@@ -233,6 +236,9 @@ jobs:
         working-directory: library
         env:
           MUJOCO_GL: egl
+          # Avoid robosuite defaulting to device_id=-1, which can fail EGL init
+          # on some GPU runners.
+          MUJOCO_EGL_DEVICE_ID: "0"
           PYOPENGL_PLATFORM: egl
           __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/10_nvidia.json
         run: |

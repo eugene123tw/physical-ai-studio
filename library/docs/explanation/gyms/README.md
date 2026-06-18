@@ -7,7 +7,7 @@ Simulation environments for policy evaluation.
 - [base.py](base.md) — abstract Gym API
 - [gymnasium_gym.py](gymnasium_gym.md) — Gymnasium backend adapter
 - [libero.py](libero.md) — LIBERO benchmark wrapper
-- [robocasa.py](robocasa.md) — RoboCasa Kitchen wrapper (separate venv, see doc)
+- [robocasa.py](robocasa.md) — RoboCasa Kitchen-only wrapper (future RoboCasa365 plan documented)
 - [pusht.py](pusht.md) — PushT environment wrapper
 - [types.py](types.md) — shared type aliases
 - [step_limit.py](step_limit.md) — termination wrapper

@@ -18,6 +18,10 @@ import pytest
 pytest.importorskip("robocasa")
 pytest.importorskip("robosuite")
 
+pytestmark = pytest.mark.skip(
+    reason="Temporarily disabled in CI while RoboCasa GPU/EGL runner issues are investigated."
+)
+
 from physicalai.gyms.robocasa import (  # noqa: E402
     ACTION_DIM,
     DEFAULT_CAMERAS,

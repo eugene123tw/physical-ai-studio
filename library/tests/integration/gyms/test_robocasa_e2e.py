@@ -29,7 +29,13 @@ from physicalai.gyms.robocasa import (  # noqa: E402
     RoboCasaGym,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.slow]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.slow,
+    pytest.mark.skip(
+        reason="Temporarily disabled in CI while RoboCasa GPU/EGL runner issues are investigated."
+    ),
+]
 
 
 @pytest.fixture

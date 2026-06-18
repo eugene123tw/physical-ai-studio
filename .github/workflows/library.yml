@@ -159,7 +159,7 @@ jobs:
       - name: Install system dependencies for headless rendering
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev cmake ffmpeg xvfb gcc
+          sudo apt-get install -y libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev mesa-utils-extra cmake ffmpeg xvfb gcc
 
       - *set-up-uv
 
@@ -172,14 +172,41 @@ jobs:
         run: |
           uv sync --frozen --extra tests --extra pi05 --extra libero --extra smolvla --extra cu128
 
+      - name: Verify GPU and EGL availability
+        working-directory: library
+        env:
+          MUJOCO_GL: egl
+          PYOPENGL_PLATFORM: egl
+          __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+        run: |
+          set -euo pipefail
+          echo "Checking NVIDIA visibility"
+          nvidia-smi
+
+          echo "Checking EGL vendor ICD file"
+          test -f /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+
+          echo "Checking EGL runtime via eglinfo"
+          eglinfo --display egl || true
+
+          echo "Checking EGL device enumeration from Python"
+          uv run --no-sync python - <<'PY'
+          from OpenGL import EGL
+
+          devices = EGL.eglQueryDevicesEXT()
+          print(f"EGL devices found: {len(devices)}")
+          if len(devices) == 0:
+              raise SystemExit(
+                  "No EGL devices detected. GPU is not exposed to this runner/job. "
+                  "Fix runner GPU/EGL runtime instead of running MuJoCo tests."
+              )
+          PY
+
       - name: Run python integration tests
         working-directory: library
         env:
           # Headless rendering for MuJoCo/OpenGL (must be set before any imports)
           MUJOCO_GL: egl
-          # Avoid robosuite defaulting to device_id=-1, which can fail EGL init
-          # on some GPU runners.
-          MUJOCO_EGL_DEVICE_ID: "0"
           PYOPENGL_PLATFORM: egl
           # Force GLVND to dispatch EGL to the NVIDIA vendor driver. Mesa's EGL does
           # not support EGL_EXT_platform_device, which MuJoCo's EGL backend needs for
@@ -204,7 +231,7 @@ jobs:
       - name: Install system dependencies for headless rendering
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev cmake ffmpeg xvfb gcc
+          sudo apt-get install -y libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev mesa-utils-extra cmake ffmpeg xvfb gcc
 
       - *set-up-uv
 
@@ -225,6 +252,38 @@ jobs:
           source .venv-robocasa/bin/activate
           bash scripts/install_robocasa.sh
 
+      - name: Verify GPU and EGL availability (RoboCasa)
+        working-directory: library
+        env:
+          MUJOCO_GL: egl
+          PYOPENGL_PLATFORM: egl
+          __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+        run: |
+          set -euo pipefail
+          source .venv-robocasa/bin/activate
+
+          echo "Checking NVIDIA visibility"
+          nvidia-smi
+
+          echo "Checking EGL vendor ICD file"
+          test -f /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+
+          echo "Checking EGL runtime via eglinfo"
+          eglinfo --display egl || true
+
+          echo "Checking EGL device enumeration from Python"
+          python - <<'PY'
+          from OpenGL import EGL
+
+          devices = EGL.eglQueryDevicesEXT()
+          print(f"EGL devices found: {len(devices)}")
+          if len(devices) == 0:
+              raise SystemExit(
+                  "No EGL devices detected. GPU is not exposed to this runner/job. "
+                  "Fix runner GPU/EGL runtime instead of running RoboCasa tests."
+              )
+          PY
+
       - name: Run RoboCasa unit gym tests
         working-directory: library
         run: |
@@ -242,9 +301,6 @@ jobs:
         working-directory: library
         env:
           MUJOCO_GL: egl
-          # Avoid robosuite defaulting to device_id=-1, which can fail EGL init
-          # on some GPU runners.
-          MUJOCO_EGL_DEVICE_ID: "0"
           PYOPENGL_PLATFORM: egl
           __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/10_nvidia.json
         run: |

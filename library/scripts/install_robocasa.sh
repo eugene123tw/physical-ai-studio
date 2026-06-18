@@ -63,7 +63,13 @@ uv pip install --no-cache \
     pygame Pillow opencv-python pyyaml pynput tqdm termcolor \
     imageio h5py lxml hidapi "gymnasium>=0.29.1"
 
-python -m robocasa.scripts.setup_macros
+ROBOCASA_MACROS_PRIVATE="$CLONE_ROOT/robocasa/robocasa/macros_private.py"
+if [[ -f "$ROBOCASA_MACROS_PRIVATE" ]]; then
+    echo "robocasa macros already configured at $ROBOCASA_MACROS_PRIVATE; skipping setup_macros."
+else
+    # Keep setup non-interactive for CI.
+    yes y | python -m robocasa.scripts.setup_macros
+fi
 
 echo
 echo "robocasa + robosuite installed."

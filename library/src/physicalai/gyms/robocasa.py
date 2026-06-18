@@ -76,6 +76,7 @@ _ROBOCASA_IMPORT_ERROR: str | None = None
 
 try:
     import robocasa  # noqa: F401
+    import robosuite  # noqa: F401
 
     _ROBOCASA_AVAILABLE = True
 except ImportError as e:
@@ -149,8 +150,9 @@ def _resolve_tasks(task: str) -> tuple[list[str], str | None]:
 
     If ``task`` is a known group keyword (e.g. ``atomic_seen``,
     ``pretrain100``), expand it via ``robocasa.utils.dataset_registry``
-    and return the matching split. Otherwise treat ``task`` as a single
-    task or comma-separated list and leave the split untouched (``None``).
+    and return the matching split. Otherwise treat ``task`` as an explicit
+    task name (or comma-separated list) and leave the split untouched
+    (``None``).
 
     Args:
         task: Group keyword or one-or-more comma-separated task names.
@@ -159,7 +161,8 @@ def _resolve_tasks(task: str) -> tuple[list[str], str | None]:
         Tuple of ``(list[task_name], split_or_None)``.
 
     Raises:
-        ValueError: If ``task`` is empty or names an unknown task group.
+        ValueError: If ``task`` is empty, or if it is a recognized group
+            keyword but missing from the installed robocasa registry.
     """
     key = task.strip()
 
@@ -460,15 +463,15 @@ class RoboCasaGym(Gym):
             ``(Observation, reward, terminated, truncated, info)``.
 
         Raises:
-            ValueError: If ``action`` is not 1-D.
+            ValueError: If ``action`` is not 1-D or has the wrong length.
         """
         self._ensure_env()
 
         if isinstance(action, torch.Tensor):
             action = action.detach().cpu().numpy()
 
-        if action.ndim != 1:
-            msg = f"Expected 1-D action (shape ({ACTION_DIM},)), got shape {action.shape}"
+        if action.ndim != 1 or action.shape[0] != ACTION_DIM:
+            msg = f"Expected 1-D action shape ({ACTION_DIM},), got shape {action.shape}"
             raise ValueError(msg)
 
         action_dict = convert_action(action)

@@ -31,7 +31,7 @@ uv sync --extra cu128          # or cpu / xpu — do NOT use --extra all or --ex
 
 bash library/scripts/install_robocasa.sh
 
-# Download kitchen assets (~2 GB lightweight set; prompts interactively)
+# Download kitchen assets (~4.4 GB on disk; prompts interactively)
 yes y | python -m robocasa.scripts.download_kitchen_assets \
     --type tex tex_generative fixtures_lw objs_lw
 
@@ -66,7 +66,7 @@ gyms = create_robocasa_gyms(tasks="atomic_seen")
 
 ```python
 RoboCasaGym(
-    task: str,                          # task name or group keyword (see below)
+   task: str,                          # single named RoboCasa task (e.g. "CloseFridge")
     camera_names: Sequence[str] | None, # default: DEFAULT_CAMERAS
     obs_type: str,                      # "pixels" | "pixels_agent_pos" (default)
     render_mode: str,                   # "rgb_array" (default)
@@ -78,7 +78,15 @@ RoboCasaGym(
 )
 ```
 
-**`task` values:**
+**`task` values for `RoboCasaGym`:**
+
+| Value                     | Resolves to                                   |
+| ------------------------- | --------------------------------------------- |
+| `"TaskName"` or `"T1,T2"` | explicit names, split `None` (auto = `"all"`) |
+
+Task-group keywords are expanded by `create_robocasa_gyms(...)`, not by `RoboCasaGym(...)`.
+
+**task-group values for `create_robocasa_gyms(tasks=...)`:**
 
 | Value                            | Resolves to                            |
 | -------------------------------- | -------------------------------------- |
@@ -86,7 +94,6 @@ RoboCasaGym(
 | `"composite_seen"`               | composite tasks, split `"target"`      |
 | `"composite_unseen"`             | composite tasks, split `"target"`      |
 | `"pretrain50"` … `"pretrain300"` | pretrain partition, split `"pretrain"` |
-| `"TaskName"` or `"T1,T2"`        | explicit names, split `None` (auto)    |
 
 **Observation:**
 

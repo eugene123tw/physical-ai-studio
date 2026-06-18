@@ -190,3 +190,27 @@ class TestCreateRobocasaGyms:
         """An empty list raises before instantiating any gym."""
         with pytest.raises(ValueError, match="at least one"):
             create_robocasa_gyms([])
+
+
+class TestStepValidation:
+    """Validate ``RoboCasaGym.step`` action-shape checks."""
+
+    def test_step_rejects_wrong_length_1d_action(self):
+        """A 1-D action with incorrect length raises ``ValueError``."""
+
+        class _SentinelEnv:
+            def step(self, _action):
+                msg = "step() should not be called for invalid action shapes"
+                raise AssertionError(msg)
+
+            def close(self):
+                return None
+
+        gym = RoboCasaGym(task="CloseFridge")
+        try:
+            # Avoid constructing MuJoCo; shape validation should fail first.
+            gym._env = _SentinelEnv()
+            with pytest.raises(ValueError, match=r"Expected 1-D action shape"):
+                gym.step(np.zeros(ACTION_DIM - 1, dtype=np.float32))
+        finally:
+            gym.close()

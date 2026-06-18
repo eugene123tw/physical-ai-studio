@@ -225,6 +225,12 @@ jobs:
           source .venv-robocasa/bin/activate
           bash scripts/install_robocasa.sh
 
+      - name: Run RoboCasa unit gym tests
+        working-directory: library
+        run: |
+          source .venv-robocasa/bin/activate
+          python -m pytest tests/unit/gyms/test_robocasa.py
+
       - name: Download RoboCasa kitchen assets
         working-directory: library
         run: |

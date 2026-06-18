@@ -3,12 +3,34 @@
 
 """Application configuration management"""
 
+import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def get_default_storage_dir() -> Path:
+    """Return the platform-appropriate directory for persistent app data."""
+    if sys.platform == "darwin":
+        return Path("~/Library/Application Support/physicalai").expanduser()
+
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            return Path(local_app_data).expanduser() / "physicalai"
+        return Path("~/AppData/Local/physicalai").expanduser()
+
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    if xdg_data_home:
+        xdg_data_home_path = Path(xdg_data_home).expanduser()
+        if xdg_data_home_path.is_absolute():
+            return xdg_data_home_path / "physicalai"
+
+    return Path("~/.local/share/physicalai").expanduser()
 
 
 class Settings(BaseSettings):
@@ -28,8 +50,14 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False, alias="DEBUG")
     environment: Literal["dev", "prod"] = "dev"
     data_dir: Path = Field(default=Path("data"), alias="DATA_DIR")
-    storage_dir: Path = Field(default=Path("~/.cache/physicalai").expanduser(), alias="STORAGE_DIR")
+    storage_dir: Path = Field(default_factory=get_default_storage_dir, alias="STORAGE_DIR")
     static_files_dir: str | None = Field(default=None, alias="STATIC_FILES_DIR")
+
+    @field_validator("storage_dir", mode="before")
+    @classmethod
+    def expand_storage_dir(cls, value: Path | str) -> Path:
+        """Expand user-provided storage directories like ~/.local/share."""
+        return Path(value).expanduser()
 
     # Data import/upload safety (shared for dataset/model/project imports)
     data_import_max_uncompressed_bytes: int = Field(
@@ -88,8 +116,8 @@ class Settings(BaseSettings):
     db_echo: bool = Field(default=False, alias="DB_ECHO")
 
     # Alembic
-    alembic_config_path: str = "src/alembic.ini"
-    alembic_script_location: str = "src/alembic"
+    alembic_config_path: str = Field(default="src/alembic.ini", alias="ALEMBIC_CONFIG_PATH")
+    alembic_script_location: str = Field(default="src/alembic", alias="ALEMBIC_SCRIPT_LOCATION")
 
     # Proxy settings
     no_proxy: str = Field(default="localhost,127.0.0.1,::1", alias="no_proxy")

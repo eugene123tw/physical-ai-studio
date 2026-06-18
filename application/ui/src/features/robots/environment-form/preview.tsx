@@ -4,6 +4,7 @@ import { Content, Flex, Heading, IllustratedMessage, Loading, Text, View } from 
 import { DockviewApi, IDockviewPanelProps } from 'dockview';
 import { DockviewReact, DockviewReadyEvent, IDockviewReactProps } from 'dockview-react';
 
+import { physicalAiTheme } from '../../dockview';
 import { ReactComponent as RobotIllustration } from './../../../assets/illustrations/INTEL_08_NO-TESTS.svg';
 import { CameraCell } from './cells/camera-cell';
 import { RobotCell } from './cells/robot-cell';
@@ -51,7 +52,7 @@ const buildDockviewPanels = (api: DockviewReadyEvent['api'], environment: Enviro
 
     const panels = new Set<string>();
 
-    environment.camera_ids.forEach((camera_id, idx) => {
+    environment.cameras.forEach(({ camera_id }, idx) => {
         panels.add(camera_id);
         if (!api.panels.some((panel) => panel.id === camera_id)) {
             api.addPanel({
@@ -131,7 +132,7 @@ const ActualPreview = () => {
         buildDockviewPanels(api.current, environment);
     }, [environment]);
 
-    return <DockviewReact onReady={onReady} components={components} />;
+    return <DockviewReact onReady={onReady} components={components} theme={physicalAiTheme} />;
 };
 
 const CenteredLoading = () => {
@@ -146,7 +147,7 @@ export const Preview = () => {
     const environment = useEnvironmentForm();
 
     const hasRobots = environment.robots.length > 0;
-    const hasCameras = environment.camera_ids.length > 0;
+    const hasCameras = environment.cameras.length > 0;
 
     if (hasRobots || hasCameras) {
         return (

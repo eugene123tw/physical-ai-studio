@@ -43,7 +43,7 @@ Note:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 import torch
@@ -65,19 +65,21 @@ __all__ = [
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+
 logger = logging.getLogger(__name__)
 
-# Optional imports - check at runtime
+# Optional imports - checked at runtime.
+# Imports are deferred to call sites (guarded by _check_robocasa_available) to
+# keep the top-level import clean when robocasa is not installed.
 _ROBOCASA_AVAILABLE = False
 _ROBOCASA_IMPORT_ERROR: str | None = None
 
 try:
-    from robocasa.wrappers.gym_wrapper import RoboCasaGymEnv
+    import robocasa  # noqa: F401
 
     _ROBOCASA_AVAILABLE = True
 except ImportError as e:
     _ROBOCASA_IMPORT_ERROR = str(e)
-    RoboCasaGymEnv = None  # type: ignore[assignment, misc]
 
 
 def _check_robocasa_available() -> None:
@@ -163,14 +165,11 @@ def _resolve_tasks(task: str) -> tuple[list[str], str | None]:
 
     if key in _TASK_GROUP_SPLITS:
         _check_robocasa_available()
-        from robocasa.utils.dataset_registry import PRETRAINING_TASKS, TARGET_TASKS
+        from robocasa.utils.dataset_registry import PRETRAINING_TASKS, TARGET_TASKS  # noqa: PLC0415
 
         combined = {**TARGET_TASKS, **PRETRAINING_TASKS}
         if key not in combined:
-            msg = (
-                f"Task group '{key}' is not available in this version of robocasa. "
-                f"Known groups: {sorted(combined)}."
-            )
+            msg = f"Task group '{key}' is not available in this version of robocasa. Known groups: {sorted(combined)}."
             raise ValueError(msg)
         return list(combined[key]), _TASK_GROUP_SPLITS[key]
 
@@ -217,7 +216,7 @@ class RoboCasaGym(Gym):
         torch.Size([1, 16])
     """
 
-    metadata: dict[str, Any] = {"render_modes": ["rgb_array"], "render_fps": 20}
+    metadata: ClassVar[dict[str, Any]] = {"render_modes": ["rgb_array"], "render_fps": 20}
 
     def __init__(
         self,
@@ -322,6 +321,8 @@ class RoboCasaGym(Gym):
         """Create the underlying ``RoboCasaGymEnv`` on first use."""
         if self._env is not None:
             return
+
+        from robocasa.wrappers.gym_wrapper import RoboCasaGymEnv  # noqa: PLC0415
 
         # `RoboCasaGymEnv` defaults split="test", which `create_env`
         # rejects. Always pass a valid value.
@@ -590,6 +591,3 @@ def create_robocasa_gyms(
 
     logger.info("Created %d RoboCasa gym(s) | split=%s | tasks=%s", len(gyms), effective_split, task_names)
     return gyms
-
-
-

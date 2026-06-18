@@ -72,25 +72,25 @@ RoboCasaGym(
 
 **`task` values:**
 
-| Value | Resolves to |
-|---|---|
-| `"atomic_seen"` | 18 v1.0 atomic tasks, split `"target"` |
-| `"composite_seen"` | composite tasks, split `"target"` |
-| `"composite_unseen"` | composite tasks, split `"target"` |
+| Value                            | Resolves to                            |
+| -------------------------------- | -------------------------------------- |
+| `"atomic_seen"`                  | 18 v1.0 atomic tasks, split `"target"` |
+| `"composite_seen"`               | composite tasks, split `"target"`      |
+| `"composite_unseen"`             | composite tasks, split `"target"`      |
 | `"pretrain50"` … `"pretrain300"` | pretrain partition, split `"pretrain"` |
-| `"TaskName"` or `"T1,T2"` | explicit names, split `None` (auto) |
+| `"TaskName"` or `"T1,T2"`        | explicit names, split `None` (auto)    |
 
 **Observation:**
 
 `reset()` and `step()` return `physicalai.data.observation.Observation`:
 
-| Field | Shape | dtype | Notes |
-|---|---|---|---|
-| `images["robot0_agentview_left"]` | `(1, 3, H, W)` | `float32` | normalized to `[0, 1]` |
-| `images["robot0_agentview_right"]` | `(1, 3, H, W)` | `float32` | |
-| `images["robot0_eye_in_hand"]` | `(1, 3, H, W)` | `float32` | |
-| `state` | `(1, 16)` | `float32` | base_pos(3)+base_quat(4)+ee_pos_rel(3)+ee_quat_rel(4)+gripper(2) |
-| `task` | `list[str]` length 1 | | language description |
+| Field                              | Shape                | dtype     | Notes                                                            |
+| ---------------------------------- | -------------------- | --------- | ---------------------------------------------------------------- |
+| `images["robot0_agentview_left"]`  | `(1, 3, H, W)`       | `float32` | normalized to `[0, 1]`                                           |
+| `images["robot0_agentview_right"]` | `(1, 3, H, W)`       | `float32` |                                                                  |
+| `images["robot0_eye_in_hand"]`     | `(1, 3, H, W)`       | `float32` |                                                                  |
+| `state`                            | `(1, 16)`            | `float32` | base_pos(3)+base_quat(4)+ee_pos_rel(3)+ee_quat_rel(4)+gripper(2) |
+| `task`                             | `list[str]` length 1 |           | language description                                             |
 
 Camera names are raw RoboCasa v1.0 names. Per-policy renames go through a policy-side adapter, not here.
 
@@ -112,12 +112,12 @@ Returns one `RoboCasaGym` per task name.
 
 ### Module-level constants
 
-| Name | Value | Notes |
-|---|---|---|
-| `OBS_STATE_DIM` | `16` | proprioceptive state dimension |
-| `ACTION_DIM` | `12` | flat action dimension |
-| `DEFAULT_CAMERAS` | `("robot0_agentview_left", "robot0_eye_in_hand", "robot0_agentview_right")` | |
-| `DEFAULT_OBJ_REGISTRIES` | `("lightwheel",)` | avoids objaverse NaN crash |
+| Name                     | Value                                                                       | Notes                          |
+| ------------------------ | --------------------------------------------------------------------------- | ------------------------------ |
+| `OBS_STATE_DIM`          | `16`                                                                        | proprioceptive state dimension |
+| `ACTION_DIM`             | `12`                                                                        | flat action dimension          |
+| `DEFAULT_CAMERAS`        | `("robot0_agentview_left", "robot0_eye_in_hand", "robot0_agentview_right")` |                                |
+| `DEFAULT_OBJ_REGISTRIES` | `("lightwheel",)`                                                           | avoids objaverse NaN crash     |
 
 ## Known upstream gotchas
 
@@ -137,11 +137,11 @@ Three bugs from the lerobot port are already encoded as workarounds:
 
 The paper benchmark used 24 tasks; robocasa v1.0 renamed/merged some of them.
 
-| Status | Count | Meaning |
-|---|---|---|
-| ✅ direct | 19 | Exact v1.0 class name; compare 1:1 to paper SR |
-| 🟡 proxy | 4 | Door tasks merged into `OpenCabinet` / `CloseCabinet` families |
-| ❌ dropped | 1 | `CoffeePressButton` — no v1.0 equivalent |
+| Status     | Count | Meaning                                                        |
+| ---------- | ----- | -------------------------------------------------------------- |
+| ✅ direct  | 19    | Exact v1.0 class name; compare 1:1 to paper SR                 |
+| 🟡 proxy   | 4     | Door tasks merged into `OpenCabinet` / `CloseCabinet` families |
+| ❌ dropped | 1     | `CoffeePressButton` — no v1.0 equivalent                       |
 
 Use `atomic_seen` for smoke-testing; use the 19 ✅ tasks for paper parity runs.
 

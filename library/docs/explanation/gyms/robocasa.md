@@ -66,15 +66,15 @@ gyms = create_robocasa_gyms(tasks="atomic_seen")
 
 ```python
 RoboCasaGym(
-   task: str,                          # single named RoboCasa task (e.g. "CloseFridge")
-    camera_names: Sequence[str] | None, # default: DEFAULT_CAMERAS
-    obs_type: str,                      # "pixels" | "pixels_agent_pos" (default)
-    render_mode: str,                   # "rgb_array" (default)
-    observation_height: int,            # default 256
-    observation_width: int,             # default 256
-    split: str | None,                  # overrides auto-resolved split
-    episode_length: int | None,         # MuJoCo horizon
-    obj_registries: Sequence[str],      # default ("lightwheel",)
+   task: str,                          # single task name (use create_robocasa_gyms for group keywords)
+   camera_names: Sequence[str] | None, # default: DEFAULT_CAMERAS
+   obs_type: str,                      # "pixels" | "pixels_agent_pos" (default)
+   render_mode: str,                   # "rgb_array" (default)
+   observation_height: int,            # default 256
+   observation_width: int,             # default 256
+   split: str | None,                  # overrides auto-resolved split
+   episode_length: int | None,         # MuJoCo horizon
+   obj_registries: Sequence[str],      # default ("lightwheel",)
 )
 ```
 

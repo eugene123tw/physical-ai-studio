@@ -38,6 +38,17 @@ if [[ -z "${VIRTUAL_ENV:-}" ]]; then
     exit 1
 fi
 
+if python -c "import libero" 2>/dev/null; then
+    echo "error: libero is installed in the active environment." >&2
+    echo "This script installs robosuite master (1.5dev), which conflicts with" >&2
+    echo "libero's pinned robosuite==1.4.0. Use a separate venv for robocasa." >&2
+    echo "  uv venv .venv-robocasa" >&2
+    echo "  source .venv-robocasa/bin/activate" >&2
+    echo "  uv sync --active --extra cu128  # or --extra cpu / --extra xpu" >&2
+    echo "  bash library/scripts/install_robocasa.sh" >&2
+    exit 1
+fi
+
 mkdir -p "$CLONE_ROOT"
 
 if [[ ! -d "$CLONE_ROOT/robocasa" ]]; then

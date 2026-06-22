@@ -167,7 +167,6 @@ def _resolve_tasks(task: str) -> tuple[list[str], str | None]:
     key = task.strip()
 
     if key in _TASK_GROUP_SPLITS:
-        _check_robocasa_available()
         from robocasa.utils.dataset_registry import PRETRAINING_TASKS, TARGET_TASKS  # noqa: PLC0415
 
         combined = {**TARGET_TASKS, **PRETRAINING_TASKS}

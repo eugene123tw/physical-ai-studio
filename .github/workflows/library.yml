@@ -187,9 +187,6 @@ jobs:
   integration-tests-robocasa:
     runs-on: [self-hosted, Linux, X64, gpu]
     needs: check-paths
-    # Temporarily disable RoboCasa lane (unit + e2e) until runner NVIDIA/NVML
-    # driver/library mismatch is fixed.
-    if: false
     permissions:
       contents: read
     steps:

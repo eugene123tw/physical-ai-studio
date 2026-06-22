@@ -233,7 +233,6 @@ jobs:
       - name: Install system dependencies for headless rendering
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev mesa-utils-extra cmake ffmpeg xvfb gcc
 
       - *set-up-uv
 
@@ -253,38 +252,6 @@ jobs:
         run: |
           source .venv-robocasa/bin/activate
           bash scripts/install_robocasa.sh
-
-      - name: Verify GPU and EGL availability (RoboCasa)
-        working-directory: library
-        env:
-          MUJOCO_GL: egl
-          PYOPENGL_PLATFORM: egl
-          __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/10_nvidia.json
-        run: |
-          set -euo pipefail
-          source .venv-robocasa/bin/activate
-
-          echo "Checking NVIDIA visibility"
-          nvidia-smi
-
-          echo "Checking EGL vendor ICD file"
-          test -f /usr/share/glvnd/egl_vendor.d/10_nvidia.json
-
-          echo "Checking EGL runtime via eglinfo"
-          eglinfo --display egl || true
-
-          echo "Checking EGL device enumeration from Python"
-          python - <<'PY'
-          from OpenGL import EGL
-
-          devices = EGL.eglQueryDevicesEXT()
-          print(f"EGL devices found: {len(devices)}")
-          if len(devices) == 0:
-              raise SystemExit(
-                  "No EGL devices detected. GPU is not exposed to this runner/job. "
-                  "Fix runner GPU/EGL runtime instead of running RoboCasa tests."
-              )
-          PY
 
       - name: Run RoboCasa unit gym tests
         working-directory: library

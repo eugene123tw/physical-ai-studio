@@ -159,6 +159,19 @@ jobs:
       - name: Install system dependencies for headless rendering
         run: |
           sudo apt-get update
+          # OSMesa = pure-CPU software GL. Works without a functioning NVIDIA
+          # driver/EGL stack, so it sidesteps the runner's broken EGL/NVML.
+          # mesa-utils-extra provides `eglinfo` for the diagnostics step below.
+          sudo apt-get install -y \
+            libosmesa6 libosmesa6-dev libgl1-mesa-glx libglu1-mesa mesa-utils-extra
+
+      - name: GPU / EGL preflight diagnostics
+        continue-on-error: true
+        run: |
+          echo "== nvidia-smi =="; nvidia-smi || echo "nvidia-smi FAILED"
+          echo "== EGL vendor ICDs =="; ls -l /usr/share/glvnd/egl_vendor.d/ 2>/dev/null || true
+          echo "== libEGL/GLX/nvidia libs =="; ldconfig -p | grep -iE 'EGL|GLX|nvidia' || true
+          echo "== eglinfo =="; eglinfo 2>&1 | head -n 40 || echo "eglinfo unavailable"
 
       - *set-up-uv
 
@@ -174,13 +187,12 @@ jobs:
       - name: Run python integration tests
         working-directory: library
         env:
-          # Headless rendering for MuJoCo/OpenGL (must be set before any imports)
-          MUJOCO_GL: egl
-          PYOPENGL_PLATFORM: egl
-          # Force GLVND to dispatch EGL to the NVIDIA vendor driver. Mesa's EGL does
-          # not support EGL_EXT_platform_device, which MuJoCo's EGL backend needs for
-          # headless device rendering on the GPU runner.
-          __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+          # Headless rendering for MuJoCo/OpenGL (must be set before any imports).
+          # Use OSMesa (CPU software rendering) instead of EGL: the GPU runner's
+          # NVIDIA EGL/NVML stack is broken (EGL_BAD_DISPLAY / "Can't initialize
+          # NVML"), and the driver can't be repaired from CI. OSMesa needs no GPU.
+          MUJOCO_GL: osmesa
+          PYOPENGL_PLATFORM: osmesa
         run: |
           uv run --no-sync pytest tests/integration -m "not slow"
 
@@ -199,6 +211,19 @@ jobs:
       - name: Install system dependencies for headless rendering
         run: |
           sudo apt-get update
+          # OSMesa = pure-CPU software GL. Works without a functioning NVIDIA
+          # driver/EGL stack, so it sidesteps the runner's broken EGL/NVML.
+          # mesa-utils-extra provides `eglinfo` for the diagnostics step below.
+          sudo apt-get install -y \
+            libosmesa6 libosmesa6-dev libgl1-mesa-glx libglu1-mesa mesa-utils-extra
+
+      - name: GPU / EGL preflight diagnostics
+        continue-on-error: true
+        run: |
+          echo "== nvidia-smi =="; nvidia-smi || echo "nvidia-smi FAILED"
+          echo "== EGL vendor ICDs =="; ls -l /usr/share/glvnd/egl_vendor.d/ 2>/dev/null || true
+          echo "== libEGL/GLX/nvidia libs =="; ldconfig -p | grep -iE 'EGL|GLX|nvidia' || true
+          echo "== eglinfo =="; eglinfo 2>&1 | head -n 40 || echo "eglinfo unavailable"
 
       - *set-up-uv
 
@@ -235,9 +260,11 @@ jobs:
       - name: Run RoboCasa integration test
         working-directory: library
         env:
-          MUJOCO_GL: egl
-          PYOPENGL_PLATFORM: egl
-          __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+          # OSMesa (CPU software rendering) instead of EGL: the GPU runner's NVIDIA
+          # EGL/NVML stack is broken (EGL_BAD_DISPLAY / "Can't initialize NVML") and
+          # cannot be repaired from CI. OSMesa needs no GPU driver.
+          MUJOCO_GL: osmesa
+          PYOPENGL_PLATFORM: osmesa
         run: |
           source .venv-robocasa/bin/activate
           python -m pytest tests/integration/gyms/test_robocasa_e2e.py

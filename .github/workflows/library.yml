@@ -269,7 +269,7 @@ jobs:
         working-directory: library
         run: |
           source .venv-robocasa/bin/activate
-          bash scripts/install_robocasa.sh
+          bash scripts/benchmark/install_robocasa.sh
 
       - name: OSMesa render self-test
         continue-on-error: true

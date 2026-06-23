@@ -29,7 +29,7 @@ uv venv .venv-robocasa
 source .venv-robocasa/bin/activate
 uv sync --active --extra cu128          # or cpu / xpu — do NOT use --extra all or --extra libero
 
-bash library/scripts/install_robocasa.sh
+bash library/scripts/benchmark/install_robocasa.sh
 
 # Download kitchen assets (~4.4 GB on disk; prompts interactively)
 yes y | python -m robocasa.scripts.download_kitchen_assets \

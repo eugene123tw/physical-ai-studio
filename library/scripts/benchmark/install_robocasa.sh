@@ -25,7 +25,7 @@
 #   # Pick exactly one torch backend extra. --extra all is wrong here
 #   # because it pulls [libero] -> robosuite==1.4.0.
 #   uv sync --active --extra cu128       # or --extra cpu / --extra xpu
-#   bash library/scripts/install_robocasa.sh
+#   bash library/scripts/benchmark/install_robocasa.sh
 
 set -euo pipefail
 
@@ -45,7 +45,7 @@ if python -c "import libero" 2>/dev/null; then
     echo "  uv venv .venv-robocasa" >&2
     echo "  source .venv-robocasa/bin/activate" >&2
     echo "  uv sync --active --extra cu128  # or --extra cpu / --extra xpu" >&2
-    echo "  bash library/scripts/install_robocasa.sh" >&2
+    echo "  bash library/scripts/benchmark/install_robocasa.sh" >&2
     exit 1
 fi
 

@@ -34,7 +34,7 @@ Example:
 
 Note:
     Requires optional dependencies. Install into a dedicated venv via
-    ``library/scripts/install_robocasa.sh`` — there is intentionally no
+    ``library/scripts/benchmark/install_robocasa.sh`` — there is intentionally no
     ``[robocasa]`` extra in ``pyproject.toml`` because the dep graph is
     unsolvable in a single uv resolve (lerobot, robosuite, tianshou
     pins all conflict). See §7.4 Step 1 for details.
@@ -97,7 +97,7 @@ def _check_robocasa_available() -> None:
             "  uv venv .venv-robocasa\n"
             "  source .venv-robocasa/bin/activate\n"
             "  uv sync --extra cu128\n"
-            "  bash library/scripts/install_robocasa.sh\n"
+            "  bash library/scripts/benchmark/install_robocasa.sh\n"
             "Then download kitchen assets:\n"
             "  yes y | python -m robocasa.scripts.download_kitchen_assets "
             "--type tex tex_generative fixtures_lw objs_lw\n"

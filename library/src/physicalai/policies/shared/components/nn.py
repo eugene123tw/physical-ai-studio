@@ -1,0 +1,298 @@
+# Copyright (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+# Based on NVIDIA's GR00T implementation (Apache-2.0 licensed)
+# Original source: https://github.com/NVIDIA/Isaac-GR00T
+
+"""Shared neural network building blocks for policy components.
+
+This module contains reusable primitive components:
+- Activations: swish
+- Encodings: SinusoidalPositionalEncoding
+- Layers: CategorySpecificLinear, CategorySpecificMLP
+- Encoders: MultiEmbodimentActionEncoder
+"""
+
+from __future__ import annotations
+
+import torch
+import torch.nn.functional as F  # noqa: N812
+from torch import nn
+
+
+def swish(x: torch.Tensor) -> torch.Tensor:
+    """Swish activation function: x * sigmoid(x).
+
+    Args:
+        x: Input tensor.
+
+    Returns:
+        Output tensor with swish activation applied.
+    """
+    return x * torch.sigmoid(x)
+
+
+class SinusoidalPositionalEncoding(nn.Module):
+    """Sinusoidal positional encoding for timesteps.
+
+    Produces a sinusoidal encoding of shape (B, T, embedding_dim)
+    given timesteps of shape (B, T).
+
+    Args:
+        embedding_dim: Dimension of the embedding output.
+    """
+
+    def __init__(self, embedding_dim: int) -> None:
+        """Initialize sinusoidal positional encoding.
+
+        Args:
+            embedding_dim: Output embedding dimension.
+        """
+        super().__init__()
+        self.embedding_dim = embedding_dim
+
+    def forward(self, timesteps: torch.Tensor) -> torch.Tensor:
+        """Compute sinusoidal encoding.
+
+        Args:
+            timesteps: Timestep indices of shape (B, T).
+
+        Returns:
+            Sinusoidal encoding of shape (B, T, embedding_dim).
+        """
+        timesteps = timesteps.float()
+
+        _b, _t = timesteps.shape
+        device = timesteps.device
+
+        half_dim = self.embedding_dim // 2
+        exponent = -torch.arange(half_dim, dtype=torch.float, device=device) * (
+            torch.log(torch.tensor(10000.0)) / half_dim
+        )
+        freqs = timesteps.unsqueeze(-1) * exponent.exp()
+
+        sin = torch.sin(freqs)
+        cos = torch.cos(freqs)
+        return torch.cat([sin, cos], dim=-1)
+
+
+class CategorySpecificLinear(nn.Module):
+    """Linear layer with per-category (embodiment) weights.
+
+    Enables multi-embodiment support by having separate weight matrices
+    for each category/embodiment type.
+
+    Args:
+        num_categories: Number of distinct embodiment categories.
+        input_dim: Input feature dimension.
+        hidden_dim: Output feature dimension.
+    """
+
+    def __init__(self, num_categories: int, input_dim: int, hidden_dim: int) -> None:
+        """Initialize category-specific linear layer.
+
+        Args:
+            num_categories: Number of distinct categories.
+            input_dim: Input feature dimension.
+            hidden_dim: Output feature dimension.
+        """
+        super().__init__()
+        self.num_categories = num_categories
+        self.W = nn.Parameter(0.02 * torch.randn(num_categories, input_dim, hidden_dim))
+        self.b = nn.Parameter(torch.zeros(num_categories, hidden_dim))
+
+    def forward(self, x: torch.Tensor, cat_ids: torch.Tensor) -> torch.Tensor:
+        """Forward pass with category-specific weights.
+
+        Args:
+            x: Input tensor of shape (B, T, input_dim).
+            cat_ids: Category/embodiment IDs of shape (B,).
+
+        Returns:
+            Output tensor of shape (B, T, hidden_dim).
+        """
+        selected_w = self.W[cat_ids]
+        selected_b = self.b[cat_ids]
+        return torch.bmm(x, selected_w) + selected_b.unsqueeze(1)
+
+    def expand_action_dimension(
+        self,
+        old_action_dim: int,
+        new_action_dim: int,
+        expand_input: bool = False,
+        expand_output: bool = False,
+    ) -> None:
+        """Expand selected weight dimensions for larger action spaces.
+
+        Args:
+            old_action_dim: Original action dimension.
+            new_action_dim: New, larger action dimension.
+            expand_input: Whether to expand the input dimension (dim=1).
+            expand_output: Whether to expand the output dimension (dim=2).
+
+        Raises:
+            ValueError: If ``new_action_dim`` is not larger than ``old_action_dim``.
+        """
+        if new_action_dim <= old_action_dim:
+            raise ValueError(
+                f"New action dim {new_action_dim} must be larger than old action dim {old_action_dim}"
+            )
+
+        if expand_input and self.W.shape[1] == old_action_dim:
+            repeat_times = new_action_dim // old_action_dim
+            remainder = new_action_dim % old_action_dim
+
+            new_w_parts = [self.W] * repeat_times
+            if remainder > 0:
+                new_w_parts.append(self.W[:, :remainder, :])
+
+            self.W = nn.Parameter(torch.cat(new_w_parts, dim=1))
+
+        if expand_output and self.W.shape[2] == old_action_dim:
+            repeat_times = new_action_dim // old_action_dim
+            remainder = new_action_dim % old_action_dim
+
+            new_w_parts = [self.W] * repeat_times
+            if remainder > 0:
+                new_w_parts.append(self.W[:, :, :remainder])
+
+            self.W = nn.Parameter(torch.cat(new_w_parts, dim=2))
+
+            if self.b.shape[1] == old_action_dim:
+                new_b_parts = [self.b] * repeat_times
+                if remainder > 0:
+                    new_b_parts.append(self.b[:, :remainder])
+
+                self.b = nn.Parameter(torch.cat(new_b_parts, dim=1))
+
+
+class CategorySpecificMLP(nn.Module):
+    """Two-layer MLP with per-category weights.
+
+    Args:
+        num_categories: Number of embodiment categories.
+        input_dim: Input feature dimension.
+        hidden_dim: Hidden layer dimension.
+        output_dim: Output feature dimension.
+    """
+
+    def __init__(
+        self,
+        num_categories: int,
+        input_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+    ) -> None:
+        """Initialize category-specific 2-layer MLP.
+
+        Args:
+            num_categories: Number of distinct categories.
+            input_dim: Input feature dimension.
+            hidden_dim: Hidden layer dimension.
+            output_dim: Output feature dimension.
+        """
+        super().__init__()
+        self.num_categories = num_categories
+        self.layer1 = CategorySpecificLinear(num_categories, input_dim, hidden_dim)
+        self.layer2 = CategorySpecificLinear(num_categories, hidden_dim, output_dim)
+
+    def forward(self, x: torch.Tensor, cat_ids: torch.Tensor) -> torch.Tensor:
+        """Forward pass through 2-layer category-specific MLP.
+
+        Args:
+            x: Input tensor of shape (B, T, input_dim).
+            cat_ids: Category/embodiment IDs of shape (B,).
+
+        Returns:
+            Output tensor of shape (B, T, output_dim).
+        """
+        hidden = F.relu(self.layer1(x, cat_ids))
+        return self.layer2(hidden, cat_ids)
+    
+    def expand_action_dimension(self, old_action_dim, new_action_dim):
+        """Expand output action dimension of the category-specific MLP.
+
+        Args:
+            old_action_dim: Original action dimension.
+            new_action_dim: New, larger action dimension.
+        """
+        # self.layer1 does not take action_dim as input, so no expansion needed
+        self.layer2.expand_action_dimension(
+            old_action_dim, new_action_dim, expand_input=False, expand_output=True
+        )
+
+
+class MultiEmbodimentActionEncoder(nn.Module):
+    """Encodes actions and timesteps for multi-embodiment settings.
+
+    Combines action features with sinusoidal timestep encoding,
+    using category-specific linear layers.
+
+    Args:
+        action_dim: Dimension of action vectors.
+        hidden_size: Hidden dimension for processing.
+        num_embodiments: Number of embodiment categories.
+    """
+
+    def __init__(self, action_dim: int, hidden_size: int, num_embodiments: int) -> None:
+        """Initialize multi-embodiment action encoder.
+
+        Args:
+            action_dim: Dimension of action vectors.
+            hidden_size: Hidden dimension for processing.
+            num_embodiments: Number of embodiment categories.
+        """
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_embodiments = num_embodiments
+
+        self.W1 = CategorySpecificLinear(num_embodiments, action_dim, hidden_size)
+        self.W2 = CategorySpecificLinear(num_embodiments, 2 * hidden_size, hidden_size)
+        self.W3 = CategorySpecificLinear(num_embodiments, hidden_size, hidden_size)
+        self.pos_encoding = SinusoidalPositionalEncoding(hidden_size)
+
+    def forward(
+        self,
+        actions: torch.Tensor,
+        timesteps: torch.Tensor,
+        cat_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        """Encode actions with timestep information.
+
+        Args:
+            actions: Action tensor of shape (B, T, action_dim).
+            timesteps: Timesteps of shape (B,) replicated across T.
+            cat_ids: Category/embodiment IDs of shape (B,).
+
+        Returns:
+            Encoded features of shape (B, T, hidden_size).
+
+        Raises:
+            ValueError: If timesteps shape is not (B,).
+        """
+        b, t, _ = actions.shape
+
+        if timesteps.dim() == 1 and timesteps.shape[0] == b:
+            timesteps = timesteps.unsqueeze(1).expand(-1, t)
+        else:
+            msg = "Expected `timesteps` to have shape (B,) to replicate across T."
+            raise ValueError(msg)
+
+        a_emb = self.W1(actions, cat_ids)
+        tau_emb = self.pos_encoding(timesteps).to(dtype=a_emb.dtype)
+
+        x = torch.cat([a_emb, tau_emb], dim=-1)
+        x = swish(self.W2(x, cat_ids))
+        return self.W3(x, cat_ids)
+
+    def expand_action_dimension(self, old_action_dim, new_action_dim):
+        """Expand encoder input action dimension.
+
+        Args:
+            old_action_dim: Original action dimension.
+            new_action_dim: New, larger action dimension.
+        """
+        # Only W1 takes action_dim as input, so only expand its input dimension
+        self.W1.expand_action_dimension(
+            old_action_dim, new_action_dim, expand_input=True, expand_output=False
+        )

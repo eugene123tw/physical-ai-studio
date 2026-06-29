@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 # Skip the whole module if the dedicated venv has not been provisioned
-# (see library/scripts/install_robocasa.sh).
+# (see library/scripts/benchmark/install_robocasa.sh).
 pytest.importorskip("robocasa")
 pytest.importorskip("robosuite")
 

@@ -171,6 +171,8 @@ override-dependencies = [
     # Safe to override because executorch
     # production code does not import pytest at runtime.
     "pytest>=9.0.3",
+    # lerobot==0.5.1 caps diffusers at <0.36.0, 0.38.0 contains CVE-2026-44827 fix
+    "diffusers>=0.38.0",
 ]
 
 
@@ -233,7 +235,7 @@ baseline = "pyrefly-baseline.json"
 project-excludes = [
     ".venv/**",
     "notebooks/**",
-    # robocasa is an optional dependency installed via `library/scripts/install_robocasa.sh`
+    # robocasa is an optional dependency installed via `library/scripts/benchmark/install_robocasa.sh`
     # into a dedicated `.venv-robocasa` — it is intentionally absent from the main `.venv`
     # because its dep graph is unsolvable in a single uv resolve (lerobot==0.3.3 /
     # robosuite / tianshou pin conflicts). Pyrefly runs against the main `.venv`, so it

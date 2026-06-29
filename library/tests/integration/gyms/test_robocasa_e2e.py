@@ -8,7 +8,7 @@ in the heavy CI lane. Use ``task="CloseFridge"`` — the cheapest atomic
 scene verified by the §7.4 Step 2 standalone check.
 
 These tests assume a dedicated ``.venv-robocasa`` set up via
-``library/scripts/install_robocasa.sh`` with downloaded kitchen assets,
+``library/scripts/benchmark/install_robocasa.sh`` with downloaded kitchen assets,
 and ``MUJOCO_GL=egl`` exported on the runner.
 """
 

@@ -245,7 +245,6 @@ class Rldx1(Policy):
             model_name=config.model_name,
             revision=config.revision,
             use_percentiles=config.use_percentiles,
-            use_relative_action=config.use_relative_action,
             image_max_area=config.image_max_area,
             image_resize_m=config.image_resize_m,
             embodiment_id=config.embodiment_id,

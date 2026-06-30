@@ -1,0 +1,581 @@
+# Copyright (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+"""Offline parity tests for the PAS-native RLDX-1 preprocessing blocks.
+
+Stage 0 establishes the vendored :class:`StateActionProcessor` (pure numpy, no
+network) as the golden reference. Stage 1 asserts that the native normalization
+(``FeatureNormalizeTransform`` + :func:`clip_state_action`) reproduces that
+reference for the v1 single-group state/action case, under both min/max and
+q01/q99 bounds. Stage 2 asserts that :func:`pad_state_action` matches the
+vendored padding / mask block.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+import torch
+
+from physicalai.data.observation import ACTION, STATE
+from physicalai.policies.rldx1.components.processing import (
+    ActionConfig,
+    ActionFormat,
+    ActionRepresentation,
+    ActionType,
+    ModalityConfig,
+)
+from physicalai.policies.rldx1.preprocessing import (
+    ACTION_MASK,
+    build_qwen_conversation,
+    build_state_action_features,
+    build_state_action_norm_map,
+    clip_state_action,
+    compute_aspect_area_resize_crop,
+    formalize_language,
+    pad_state_action,
+    resize_and_center_crop,
+    tokenize_vlm_batch,
+)
+from physicalai.policies.utils.normalization import FeatureNormalizeTransform
+from tests.unit.policies.state_action_processor import StateActionProcessor
+
+MAX_STATE_DIM = 64
+MAX_ACTION_DIM = 64
+
+STATE_DIM = 7
+ACTION_DIM = 7
+ACTION_HORIZON = 16
+
+
+def _native_normalize(
+    batch: dict[str, torch.Tensor],
+    stats: dict[str, dict[str, list[float]]],
+    *,
+    use_percentiles: bool,
+) -> dict[str, torch.Tensor]:
+    """Apply the PAS-native normalization (transform + clip) to ``batch``."""
+    features = build_state_action_features(stats)
+    norm_map = build_state_action_norm_map(use_percentiles=use_percentiles)
+    normalizer = FeatureNormalizeTransform(features, norm_map)
+    normalizer.eval()
+    with torch.no_grad():
+        return clip_state_action(normalizer(batch))
+
+
+def _stat(dim: int, *, seed: int) -> dict[str, list[float]]:
+    """Build a non-degenerate stat dict (min < max, q01 < q99) for ``dim``."""
+    rng = np.random.default_rng(seed)
+    lo = rng.uniform(-3.0, -1.0, size=dim)
+    hi = rng.uniform(1.0, 3.0, size=dim)
+    q01 = lo + 0.1
+    q99 = hi - 0.1
+    return {
+        "min": lo.tolist(),
+        "max": hi.tolist(),
+        "mean": ((lo + hi) / 2.0).tolist(),
+        "std": np.ones(dim).tolist(),
+        "q01": q01.tolist(),
+        "q99": q99.tolist(),
+    }
+
+
+def _vendored_normalizer(
+    state_stat: dict[str, list[float]],
+    action_stat: dict[str, list[float]],
+    *,
+    use_percentiles: bool,
+) -> StateActionProcessor:
+    """Build the vendored single-group StateActionProcessor (golden oracle)."""
+    modality_configs = {
+        "state": ModalityConfig(delta_indices=[0], modality_keys=["state"]),
+        "action": ModalityConfig(
+            delta_indices=list(range(ACTION_HORIZON)),
+            modality_keys=["action"],
+            action_configs=[
+                ActionConfig(
+                    rep=ActionRepresentation.ABSOLUTE,
+                    type=ActionType.NON_EEF,
+                    format=ActionFormat.DEFAULT,
+                    state_key="state",
+                ),
+            ],
+        ),
+    }
+    statistics = {
+        "state": {"state": state_stat},
+        "action": {"action": action_stat},
+    }
+    proc = StateActionProcessor(
+        modality_configs=modality_configs,
+        statistics=statistics,
+        use_percentiles=use_percentiles,
+        clip_outliers=True,
+        use_relative_action=False,
+    )
+    proc.eval()
+    return proc
+
+
+@pytest.mark.parametrize("use_percentiles", [False, True])
+@pytest.mark.parametrize("seed", [0, 1, 7])
+def test_native_normalizer_matches_vendored(use_percentiles: bool, seed: int) -> None:
+    """Native normalizer matches the vendored StateActionProcessor elementwise."""
+    rng = np.random.default_rng(seed)
+    state_stat = _stat(STATE_DIM, seed=seed)
+    action_stat = _stat(ACTION_DIM, seed=seed + 100)
+
+    # Raw inputs span beyond the bounds so clipping is exercised.
+    raw_state = rng.uniform(-4.0, 4.0, size=(1, STATE_DIM)).astype(np.float32)
+    raw_action = rng.uniform(-4.0, 4.0, size=(ACTION_HORIZON, ACTION_DIM)).astype(np.float32)
+
+    # -- golden: vendored numpy pipeline --
+    vendored = _vendored_normalizer(state_stat, action_stat, use_percentiles=use_percentiles)
+    gold_state = vendored.apply_state({"state": raw_state})["state"]
+    gold_action = vendored.apply_action(
+        {"action": raw_action},
+        state={"state": raw_state},
+    )["action"]
+
+    # -- native: FeatureNormalizeTransform + clip --
+    stats = {"observation.state": state_stat, "action": action_stat}
+    batch = {
+        STATE: torch.from_numpy(raw_state),
+        ACTION: torch.from_numpy(raw_action),
+    }
+    out = _native_normalize(batch, stats, use_percentiles=use_percentiles)
+
+    np.testing.assert_allclose(out[STATE].numpy(), gold_state, atol=1e-5, rtol=0.0)
+    np.testing.assert_allclose(out[ACTION].numpy(), gold_action, atol=1e-5, rtol=0.0)
+
+
+def test_build_features_present_keys() -> None:
+    """Feature builder maps state/action stats to STATE/ACTION features."""
+    stats = {
+        "observation.state": _stat(STATE_DIM, seed=0),
+        "action": _stat(ACTION_DIM, seed=1),
+    }
+    features = build_state_action_features(stats)
+    assert set(features) == {STATE, ACTION}
+    assert features[STATE].shape == (STATE_DIM,)
+    assert features[ACTION].shape == (ACTION_DIM,)
+
+
+def test_normalize_transform_identity_without_features() -> None:
+    """With no stats the normalize transform is a passthrough.
+
+    The ``clip_state_action`` step is applied separately by the preprocessor and
+    only after real normalization, so the no-feature path leaves values
+    untouched.
+    """
+    features = build_state_action_features({})
+    norm_map = build_state_action_norm_map(use_percentiles=True)
+    transform = FeatureNormalizeTransform(features, norm_map)
+    state = torch.randn(1, STATE_DIM)
+    out = transform({STATE: state.clone()})
+    torch.testing.assert_close(out[STATE], state)
+
+
+def _vendored_pad_state(state_np: np.ndarray, max_state_dim: int) -> torch.Tensor:
+    """Vendored state padding, copied verbatim from RLDXProcessor.__call__.
+
+    Source: ``components/processing/processing_rldx.py`` (state concat + pad).
+    """
+    normalized_states = torch.from_numpy(state_np.astype(np.float32))  # (1, d)
+    normalized_states = torch.cat(
+        [
+            normalized_states,
+            torch.zeros(normalized_states.shape[0], max_state_dim - normalized_states.shape[1]),
+        ],
+        dim=-1,
+    )
+    return normalized_states  # (1, max_state_dim)
+
+
+def _vendored_pad_action(
+    action_np: np.ndarray,
+    max_action_dim: int,
+    max_action_horizon: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Vendored action padding + mask, copied verbatim from RLDXProcessor.__call__.
+
+    Source: ``components/processing/processing_rldx.py`` (action pad + mask).
+    """
+    normalized_actions = torch.from_numpy(action_np.astype(np.float32))  # (t, d)
+    action_dim = normalized_actions.shape[1]
+    normalized_actions = torch.cat(
+        [
+            normalized_actions,
+            torch.zeros(normalized_actions.shape[0], max_action_dim - normalized_actions.shape[1]),
+        ],
+        dim=-1,
+    )
+    action_horizon = normalized_actions.shape[0]
+    normalized_actions = torch.cat(
+        [
+            normalized_actions,
+            torch.zeros(max_action_horizon - normalized_actions.shape[0], max_action_dim),
+        ],
+        dim=0,
+    )
+    action_mask = torch.ones_like(normalized_actions)
+    action_mask[action_horizon:] = 0
+    action_mask[:, action_dim:] = 0
+    return normalized_actions, action_mask
+
+
+@pytest.mark.parametrize("use_percentiles", [False, True])
+@pytest.mark.parametrize("batch_size", [1, 3])
+def test_padder_matches_vendored(use_percentiles: bool, batch_size: int) -> None:
+    """Native padder + mask match the vendored RLDXProcessor padding block."""
+    rng = np.random.default_rng(batch_size)
+    state_stat = _stat(STATE_DIM, seed=0)
+    action_stat = _stat(ACTION_DIM, seed=100)
+    vendored = _vendored_normalizer(state_stat, action_stat, use_percentiles=use_percentiles)
+
+    gold_states = []
+    gold_actions = []
+    gold_masks = []
+    raw_states = []
+    raw_actions = []
+    for _ in range(batch_size):
+        raw_state = rng.uniform(-4.0, 4.0, size=(1, STATE_DIM)).astype(np.float32)
+        raw_action = rng.uniform(-4.0, 4.0, size=(ACTION_HORIZON, ACTION_DIM)).astype(np.float32)
+        raw_states.append(raw_state)
+        raw_actions.append(raw_action)
+
+        norm_state = vendored.apply_state({"state": raw_state})["state"]
+        norm_action = vendored.apply_action({"action": raw_action}, state={"state": raw_state})["action"]
+
+        gold_states.append(_vendored_pad_state(norm_state, MAX_STATE_DIM))
+        action, mask = _vendored_pad_action(norm_action, MAX_ACTION_DIM, ACTION_HORIZON)
+        gold_actions.append(action)
+        gold_masks.append(mask)
+
+    gold_state = torch.stack(gold_states, dim=0)  # (B, 1, max_state_dim)
+    gold_action = torch.stack(gold_actions, dim=0)  # (B, max_h, max_action_dim)
+    gold_mask = torch.stack(gold_masks, dim=0)
+
+    # -- native: normalize then pad --
+    stats = {"observation.state": state_stat, "action": action_stat}
+    batch = {
+        STATE: torch.from_numpy(np.concatenate(raw_states, axis=0)),  # (B, state_dim)
+        ACTION: torch.from_numpy(np.stack(raw_actions, axis=0)),  # (B, T, action_dim)
+    }
+    out = _native_normalize(batch, stats, use_percentiles=use_percentiles)
+    out = pad_state_action(
+        out,
+        max_state_dim=MAX_STATE_DIM,
+        max_action_dim=MAX_ACTION_DIM,
+        max_action_horizon=ACTION_HORIZON,
+    )
+
+    torch.testing.assert_close(out[STATE], gold_state, atol=1e-5, rtol=0.0)
+    torch.testing.assert_close(out[ACTION], gold_action, atol=1e-5, rtol=0.0)
+    torch.testing.assert_close(out[ACTION_MASK], gold_mask, atol=0.0, rtol=0.0)
+
+
+def test_padder_inference_no_action() -> None:
+    """Without an action the padder only pads state, no mask is added."""
+    out = pad_state_action(
+        {STATE: torch.randn(2, STATE_DIM)},
+        max_state_dim=MAX_STATE_DIM,
+        max_action_dim=MAX_ACTION_DIM,
+        max_action_horizon=ACTION_HORIZON,
+    )
+    assert out[STATE].shape == (2, 1, MAX_STATE_DIM)
+    assert ACTION not in out
+    assert ACTION_MASK not in out
+
+
+# ---------------------------------------------------------------------------- #
+# Stage 3: image geometry                                                      #
+# ---------------------------------------------------------------------------- #
+
+_IMAGE_MAX_AREA = 65536
+_IMAGE_RESIZE_M = 32
+
+# (h, w) covering: square no-op, non-square downscale, odd sizes, large frames.
+_IMAGE_SHAPES = [
+    (256, 256),
+    (224, 224),
+    (480, 640),
+    (240, 320),
+    (200, 200),
+    (333, 211),
+    (720, 1280),
+]
+
+
+@pytest.mark.parametrize(("height", "width"), _IMAGE_SHAPES)
+def test_compute_resize_crop_matches_vendored(height: int, width: int) -> None:
+    """Native geometry matches the vendored resize_preserve_aspect_area_then_crop."""
+    from physicalai.policies.rldx1.components.processing.augmentations import (
+        resize_preserve_aspect_area_then_crop,
+    )
+
+    gold = resize_preserve_aspect_area_then_crop(
+        height,
+        width,
+        max_area=_IMAGE_MAX_AREA,
+        m=_IMAGE_RESIZE_M,
+    )
+    native = compute_aspect_area_resize_crop(
+        height,
+        width,
+        max_area=_IMAGE_MAX_AREA,
+        m=_IMAGE_RESIZE_M,
+    )
+    assert native == gold
+
+
+@pytest.mark.parametrize(("height", "width"), _IMAGE_SHAPES)
+def test_resize_and_center_crop_matches_vendored(height: int, width: int) -> None:
+    """Native resize+crop is pixel-identical to the vendored eval transform."""
+    import albumentations as A
+
+    from physicalai.policies.rldx1.components.processing.augmentations import (
+        AspectAreaResizeAndCrop,
+    )
+
+    rng = np.random.default_rng(height * 1000 + width)
+    image = rng.integers(0, 256, size=(height, width, 3), dtype=np.uint8)
+
+    vendored = A.Compose(
+        [AspectAreaResizeAndCrop(max_area=_IMAGE_MAX_AREA, m=_IMAGE_RESIZE_M)],
+    )
+    gold = vendored(image=image)["image"]
+    native = resize_and_center_crop(image, max_area=_IMAGE_MAX_AREA, m=_IMAGE_RESIZE_M)
+
+    assert native.shape == gold.shape
+    np.testing.assert_array_equal(native, gold)
+
+
+# ---------------------------------------------------------------------------- #
+# Stage 4: VLM tokenization                                                    #
+# ---------------------------------------------------------------------------- #
+
+_VLM_MODEL_NAME = "RLWRLD/RLDX-1-VLM"
+_VLM_MODEL_TYPE = "vtc_qwen3_vl"
+_VLM_LOADING_KWARGS = {"trust_remote_code": False, "use_fast": True}
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Pick up the RED block!", "pick up the red block"),
+        ("Move left/right, then STOP.", "move leftright then stop"),
+        ("  Keep   spacing  ", "  keep   spacing  "),
+    ],
+)
+def test_formalize_language(raw: str, expected: str) -> None:
+    """formalize_language lowercases and strips punctuation, keeps whitespace."""
+    assert formalize_language(raw) == expected
+
+
+def test_build_qwen_conversation_text_first() -> None:
+    """Default (text-first) conversation places text before image blocks."""
+    conv = build_qwen_conversation(["img0", "img1"], "pick the block")
+    assert len(conv) == 1
+    content = conv[0]["content"]
+    assert content[0] == {"type": "text", "text": "pick the block"}
+    assert content[1:] == [
+        {"type": "image", "image": "img0"},
+        {"type": "image", "image": "img1"},
+    ]
+
+
+def test_build_qwen_conversation_image_first() -> None:
+    """image_first places image blocks before the text block."""
+    conv = build_qwen_conversation(["img0"], "go", image_first=True)
+    content = conv[0]["content"]
+    assert content[0] == {"type": "image", "image": "img0"}
+    assert content[-1] == {"type": "text", "text": "go"}
+
+
+@pytest.fixture(scope="module")
+def vlm_processor():  # noqa: ANN201
+    """Load the cached Qwen processor, skipping when unavailable offline."""
+    from transformers import AutoProcessor
+
+    try:
+        processor = AutoProcessor.from_pretrained(_VLM_MODEL_NAME, **_VLM_LOADING_KWARGS)
+    except Exception as exc:  # noqa: BLE001 - any load failure -> skip
+        pytest.skip(f"Qwen processor unavailable offline: {exc}")
+    processor.tokenizer.padding_side = "left"
+    return processor
+
+
+def test_tokenize_vlm_batch_matches_vendored(vlm_processor) -> None:  # noqa: ANN001
+    """Native VLM tokenization matches the vendored RLDXDataCollator output."""
+    from PIL import Image
+
+    from tests.unit.policies.processing_rldx import RLDXDataCollator
+
+    processor = vlm_processor
+    rng = np.random.default_rng(0)
+
+    samples = []
+    conversations = []
+    for b in range(2):
+        images = [
+            Image.fromarray(rng.integers(0, 256, size=(64, 64, 3), dtype=np.uint8))
+            for _ in range(2)
+        ]
+        language = formalize_language("Pick the red block." if b == 0 else "Push the blue cube.")
+        conv = build_qwen_conversation(images, language)
+        chat_text = processor.apply_chat_template(conv, tokenize=False, add_generation_prompt=False)
+        samples.append(
+            {
+                "text": chat_text,
+                "images": images,
+                "conversation": conv,
+                "image_wise_encoding": True,
+                "num_views": 2,
+                "num_frames": 1,
+            },
+        )
+        conversations.append(conv)
+
+    collator = RLDXDataCollator(
+        model_name=_VLM_MODEL_NAME,
+        model_type=_VLM_MODEL_TYPE,
+        transformers_loading_kwargs=_VLM_LOADING_KWARGS,
+    )
+    gold = collator._collate_vlm_content(samples)  # noqa: SLF001 - parity oracle
+    native = tokenize_vlm_batch(processor, conversations)
+
+    for key in ("input_ids", "attention_mask", "pixel_values", "image_grid_thw"):
+        torch.testing.assert_close(native[key], gold[key], atol=0.0, rtol=0.0)
+
+
+# ---------------------------------------------------------------------------- #
+# Wiring: native Rldx1Preprocessor.forward vs vendored                         #
+# ---------------------------------------------------------------------------- #
+
+OBSERVATION_STATE = "observation.state"
+
+
+def _make_obs_batch(*, batch_size: int, with_action: bool, seed: int) -> dict[str, object]:
+    """Build a flat observation batch (2 camera views) for the preprocessor."""
+    rng = np.random.default_rng(seed)
+    batch: dict[str, object] = {
+        OBSERVATION_STATE: torch.from_numpy(
+            rng.uniform(-4.0, 4.0, size=(batch_size, STATE_DIM)).astype(np.float32),
+        ),
+        "task": [f"Pick object {i}." for i in range(batch_size)],
+    }
+    for view in range(2):
+        batch[f"observation.images.cam{view}"] = torch.from_numpy(
+            rng.integers(0, 256, size=(batch_size, 3, 64, 64), dtype=np.uint8),
+        )
+    if with_action:
+        batch[ACTION] = torch.from_numpy(
+            rng.uniform(-4.0, 4.0, size=(batch_size, ACTION_HORIZON, ACTION_DIM)).astype(np.float32),
+        )
+    return batch
+
+
+@pytest.fixture(scope="module")
+def rldx1_preprocessor():  # noqa: ANN201
+    """Build a preprocessor and trigger the VLM load, skipping if uncached."""
+    from physicalai.policies.rldx1.transforms import Rldx1Preprocessor
+
+    stats = {
+        OBSERVATION_STATE: _stat(STATE_DIM, seed=0),
+        "action": _stat(ACTION_DIM, seed=1),
+    }
+    pre = Rldx1Preprocessor(
+        stats=stats,
+        max_state_dim=MAX_STATE_DIM,
+        max_action_dim=MAX_ACTION_DIM,
+        action_horizon=ACTION_HORIZON,
+        use_percentiles=True,
+    )
+    pre.eval()
+    try:
+        _ = pre._vlm_processor  # noqa: SLF001 - force the native HF processor load
+    except Exception as exc:  # noqa: BLE001 - any load failure -> skip
+        pytest.skip(f"Qwen processor unavailable offline: {exc}")
+    return pre
+
+
+@pytest.mark.parametrize("with_action", [True, False])
+def test_native_forward_contract(rldx1_preprocessor, with_action: bool) -> None:  # noqa: ANN001
+    """Native forward emits the documented RLDX input keys and shapes.
+
+    Each sub-component (normalizer, padder, image geometry, VLM tokenization) is
+    parity-tested against the vendored reference in the stage tests above; this
+    asserts the end-to-end native ``forward`` wires them into the contract that
+    :meth:`RLDX.forward` / :meth:`RLDX.get_action` consume.
+    """
+    pre = rldx1_preprocessor
+    batch_size = 2
+    batch = _make_obs_batch(batch_size=batch_size, with_action=with_action, seed=7)
+
+    out = pre.forward(batch)
+
+    required = {
+        "input_ids",
+        "attention_mask",
+        "pixel_values",
+        "image_grid_thw",
+        "image_wise_encoding",
+        "num_views",
+        "num_frames",
+        STATE,
+        "embodiment_id",
+    }
+    assert required <= set(out)
+
+    assert out[STATE].shape == (batch_size, 1, MAX_STATE_DIM)
+    assert out[STATE].dtype == torch.float32
+    for key in ("image_wise_encoding", "num_views", "num_frames", "embodiment_id"):
+        assert out[key].shape == (batch_size,), key
+    assert out["input_ids"].shape[0] == batch_size
+    assert out["attention_mask"].shape == out["input_ids"].shape
+
+    if with_action:
+        assert out[ACTION].shape == (batch_size, ACTION_HORIZON, MAX_ACTION_DIM)
+        assert out[ACTION_MASK].shape == out[ACTION].shape
+    else:
+        assert ACTION not in out
+        assert ACTION_MASK not in out
+
+
+@pytest.mark.parametrize("use_percentiles", [True, False])
+def test_denormalize_action_matches_vendored(use_percentiles: bool) -> None:
+    """Native action denormalization matches the vendored ``StateActionProcessor``."""
+    from physicalai.policies.rldx1.transforms import Rldx1Preprocessor
+
+    state_stat = _stat(STATE_DIM, seed=4)
+    action_stat = _stat(ACTION_DIM, seed=5)
+    stats = {
+        OBSERVATION_STATE: state_stat,
+        "action": action_stat,
+    }
+    pre = Rldx1Preprocessor(
+        stats=stats,
+        max_state_dim=MAX_STATE_DIM,
+        max_action_dim=MAX_ACTION_DIM,
+        action_horizon=ACTION_HORIZON,
+        use_percentiles=use_percentiles,
+    )
+
+    rng = np.random.default_rng(7)
+    # Predicted, padded action chunk in the normalized [-1, 1] space (with a few
+    # out-of-range values to exercise the clip parity).
+    pred = rng.uniform(-1.3, 1.3, size=(2, ACTION_HORIZON, MAX_ACTION_DIM)).astype(np.float32)
+
+    native = pre.denormalize_action(torch.from_numpy(pred))
+
+    # Vendored oracle: slice the padded prediction to the unpadded action width
+    # (mirrors RLDXProcessor.decode_action), then invert via the numpy processor.
+    vendored = _vendored_normalizer(state_stat, action_stat, use_percentiles=use_percentiles)
+    sliced = pred[..., :ACTION_HORIZON, :ACTION_DIM]
+    gold = vendored.unapply_action({"action": sliced})["action"]
+
+    assert native.shape == (2, ACTION_HORIZON, ACTION_DIM)
+    torch.testing.assert_close(native, torch.from_numpy(np.asarray(gold)).to(native.dtype), atol=1e-5, rtol=0.0)
+
+

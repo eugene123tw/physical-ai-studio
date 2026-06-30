@@ -101,7 +101,7 @@ class Rldx1Config(Config):
         state_additive_noise_scale: Scale of additive Gaussian noise on state features.
         image_max_area: Target max area (pixels) for aspect-preserving image resize.
         image_resize_m: Alignment multiple for the resized/cropped image dimensions.
-        use_relative_action: Whether actions are encoded relative to the current state.
+        use_relative_action: Must be False in v1. Relative actions are not supported.
         use_percentiles: Whether to normalize with 1st/99th percentiles (vs min/max).
         rtc_inference_mode: Real-Time Chunking inference mode ('none', 'trained').
         rtc_training_max_delay: Max prefix delay sampled per step during RTC training.
@@ -203,7 +203,7 @@ class Rldx1Config(Config):
     # Image / language pipeline
     image_max_area: int = 65536  # 256 * 256
     image_resize_m: int = 32
-    use_relative_action: bool = True
+    use_relative_action: bool = False
     use_percentiles: bool = True
 
     # Real-Time Chunking (optional; no released checkpoint enables it).
@@ -247,6 +247,13 @@ class Rldx1Config(Config):
                 )
                 raise NotImplementedError(msg)
 
+        if self.use_relative_action:
+            msg = (
+                "Rldx1Config.use_relative_action=True is not supported in v1; "
+                "only absolute actions are implemented."
+            )
+            raise NotImplementedError(msg)
+
         self.embodiment_id = self._resolve_embodiment_id(self.embodiment_id)
 
     @staticmethod
@@ -265,7 +272,7 @@ class Rldx1Config(Config):
             ValueError: If a string tag is unknown or an int is out of range.
         """
         if isinstance(value, str):
-            from physicalai.policies.rldx1.components.processing import (  # noqa: PLC0415
+            from physicalai.policies.rldx1.components.embodiments import (  # noqa: PLC0415
                 EMBODIMENT_TAG_TO_PROJECTOR_INDEX,
             )
 

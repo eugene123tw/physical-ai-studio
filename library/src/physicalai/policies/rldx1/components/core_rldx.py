@@ -904,19 +904,6 @@ class RLDX(PreTrainedModel):
         if getattr(config, "backbone_use_lora", False):
             self._apply_backbone_lora()
 
-        # [Physical AI Studio modification] Decouple the training-data collator
-        # (processing_rldx -> rldx.data pipeline) from model construction. The
-        # collator is only used by ``prepare_input`` when raw ``vlm_content`` is
-        # passed; Studio feeds pre-collated tensors via its own preprocessor, so
-        # build it lazily on first use. This avoids vendoring the entire
-        # ``rldx.data`` augmentation/state-action pipeline.
-        self._collator = None
-        self._collator_kwargs = {
-            "model_name": config.model_name,
-            "model_type": config.backbone_model_type,
-            "transformers_loading_kwargs": transformers_loading_kwargs,
-        }
-
         # Memory module (optional, enabled by config.use_memory)
         self.use_memory = getattr(config, "use_memory", False)
         self.memory = None
@@ -1074,36 +1061,20 @@ class RLDX(PreTrainedModel):
         """Reset recurrent memory state (call at start of new episode)."""
         self._cached_mq = None
 
-    @property
-    def collator(self):
-        """Lazily build the training-data collator (see ``__init__`` note).
-
-        Only constructed when ``prepare_input`` receives raw ``vlm_content``.
-        Requires ``rldx.model.core.processing_rldx`` and the ``rldx.data``
-        pipeline, which Studio does not vendor; pre-collate inputs instead.
-        """
-        if self._collator is None:
-            from .processing_rldx import RLDXDataCollator
-
-            self._collator = RLDXDataCollator(**self._collator_kwargs)
-        return self._collator
-
     def prepare_input(self, inputs: dict) -> Tuple[BatchFeature, BatchFeature]:
-        """Prepare inputs for backbone and action model."""
+        """Prepare inputs for backbone and action model.
 
-        # NOTE -- currently the eval code doesn't use collator, so we need to add it here
-        # this should ideally be fixed upstream
+        Studio feeds pre-collated tensors via :class:`Rldx1Preprocessor`. Raw
+        upstream ``vlm_content`` (the un-collated ``RLDXProcessor`` output) is
+        not supported here -- collate it with the preprocessor first.
+        """
         if "vlm_content" in inputs:
-            # Fix for n_envs > 1: Process all environments' VLM content, not just the first
-            vlm_content_list = inputs["vlm_content"]
-            # Ensure vlm_content_list is always a list for consistent processing
-            if not isinstance(vlm_content_list, list):
-                vlm_content_list = [vlm_content_list]
-
-            # Process all VLM contents through the collator
-            prep = self.collator([{"vlm_content": vlm} for vlm in vlm_content_list])["inputs"]
-            inputs.pop("vlm_content")
-            inputs.update(prep)
+            msg = (
+                "RLDX.prepare_input received raw 'vlm_content'. Studio does not "
+                "vendor the RLDXDataCollator runtime path; pre-collate inputs "
+                "with Rldx1Preprocessor before calling the model."
+            )
+            raise ValueError(msg)
 
         backbone_inputs = self.backbone.prepare_input(inputs)
         action_inputs = self.action_model.prepare_input(inputs)

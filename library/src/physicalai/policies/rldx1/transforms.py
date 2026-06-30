@@ -10,13 +10,12 @@ network (``components/core_rldx.py``):
 - :class:`Rldx1Preprocessor`: ``Observation`` -> RLDX ``inputs`` dict
 - :class:`Rldx1Postprocessor`: RLDX ``action_pred`` -> environment action space
 
-Both are thin adapters that drive the vendored upstream ``RLDXProcessor`` /
-``RLDXDataCollator`` (``components/processing/processing_rldx.py``, copied
-verbatim from ``rldx/model/core/processing_rldx.py``). Driving the vendored
-processor guarantees byte-for-byte parity with the upstream RLDX pipeline; see
-``scripts/rldx1_parity_check.py`` for the numerical-parity proof. The
-preprocessor produces the exact keys consumed by :meth:`RLDX.forward` /
-:meth:`RLDX.get_action`:
+Both run the PAS-native pipeline in ``preprocessing.py`` -- batched torch,
+library normalization, ``cv2`` image geometry, HF Qwen tokenization. The native
+pipeline is parity-tested against the original vendored processor; see
+``tests/unit/policies/test_rldx1_preprocessing.py`` for the numerical-parity
+proofs. The preprocessor produces the exact keys consumed by
+:meth:`RLDX.forward` / :meth:`RLDX.get_action`:
 
 Backbone (Qwen3-VL) keys:
     ``input_ids``, ``attention_mask``, ``pixel_values``, ``image_grid_thw``,
@@ -27,7 +26,8 @@ Action-head keys:
     ``(B, action_horizon, max_action_dim)``, ``action_mask`` (same shape as
     ``action``), ``embodiment_id`` ``(B,)``.
 
-Scope (v1): single observation step, no motion / memory / physics streams.
+Scope (v1): absolute actions, single observation step, no relative actions /
+motion / memory / physics streams.
 """
 
 from __future__ import annotations
@@ -40,9 +40,21 @@ import torch
 from torch import nn
 
 from physicalai.data.observation import ACTION, IMAGES, STATE, TASK, Observation
+from physicalai.policies.utils.normalization import FeatureNormalizeTransform
+
+from .preprocessing import (
+    build_qwen_conversation,
+    build_state_action_features,
+    build_state_action_norm_map,
+    clip_state_action,
+    formalize_language,
+    pad_state_action,
+    resize_and_center_crop,
+    tokenize_vlm_batch,
+)
 
 if TYPE_CHECKING:
-    from .components.processing import RLDXProcessor
+    from transformers import ProcessorMixin
 
 logger = logging.getLogger(__name__)
 
@@ -60,19 +72,11 @@ INPUT_IDS = "input_ids"
 ATTENTION_MASK = "attention_mask"
 PIXEL_VALUES = "pixel_values"
 IMAGE_GRID_THW = "image_grid_thw"
+MM_TOKEN_TYPE_IDS = "mm_token_type_ids"  # noqa: S105  (output key, not a secret)
 IMAGE_WISE_ENCODING = "image_wise_encoding"
 NUM_VIEWS = "num_views"
 NUM_FRAMES = "num_frames"
 ACTION_MASK = "action_mask"
-
-# Stats keys.
-STATS_MIN = "min"
-STATS_MAX = "max"
-STATS_MEAN = "mean"
-STATS_STD = "std"
-STATS_Q01 = "q01"
-STATS_Q99 = "q99"
-STAT_KEYS = (STATS_MIN, STATS_MAX, STATS_MEAN, STATS_STD, STATS_Q01, STATS_Q99)
 
 # Default padded dimensions (match RLDX PT config.json).
 MAX_STATE_DIM = 64
@@ -82,7 +86,7 @@ ACTION_HORIZON = 16
 # Default embodiment projector slot. 0 = general_embodiment, the slot RLDX-1
 # reserves and pre-conditions for downstream / new-robot fine-tunes (every
 # released FT used it). Released benchmark checkpoints use the slot they were
-# trained on (see EMBODIMENT_TAG_TO_PROJECTOR_INDEX in components.processing):
+# trained on (see EMBODIMENT_TAG_TO_PROJECTOR_INDEX in components.embodiments):
 # 0 = general_embodiment (FT-ROBOCASA/RC365/LIBERO/GR1),
 # 1 = fractal20220817_data (FT-SIMPLER-GOOGLE), 3 = bridge_orig (FT-SIMPLER-WIDOWX).
 # (35 = new_embodiment is the legacy GR00T slot, superseded by general_embodiment.)
@@ -93,22 +97,10 @@ DEFAULT_EMBODIMENT_ID = 0
 DEFAULT_MODEL_NAME = "RLWRLD/RLDX-1-VLM"
 DEFAULT_TASK = "Perform the task."
 
-# Vision-temporal-conditioned backbone variant.
-MODEL_TYPE = "vtc_qwen3_vl"
-
-# Single-group modality names fed to the vendored RLDXProcessor.
-STATE_GROUP = "state"
-ACTION_GROUP = "action"
-RELATIVE_ACTION_GROUP = "relative_action"
-
 # Fixed upstream RLDX-1 recipe (FT config.json ground truth): text-first prompt
-# order, lowercase + strip punctuation, clip outliers during normalization.
+# order, lowercase + strip punctuation.
 FORMALIZE_LANGUAGE = True
 CONVERSATION_IMAGE_FIRST = False
-CLIP_OUTLIERS = True
-
-# Studio dataset-stats keys that may carry relative-action statistics.
-RELATIVE_ACTION_STAT_KEYS = ("relative_action", "action.relative")
 
 
 # ============================================================================ #
@@ -119,21 +111,19 @@ RELATIVE_ACTION_STAT_KEYS = ("relative_action", "action.relative")
 class Rldx1Preprocessor(nn.Module):
     """Preprocessor for RLDX-1 policy inputs.
 
-    Thin adapter over the vendored upstream :class:`RLDXProcessor`
-    (``components/processing/processing_rldx.py``). It converts a Studio
-    :class:`~physicalai.data.observation.Observation` (or an equivalent flat
-    dict) into per-sample content dicts, runs the verbatim upstream processor
-    and data collator, and returns the exact ``inputs`` dict consumed by
+    Converts a Studio :class:`~physicalai.data.observation.Observation` (or an
+    equivalent flat dict) into the exact ``inputs`` dict consumed by
     :meth:`RLDX.forward` / :meth:`RLDX.get_action`.
 
-    Driving the vendored processor guarantees byte-for-byte parity with the
-    upstream RLDX pipeline (state/action per-joint-group normalization,
-    relative-action pose math, albumentations image resize, Qwen3-VL smart
-    resize, text-first chat template, ``formalize_language``). See
-    ``scripts/rldx1_parity_check.py`` for the numerical-parity proof.
+    Runs the PAS-native pipeline (:meth:`forward`): library state/action
+    normalization, ``cv2`` aspect-area resize + center crop,
+    ``formalize_language``, text-first Qwen3-VL chat template, and HF
+    tokenization. The native pipeline is parity-tested against the original
+    vendored processor (see ``tests/unit/policies/test_rldx1_preprocessing.py``).
+    The HF Qwen3-VL processor is loaded lazily on the first call.
 
-    The processor is built lazily on the first call (it loads the Qwen3-VL
-    tokenizer / image processor and depends on the observed camera-view keys).
+    Scope (v1): absolute actions, single observation step. Relative actions are
+    not supported.
 
     Args:
         max_state_dim: Padded state dimension (shorter states zero-padded).
@@ -141,12 +131,9 @@ class Rldx1Preprocessor(nn.Module):
         action_horizon: Number of action steps predicted per chunk.
         model_name: HuggingFace ID / local path of the Qwen3-VL processor.
         revision: Pinned git commit SHA for the processor download.
-        normalize: Retained for API compatibility; the vendored processor
-            always normalizes from ``stats``.
+        normalize: Retained for API compatibility; normalization is always
+            applied from ``stats``.
         use_percentiles: Use 1st/99th percentile bounds instead of min/max.
-        use_relative_action: Encode actions relative to the current state.
-            Requires ``relative_action`` statistics; otherwise falls back to
-            absolute actions with a warning.
         image_max_area: Target max area (pixels) for aspect-preserving resize.
         image_resize_m: Alignment multiple for resized/cropped dimensions.
         default_task: Fallback instruction when an observation has no task.
@@ -171,14 +158,13 @@ class Rldx1Preprocessor(nn.Module):
         revision: str | None = None,
         normalize: bool = True,
         use_percentiles: bool = True,
-        use_relative_action: bool = False,
         image_max_area: int = 65536,
         image_resize_m: int = 32,
         default_task: str = DEFAULT_TASK,
         embodiment_id: int = DEFAULT_EMBODIMENT_ID,
         stats: dict[str, dict[str, list[float]]] | None = None,
     ) -> None:
-        """Initialize the adapter and build the processor statistics."""
+        """Initialize the preprocessor and build the normalization blocks."""
         super().__init__()
 
         self.max_state_dim = max_state_dim
@@ -193,190 +179,139 @@ class Rldx1Preprocessor(nn.Module):
         self.default_task = default_task
         self.embodiment_id = embodiment_id
 
-        self._statistics, self._relative = self._build_statistics(stats, use_relative_action=use_relative_action)
+        # PAS-native state/action normalizer (Stage 1). An nn.Module submodule so
+        # its min/max/q01/q99 buffers move with `.to(device)` and export cleanly.
+        sa_features = build_state_action_features(stats)
+        self._has_sa_features = bool(sa_features)
+        if sa_features:
+            norm_map = build_state_action_norm_map(use_percentiles=use_percentiles)
+            self._state_action_normalizer: nn.Module = FeatureNormalizeTransform(sa_features, norm_map)
+        else:
+            self._state_action_normalizer = nn.Identity()
 
-        # Lazily-built vendored RLDXProcessor (not an nn.Module). Rebuilt if the
-        # observed set of camera-view keys changes.
-        self._processor: RLDXProcessor | None = None
-        self._view_keys: list[str] | None = None
-
-    # -- statistics -------------------------------------------------------- #
-
-    def _build_statistics(
-        self,
-        stats: dict[str, dict[str, list[float]]] | None,
-        *,
-        use_relative_action: bool,
-    ) -> tuple[dict[str, Any], bool]:
-        """Translate Studio dataset stats into the processor statistics schema.
-
-        Returns:
-            Tuple ``(statistics, relative)`` where ``statistics`` is keyed by
-            ``{"state"/"action"/"relative_action": {group: stat}}``
-            and ``relative`` indicates whether relative actions are active.
-        """
-        state_stat = self._extract_stat(stats, (OBSERVATION_STATE, STATE))
-        action_stat = self._extract_stat(stats, (ACTION, ACTION_GROUP))
-        statistics: dict[str, Any] = {
-            STATE_GROUP: {STATE_GROUP: state_stat},
-            ACTION_GROUP: {ACTION_GROUP: action_stat},
-        }
-
-        ## ?!?! use_relative_action is set to True, but no relative_action statistics were found in the dataset stats????
-        ## how do we support relative action?
-        relative = False
-        if use_relative_action:
-            rel_stat = self._extract_stat(stats, RELATIVE_ACTION_STAT_KEYS)
-            if rel_stat is not None:
-                statistics[RELATIVE_ACTION_GROUP] = {ACTION_GROUP: rel_stat}
-                relative = True
-            else:
-                logger.warning(
-                    "use_relative_action=True but no 'relative_action' statistics were "
-                    "found in the dataset stats; falling back to ABSOLUTE actions. Provide "
-                    "relative-action stats to enable relative encoding.",
-                )
-        return statistics, relative
-
-    @staticmethod
-    def _extract_stat(
-        stats: dict[str, dict[str, list[float]]] | None,
-        keys: tuple[str, ...],
-    ) -> dict[str, list[float]] | None:
-        """Return the first matching, coerced stat entry for ``keys``.
-
-        Returns:
-            A stat dict with all of :data:`STAT_KEYS`, or ``None`` if absent.
-        """
-        if not stats:
-            return None
-        for key in keys:
-            entry = stats.get(key)
-            if entry is not None:
-                return Rldx1Preprocessor._coerce_stat(entry)
-        return None
-
-    @staticmethod
-    def _coerce_stat(raw: Any) -> dict[str, list[float]] | None:  # noqa: ANN401
-        """Coerce a raw stat mapping to lists, filling missing sub-keys.
-
-        Returns:
-            Dict with ``min``/``max``/``mean``/``std``/``q01``/``q99`` as
-            ``list[float]``, or ``None`` when no numeric vector is present.
-        """
-
-        def vec(key: str) -> list[float] | None:
-            value = raw.get(key) if isinstance(raw, dict) else None
-            if value is None:
-                return None
-            return np.asarray(value, dtype=np.float64).ravel().tolist()
-
-        mn, mx = vec(STATS_MIN), vec(STATS_MAX)
-        q01, q99 = vec(STATS_Q01), vec(STATS_Q99)
-        mean, std = vec(STATS_MEAN), vec(STATS_STD)
-
-        dim_src = next((v for v in (mn, mx, q01, q99, mean, std) if v is not None), None)
-        if dim_src is None:
-            return None
-        dim = len(dim_src)
-
-        mn = mn if mn is not None else (q01 if q01 is not None else [-1.0] * dim)
-        mx = mx if mx is not None else (q99 if q99 is not None else [1.0] * dim)
-        q01 = q01 if q01 is not None else list(mn)
-        q99 = q99 if q99 is not None else list(mx)
-        mean = mean if mean is not None else [0.0] * dim
-        std = std if std is not None else [1.0] * dim
-        return {
-            STATS_MIN: mn,
-            STATS_MAX: mx,
-            STATS_MEAN: mean,
-            STATS_STD: std,
-            STATS_Q01: q01,
-            STATS_Q99: q99,
-        }
-
-    # -- processor --------------------------------------------------------- #
-
-    def _get_processor(self, view_keys: list[str]) -> RLDXProcessor:
-        """Lazily build the vendored RLDXProcessor for the given camera views.
-
-        Returns:
-            The cached :class:`RLDXProcessor` instance.
-
-        Raises:
-            ValueError: If state / action statistics are missing.
-        """
-        if self._processor is not None and self._view_keys == view_keys:
-            return self._processor
-
-        from .components.processing import (  # noqa: PLC0415
-            ActionConfig,
-            ActionFormat,
-            ActionRepresentation,
-            ActionType,
-            ModalityConfig,
-            RLDXProcessor,
-        )
-
-        if (
-            self._statistics[STATE_GROUP][STATE_GROUP] is None
-            or self._statistics[ACTION_GROUP][ACTION_GROUP] is None
-        ):
-            msg = (
-                "RLDX-1 preprocessor requires dataset statistics for state and action "
-                "(min/max or q01/q99). None were found in the provided stats."
+        # PAS-native action denormalizer (Stage 5). Inverse of the action half of
+        # the forward normalizer; the postprocessor uses it to decode predicted
+        # action chunks back to the environment space. `_action_dim` is the
+        # unpadded action width.
+        action_feature = sa_features.get(ACTION)
+        if action_feature is not None:
+            self._action_dim = int(action_feature.shape[0])
+            self._action_denormalizer: nn.Module = FeatureNormalizeTransform(
+                {ACTION: action_feature},
+                build_state_action_norm_map(use_percentiles=use_percentiles),
+                inverse=True,
             )
-            raise ValueError(msg)
+        else:
+            self._action_dim = 0
+            self._action_denormalizer = nn.Identity()
 
-        rep = ActionRepresentation.RELATIVE if self._relative else ActionRepresentation.ABSOLUTE
-        modality_configs = {
-            STATE_GROUP: ModalityConfig(delta_indices=[0], modality_keys=[STATE_GROUP]),
-            ACTION_GROUP: ModalityConfig(
-                delta_indices=list(range(self.action_horizon)),
-                modality_keys=[ACTION_GROUP],
-                action_configs=[
-                    ActionConfig(
-                        rep=rep,
-                        type=ActionType.NON_EEF,
-                        format=ActionFormat.DEFAULT,
-                        state_key=STATE_GROUP,
-                    ),
-                ],
-            ),
-            "video": ModalityConfig(delta_indices=[0], modality_keys=list(view_keys)),
-        }
+        # Lazily-loaded HF Qwen processor for the PAS-native VLM path (Stage 4).
+        self._vlm_processor_cache: ProcessorMixin | None = None
 
-        # lib.security: never trust_remote_code; pin the processor revision.
-        loading_kwargs: dict[str, Any] = {"trust_remote_code": False, "use_fast": True}
-        if self.revision is not None:
-            loading_kwargs["revision"] = self.revision
+    # -- native VLM processor ---------------------------------------------- #
 
-        processor = RLDXProcessor(
-            modality_configs=modality_configs,
-            statistics=self._statistics,
-            model_name=self.model_name,
-            model_type=MODEL_TYPE,
+    @property
+    def _vlm_processor(self) -> ProcessorMixin:
+        """Lazily load the HF Qwen processor for the PAS-native VLM path.
+
+        Returns:
+            The cached HF processor with left padding (Flash-Attention
+            compatible), loaded with ``trust_remote_code=False`` and the pinned
+            ``revision``.
+        """
+        if self._vlm_processor_cache is None:
+            from transformers import AutoProcessor  # noqa: PLC0415
+
+            # lib.security: never trust_remote_code; pin the processor revision.
+            loading_kwargs: dict[str, Any] = {"trust_remote_code": False, "use_fast": True}
+            if self.revision is not None:
+                loading_kwargs["revision"] = self.revision
+            processor = AutoProcessor.from_pretrained(self.model_name, **loading_kwargs)
+            processor.tokenizer.padding_side = "left"
+            self._vlm_processor_cache = processor
+        return self._vlm_processor_cache
+
+    # -- native forward ---------------------------------------------------- #
+
+    def _normalize_pad_state_action(
+        self,
+        batch_dict: dict[str, Any],
+        *,
+        has_action: bool,
+    ) -> dict[str, torch.Tensor]:
+        """Normalize, clip and pad state/action with the PAS-native blocks.
+
+        Returns:
+            Dict with padded ``state`` ``(B, 1, max_state_dim)`` and, when an
+            action is present, ``action`` ``(B, action_horizon, max_action_dim)``
+            plus ``action_mask``.
+        """
+        # Run on the normalizer's buffer device (falls back to CPU for Identity).
+        sa_device = torch.device("cpu")
+        for buf in self._state_action_normalizer.buffers():
+            sa_device = buf.device
+            break
+
+        state_raw = batch_dict.get(OBSERVATION_STATE, batch_dict.get(STATE))
+        sa_batch: dict[str, Any] = {STATE: self._as_float_tensor(state_raw).to(sa_device)}
+        if has_action:
+            sa_batch[ACTION] = self._as_float_tensor(batch_dict[ACTION]).to(sa_device)
+
+        sa_batch = self._state_action_normalizer(sa_batch)
+        if self._has_sa_features:
+            sa_batch = clip_state_action(sa_batch)
+        sa_batch = pad_state_action(
+            sa_batch,
             max_state_dim=self.max_state_dim,
             max_action_dim=self.max_action_dim,
             max_action_horizon=self.action_horizon,
-            use_relative_action=self._relative,
-            use_percentiles=self.use_percentiles,
-            clip_outliers=CLIP_OUTLIERS,
-            formalize_language=FORMALIZE_LANGUAGE,
-            conversation_image_first=CONVERSATION_IMAGE_FIRST,
-            image_max_area=self.image_max_area,
-            image_resize_m=self.image_resize_m,
-            embodiment_id=self.embodiment_id,
-            transformers_loading_kwargs=loading_kwargs,
         )
-        self._processor = processor
-        self._view_keys = list(view_keys)
-        return processor
+
+        dtype = torch.get_default_dtype()
+        return {key: value.to(dtype) for key, value in sa_batch.items()}
+
+    def _build_conversations(
+        self,
+        batch_dict: dict[str, Any],
+        view_keys: list[str],
+        tasks: list[str],
+        batch_size: int,
+    ) -> list[list[dict[str, Any]]]:
+        """Build one Qwen conversation per sample (Stage 3 geometry + Stage 4).
+
+        Returns:
+            A list of ``batch_size`` conversations, each with the sample's
+            resized camera views and (optionally formalized) instruction.
+        """
+        from PIL import Image  # noqa: PLC0415
+
+        conversations: list[list[dict[str, Any]]] = []
+        for index in range(batch_size):
+            images = []
+            for view in view_keys:
+                hwc = self._to_hwc_uint8(self._index(batch_dict[view], index))
+                resized = resize_and_center_crop(
+                    hwc,
+                    max_area=self.image_max_area,
+                    m=self.image_resize_m,
+                )
+                images.append(Image.fromarray(resized))
+
+            language = formalize_language(tasks[index]) if FORMALIZE_LANGUAGE else tasks[index]
+            conversations.append(
+                build_qwen_conversation(images, language, image_first=CONVERSATION_IMAGE_FIRST),
+            )
+        return conversations
 
     # -- forward ----------------------------------------------------------- #
 
     def forward(self, batch: Observation | dict[str, Any]) -> dict[str, torch.Tensor]:
         """Preprocess an observation batch into RLDX ``inputs``.
+
+        Runs the PAS-native pipeline: state/action normalization + padding,
+        ``cv2`` image geometry, and Qwen3-VL tokenization (see
+        ``preprocessing.py``). Supports the v1 configuration only: absolute
+        actions, single observation step, deterministic image geometry.
 
         Args:
             batch: Input as :class:`Observation` or a flat dict with keys
@@ -396,58 +331,79 @@ class Rldx1Preprocessor(nn.Module):
             msg = "RLDX-1 preprocessor requires at least one camera image."
             raise ValueError(msg)
 
-        processor = self._get_processor(view_keys)
-        # Sync the processor's train/eval mode: selects the deterministic image
-        # transform and disables stochastic embodiment routing at inference.
-        if self.training:
-            processor.train()
-        else:
-            processor.eval()
-
         batch_size, device = self._infer_batch_info(batch_dict)
         tasks = self._task_strings(batch_dict.get(TASK), batch_size)
         has_action = batch_dict.get(ACTION) is not None
 
-        per_sample = [
-            processor([{"content": self._to_vla(batch_dict, b, view_keys, tasks[b], has_action=has_action)}])
-            for b in range(batch_size)
-        ]
-        collated = processor.collator(per_sample)
-        inputs = dict(collated["inputs"])
+        sa_inputs = self._normalize_pad_state_action(batch_dict, has_action=has_action)
+        conversations = self._build_conversations(batch_dict, view_keys, tasks, batch_size)
+        vlm = tokenize_vlm_batch(self._vlm_processor, conversations)
+
+        inputs: dict[str, torch.Tensor] = {
+            INPUT_IDS: vlm[INPUT_IDS],
+            ATTENTION_MASK: vlm[ATTENTION_MASK],
+            PIXEL_VALUES: vlm[PIXEL_VALUES],
+            IMAGE_GRID_THW: vlm[IMAGE_GRID_THW],
+            # vtc scalars: bool image-wise flag, view/frame counts (T == 1 in v1).
+            IMAGE_WISE_ENCODING: torch.tensor([True] * batch_size),
+            NUM_VIEWS: torch.tensor([len(view_keys)] * batch_size),
+            NUM_FRAMES: torch.tensor([1] * batch_size),
+            STATE: sa_inputs[STATE],
+            "embodiment_id": torch.tensor([self.embodiment_id] * batch_size),
+        }
+        if MM_TOKEN_TYPE_IDS in vlm:
+            inputs[MM_TOKEN_TYPE_IDS] = vlm[MM_TOKEN_TYPE_IDS]
+        if has_action:
+            inputs[ACTION] = sa_inputs[ACTION]
+            inputs[ACTION_MASK] = sa_inputs[ACTION_MASK]
+
         return {key: (value.to(device) if isinstance(value, torch.Tensor) else value) for key, value in inputs.items()}
 
-    def _to_vla(
-        self,
-        batch: dict[str, Any],
-        index: int,
-        view_keys: list[str],
-        task: str,
-        *,
-        has_action: bool,
-    ) -> dict[str, Any]:
-        """Build a single per-step content dict from a batched observation.
+    @staticmethod
+    def _as_float_tensor(value: Any) -> torch.Tensor:  # noqa: ANN401
+        """Coerce a state/action value to a float32 tensor.
 
         Returns:
-            A content dict (``images``/``states``/``actions``/``text``) for
-            ``batch`` element ``index``, consumed by the vendored processor.
+            A ``float32`` tensor view of ``value``.
         """
-        state = self._index(batch.get(OBSERVATION_STATE, batch.get(STATE)), index)
-        state_np = np.asarray(state, dtype=np.float32).reshape(1, -1)
+        if isinstance(value, torch.Tensor):
+            return value.to(torch.float32)
+        return torch.as_tensor(np.asarray(value, dtype=np.float32))
 
-        actions: dict[str, np.ndarray] = {}
-        if has_action:
-            action_np = np.asarray(self._index(batch[ACTION], index), dtype=np.float32)
-            if action_np.ndim == 1:
-                action_np = action_np.reshape(1, -1)
-            actions = {ACTION_GROUP: action_np}
+    # -- native denormalization (postprocessor) ---------------------------- #
 
-        images = {key: [self._to_hwc_uint8(self._index(batch[key], index))] for key in view_keys}
-        return {
-            "images": images,
-            "states": {STATE_GROUP: state_np},
-            "actions": actions,
-            "text": task,
-        }
+    def denormalize_action(self, action: torch.Tensor) -> torch.Tensor:
+        """Decode a normalized action chunk to the environment space (Stage 5).
+
+        PAS-native inverse of the forward action normalization: slices to the
+        unpadded action width and prediction horizon, clamps to ``[-1, 1]``
+        (matching the vendored ``unnormalize_values_minmax`` clip), then applies
+        the inverse :class:`FeatureNormalizeTransform`.
+
+        Args:
+            action: Predicted action ``(B, T, max_action_dim)``.
+
+        Returns:
+            Denormalized action ``(B, action_horizon, action_dim)`` in the
+            original environment space.
+
+        Raises:
+            RuntimeError: If no action statistics were provided.
+        """
+        if self._action_dim <= 0:
+            msg = "Cannot denormalize action: no action statistics were provided to the preprocessor."
+            raise RuntimeError(msg)
+
+        sliced = action[..., : self.action_horizon, : self._action_dim].clamp(-1.0, 1.0)
+
+        denorm_device = sliced.device
+        for buf in self._action_denormalizer.buffers():
+            denorm_device = buf.device
+            break
+
+        batch = {ACTION: sliced.to(denorm_device)}
+        batch = self._action_denormalizer(batch)
+        return batch[ACTION].to(action.device, action.dtype)
 
     @staticmethod
     def _index(value: Any, index: int) -> np.ndarray | None:  # noqa: ANN401
@@ -537,17 +493,12 @@ class Rldx1Postprocessor(nn.Module):
     """Postprocessor for RLDX-1 policy outputs.
 
     Decodes the RLDX ``action_pred`` ``(B, action_horizon, max_action_dim)``
-    back to the environment action space using the same vendored
-    :class:`RLDXProcessor` that produced the inputs. This guarantees the inverse
-    transform matches the forward normalization exactly (per-joint-group
-    unnormalization and, when enabled, relative-to-absolute pose conversion).
-
-    The processor is shared with the paired :class:`Rldx1Preprocessor`; the
-    preprocessor must run at least once (it builds the processor lazily) before
-    postprocessing.
+    back to the environment action space using the paired preprocessor's
+    PAS-native inverse normalization
+    (:meth:`Rldx1Preprocessor.denormalize_action`).
 
     Args:
-        preprocessor: The paired preprocessor holding the vendored processor.
+        preprocessor: The paired preprocessor holding the normalization stats.
         env_action_dim: Original (unpadded) action dimension. ``0`` keeps the
             full decoded width.
 
@@ -573,39 +524,25 @@ class Rldx1Postprocessor(nn.Module):
     def forward(
         self,
         action: torch.Tensor,
-        state: dict[str, np.ndarray] | None = None,
+        state: dict[str, np.ndarray] | None = None,  # noqa: ARG002 - reserved for relative-action decoding
     ) -> torch.Tensor:
         """Decode the predicted action chunk to the environment action space.
 
         Args:
             action: RLDX prediction ``(B, T, D)`` or ``(B, D)``.
-            state: Optional current state ``{group: array}`` used to convert
-                relative actions back to absolute. Required only when the
-                preprocessor uses relative actions.
+            state: Reserved for future relative-action decoding; ignored.
 
         Returns:
             Action chunk ``(B, T, env_action_dim)`` (or ``(B, env_action_dim)``
             when the input was 2-D) in the original environment space.
-
-        Raises:
-            RuntimeError: If the paired preprocessor has not built its processor.
         """
         pre = self._pre_ref[0]
-        processor = pre._processor  # noqa: SLF001  (tightly-coupled paired transforms)
-        if processor is None:
-            msg = "Run the preprocessor before the postprocessor (processor not built yet)."
-            raise RuntimeError(msg)
 
         squeeze = action.dim() == 2  # noqa: PLR2004
         if squeeze:
             action = action.unsqueeze(1)
 
-        action_np = action.detach().to(torch.float32).cpu().numpy()
-        decoded = processor.decode_action(
-            action_np,
-            state=state,
-        )
-        out_t = torch.from_numpy(np.asarray(decoded[ACTION_GROUP])).to(action.device, action.dtype)
+        out_t = pre.denormalize_action(action)
 
         if self.env_action_dim > 0 and out_t.shape[-1] >= self.env_action_dim:
             out_t = out_t[..., : self.env_action_dim]
@@ -629,15 +566,14 @@ def make_rldx1_transforms(
     revision: str | None = None,
     normalize: bool = True,
     use_percentiles: bool = True,
-    use_relative_action: bool = False,
     image_max_area: int = 65536,
     image_resize_m: int = 32,
     embodiment_id: int = DEFAULT_EMBODIMENT_ID,
 ) -> tuple[Rldx1Preprocessor, Rldx1Postprocessor]:
     """Build the matched RLDX-1 preprocessor / postprocessor pair.
 
-    Both share a single vendored :class:`RLDXProcessor`, so the forward and
-    inverse transforms are guaranteed consistent.
+    Both share the same normalization statistics, so the forward and inverse
+    transforms are guaranteed consistent.
 
     Args:
         stats: Dataset statistics for (de)normalization.
@@ -647,9 +583,8 @@ def make_rldx1_transforms(
         action_horizon: Number of action steps per chunk.
         model_name: HuggingFace ID / local path of the Qwen3-VL processor.
         revision: Pinned git commit SHA for the processor download.
-        normalize: Retained for API compatibility (processor always normalizes).
+        normalize: Retained for API compatibility (normalization always applied).
         use_percentiles: Prefer 1st/99th percentile bounds over min/max.
-        use_relative_action: Encode actions relative to the current state.
         image_max_area: Target max area (pixels) for aspect-preserving resize.
         image_resize_m: Alignment multiple for resized/cropped dimensions.
         embodiment_id: Per-embodiment projector slot in the MSAT action head
@@ -666,7 +601,6 @@ def make_rldx1_transforms(
         revision=revision,
         normalize=normalize,
         use_percentiles=use_percentiles,
-        use_relative_action=use_relative_action,
         image_max_area=image_max_area,
         image_resize_m=image_resize_m,
         embodiment_id=embodiment_id,

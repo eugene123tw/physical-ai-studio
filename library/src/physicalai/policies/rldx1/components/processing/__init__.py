@@ -11,31 +11,29 @@
 # SPDX headers and provenance notices are preserved.
 #
 # Upstream: https://github.com/rlwrld/RLDX-1
-#   rldx/data/state_action/pose.py            -> pose.py
-#   rldx/data/state_action/action_chunking.py -> action_chunking.py
-#   rldx/data/augmentations.py                -> augmentations.py
-#   rldx/data/utils.py                        -> data_utils.py
-#   rldx/data/types.py                        -> data_types.py
 #   rldx/utils/qwen_vision_process.py         -> qwen_vision_process.py
 # Original: https://github.com/NVIDIA/Isaac-GR00T
 #
 # Studio modifications (documented in-file): import paths rewritten to relative
-# imports. The vendored parity oracles -- ``RLDXProcessor`` / ``RLDXDataCollator`` /
-# ``build_processor`` (upstream ``rldx/model/core/processing_rldx.py``) and the
-# numpy ``StateActionProcessor`` (upstream
-# ``rldx/data/state_action/state_action_processor.py``) -- are no longer part of
-# this runtime subpackage: Studio's native :class:`Rldx1Preprocessor` replaced
-# those paths, so their only consumer is the parity test. They now live at
-# ``tests/unit/policies/{processing_rldx,state_action_processor}.py`` (imports
-# rewritten to absolute).
+# imports. The vendored parity oracles and their numpy-only dependencies --
+# ``RLDXProcessor`` / ``RLDXDataCollator`` / ``build_processor`` (upstream
+# ``rldx/model/core/processing_rldx.py``), the numpy ``StateActionProcessor``
+# (upstream ``rldx/data/state_action/state_action_processor.py``), and the
+# ``pose`` / ``action_chunking`` / ``data_utils`` / ``data_types`` helpers they
+# rely on -- are no longer part of this runtime subpackage: Studio's native
+# :class:`Rldx1Preprocessor` replaced those paths, so their only consumer is the
+# parity test. They now live under ``tests/unit/policies/rldx1_vendored/``
+# (imports rewritten to relative). Only ``qwen_vision_process`` remains, since
+# the native preprocessor still calls into it at runtime.
 """Vendored RLDX-1 data-processing pipeline (Apache-2.0).
 
-Exports the live config/data types (modality + action config enums) plus the
-shared embodiment-projector constants. The vendored ``RLDXProcessor`` collator
-pipeline and the numpy ``StateActionProcessor`` were moved to
-``tests/unit/policies/`` -- they are parity oracles with no production consumer,
-so keeping them out of ``src`` avoids dragging that machinery into the live
-import path.
+Re-exports the shared embodiment-projector constants. The vendored
+``RLDXProcessor`` collator pipeline, the numpy ``StateActionProcessor``, and
+their ``pose`` / ``action_chunking`` / ``data_utils`` / ``data_types``
+dependencies were moved to ``tests/unit/policies/rldx1_vendored/`` -- they are
+parity oracles with no production consumer, so keeping them out of ``src``
+avoids dragging that machinery into the live import path. The only runtime
+module left here is ``qwen_vision_process``.
 """
 
 from physicalai.policies.rldx1.components.embodiments import (
@@ -44,21 +42,8 @@ from physicalai.policies.rldx1.components.embodiments import (
     NEW_EMBODIMENT_ID,
 )
 
-from .data_types import (
-    ActionConfig,
-    ActionFormat,
-    ActionRepresentation,
-    ActionType,
-    ModalityConfig,
-)
-
 __all__ = [
     "EMBODIMENT_TAG_TO_PROJECTOR_INDEX",
     "GENERAL_EMBODIMENT_ID",
     "NEW_EMBODIMENT_ID",
-    "ActionConfig",
-    "ActionFormat",
-    "ActionRepresentation",
-    "ActionType",
-    "ModalityConfig",
 ]

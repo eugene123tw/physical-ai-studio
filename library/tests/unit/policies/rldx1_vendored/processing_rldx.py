@@ -13,19 +13,19 @@ import numpy as np
 from PIL import Image
 from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 from physicalai.policies.rldx1.components.embodiments import GENERAL_EMBODIMENT_ID
-from physicalai.policies.rldx1.components.processing.augmentations import (
+from tests.unit.policies.rldx1_vendored.augmentations import (
     apply_with_replay,
     build_image_transformations_albumentations,
 )
-from physicalai.policies.rldx1.components.processing.data_utils import (
+from tests.unit.policies.rldx1_vendored.data_utils import (
     parse_modality_configs,
     to_json_serializable,
 )
-from physicalai.policies.rldx1.components.processing.data_types import ModalityConfig
+from .data_types import ModalityConfig
 from physicalai.policies.rldx1.components.processing.qwen_vision_process import (
     process_vision_info as qwen_process_vision_info,
 )
-from tests.unit.policies.state_action_processor import StateActionProcessor
+from tests.unit.policies.rldx1_vendored.state_action_processor import StateActionProcessor
 import torch
 import torchvision.transforms.v2 as transforms
 from transformers import AutoProcessor, ProcessorMixin

@@ -19,7 +19,7 @@ from torch.distributions import Beta
 
 from physicalai.config.mixin import FromConfig
 
-from .nn import CategorySpecificMLP, MultiEmbodimentActionEncoder
+from physicalai.policies.shared.components.nn import CategorySpecificMLP, MultiEmbodimentActionEncoder
 from .transformer import get_dit_class, get_self_attention_transformer_class
 
 if TYPE_CHECKING:

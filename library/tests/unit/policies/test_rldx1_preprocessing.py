@@ -18,13 +18,6 @@ import pytest
 import torch
 
 from physicalai.data.observation import ACTION, STATE
-from physicalai.policies.rldx1.components.processing import (
-    ActionConfig,
-    ActionFormat,
-    ActionRepresentation,
-    ActionType,
-    ModalityConfig,
-)
 from physicalai.policies.rldx1.preprocessing import (
     ACTION_MASK,
     build_qwen_conversation,
@@ -38,7 +31,14 @@ from physicalai.policies.rldx1.preprocessing import (
     tokenize_vlm_batch,
 )
 from physicalai.policies.utils.normalization import FeatureNormalizeTransform
-from tests.unit.policies.state_action_processor import StateActionProcessor
+from tests.unit.policies.rldx1_vendored.data_types import (
+    ActionConfig,
+    ActionFormat,
+    ActionRepresentation,
+    ActionType,
+    ModalityConfig,
+)
+from tests.unit.policies.rldx1_vendored.state_action_processor import StateActionProcessor
 
 MAX_STATE_DIM = 64
 MAX_ACTION_DIM = 64
@@ -310,7 +310,7 @@ _IMAGE_SHAPES = [
 @pytest.mark.parametrize(("height", "width"), _IMAGE_SHAPES)
 def test_compute_resize_crop_matches_vendored(height: int, width: int) -> None:
     """Native geometry matches the vendored resize_preserve_aspect_area_then_crop."""
-    from physicalai.policies.rldx1.components.processing.augmentations import (
+    from tests.unit.policies.rldx1_vendored.augmentations import (
         resize_preserve_aspect_area_then_crop,
     )
 
@@ -334,7 +334,7 @@ def test_resize_and_center_crop_matches_vendored(height: int, width: int) -> Non
     """Native resize+crop is pixel-identical to the vendored eval transform."""
     import albumentations as A
 
-    from physicalai.policies.rldx1.components.processing.augmentations import (
+    from tests.unit.policies.rldx1_vendored.augmentations import (
         AspectAreaResizeAndCrop,
     )
 
@@ -410,7 +410,7 @@ def test_tokenize_vlm_batch_matches_vendored(vlm_processor) -> None:  # noqa: AN
     """Native VLM tokenization matches the vendored RLDXDataCollator output."""
     from PIL import Image
 
-    from tests.unit.policies.processing_rldx import RLDXDataCollator
+    from tests.unit.policies.rldx1_vendored.processing_rldx import RLDXDataCollator
 
     processor = vlm_processor
     rng = np.random.default_rng(0)

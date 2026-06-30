@@ -34,18 +34,18 @@ import logging
 from typing import Any
 
 import numpy as np
-from physicalai.policies.rldx1.components.processing.data_types import (
+from .data_types import (
     ActionFormat,
     ActionRepresentation,
     ActionType,
     ModalityConfig,
 )
-from physicalai.policies.rldx1.components.processing.action_chunking import (
+from tests.unit.policies.rldx1_vendored.action_chunking import (
     EndEffectorActionChunk,
     JointActionChunk,
 )
-from physicalai.policies.rldx1.components.processing.pose import EndEffectorPose, JointPose
-from physicalai.policies.rldx1.components.processing.data_utils import (
+from tests.unit.policies.rldx1_vendored.pose import EndEffectorPose, JointPose
+from tests.unit.policies.rldx1_vendored.data_utils import (
     apply_sin_cos_encoding,
     nested_dict_to_numpy,
     normalize_values_meanstd,

@@ -351,7 +351,7 @@ class Rldx1(Policy):
             msg = "Model not initialized. Call trainer.fit() or pass env_action_dim."
             raise RuntimeError(msg)
         preprocessed = self._preprocessor(batch)
-        return self.model.compute_loss(preprocessed)
+        return self.model.compute_val_loss(preprocessed)
 
     def configure_optimizers(self) -> dict[str, Any]:
         """Create AdamW optimizer and a linear-warmup scheduler.

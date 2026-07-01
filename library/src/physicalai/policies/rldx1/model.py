@@ -26,6 +26,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 import torch
+import torch.nn.functional as F
 
 from physicalai.policies.base import Model
 
@@ -263,6 +264,13 @@ class Rldx1Model(Model):
         # auto-injection, load the base weights, then inject on top.
         want_backbone_lora = bool(getattr(cfg, "backbone_use_lora", False))
         want_action_lora = bool(getattr(cfg, "action_model_use_lora", False))
+        if want_backbone_lora or want_action_lora:
+            logger.info(
+                "Deferring LoRA injection until after base checkpoint weights load "
+                "(backbone_lora=%s, action_lora=%s).",
+                want_backbone_lora,
+                want_action_lora,
+            )
         cfg.backbone_use_lora = False
         cfg.action_model_use_lora = False
 
@@ -305,6 +313,13 @@ class Rldx1Model(Model):
             cfg.action_model_use_lora = True
             net.action_model.set_trainable_parameters(
                 cfg.tune_projector, cfg.tune_diffusion_model, cfg.tune_vlln
+            )
+        if want_backbone_lora or want_action_lora:
+            logger.info(
+                "LoRA injection complete after checkpoint load "
+                "(backbone_lora=%s, action_lora=%s).",
+                want_backbone_lora,
+                want_action_lora,
             )
 
         # Re-assert the fp32 contract on LoRA adapter params: the ``net.to(dtype)``
@@ -398,6 +413,53 @@ class Rldx1Model(Model):
             if isinstance(value, torch.Tensor) and value.ndim == 0
         }
         return loss, loss_dict
+
+    @torch.no_grad()
+    def compute_val_loss(
+        self,
+        batch: Mapping[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        """Compute deterministic action prediction MSE for validation.
+
+        Runs the full denoising path via :meth:`get_action` and compares it to
+        ground-truth actions from the preprocessed batch.
+
+        Args:
+            batch: Collated RLDX inputs dict (must include ``action`` during
+                validation).
+
+        Returns:
+            ``(loss, loss_dict)`` where ``loss`` is action-space MSE.
+
+        Raises:
+            RuntimeError: If called before ``from_pretrained`` loads the network.
+            ValueError: If the batch does not contain ground-truth ``action``.
+        """
+        if self.net is None:
+            msg = "Rldx1Model has no loaded network; call from_pretrained first."
+            raise RuntimeError(msg)
+
+        if "action" not in batch:
+            msg = "Validation batch must include 'action' to compute action MSE."
+            raise ValueError(msg)
+
+        predicted = self.get_action(batch)
+        target = batch["action"]
+
+        min_len = min(predicted.shape[1], target.shape[1])
+        min_dim = min(predicted.shape[2], target.shape[2])
+        pred_trimmed = predicted[:, :min_len, :min_dim]
+        target_trimmed = target[:, :min_len, :min_dim]
+
+        if "action_mask" in batch:
+            mask = batch["action_mask"][:, :min_len, :min_dim].to(dtype=pred_trimmed.dtype)
+            sq_err = (pred_trimmed - target_trimmed).pow(2)
+            denom = mask.sum().clamp_min(1.0)
+            loss = (sq_err * mask).sum() / denom
+        else:
+            loss = F.mse_loss(pred_trimmed, target_trimmed)
+
+        return loss, {"loss": float(loss.detach()), "action_mse": float(loss.detach())}
 
     def get_action(self, batch: Mapping[str, torch.Tensor]) -> torch.Tensor:
         """Predict an action chunk via the flow-matching denoising loop.

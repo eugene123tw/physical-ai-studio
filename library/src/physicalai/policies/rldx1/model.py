@@ -102,7 +102,7 @@ class Rldx1Model(Model):
         self.net: RLDX | None = None
 
     @classmethod
-    def from_pretrained(
+    def from_pretrained(  # noqa: PLR0913
         cls,
         base_model_path: str = DEFAULT_BASE_MODEL_PATH,
         *,
@@ -110,6 +110,31 @@ class Rldx1Model(Model):
         attn_implementation: str = "sdpa",
         use_bf16: bool = True,
         gradient_checkpointing: bool = False,
+        # Fine-tuning / PEFT control (bridged onto the vendored RLDXConfig).
+        backbone_peft_mode: str = "full",
+        tune_top_llm_layers: int = 4,
+        tune_visual: bool = False,
+        tune_projector: bool = True,
+        tune_diffusion_model: bool = True,
+        tune_vlln: bool = True,
+        backbone_lora_rank: int = 64,
+        backbone_lora_alpha: int = 64,
+        backbone_lora_dropout: float = 0.0,
+        backbone_lora_targets: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj"),
+        action_peft_mode: str = "lora",
+        action_lora_rank: int = 64,
+        action_lora_alpha: int = 64,
+        action_lora_dropout: float = 0.0,
+        action_lora_targets: tuple[str, ...] = (
+            "vl_qkv",
+            "vl_proj",
+            "sa_qkv",
+            "sa_proj",
+            "p_qkv",
+            "p_proj",
+            "linear1",
+            "linear2",
+        ),
         **kwargs: Any,  # noqa: ANN401
     ) -> Rldx1Model:
         """Load RLDX-1 weights from a HuggingFace repo or local path.
@@ -125,6 +150,25 @@ class Rldx1Model(Model):
             use_bf16: Whether to load/compute in bfloat16.
             gradient_checkpointing: Whether to enable activation checkpointing
                 in the MSAT action model during training.
+            backbone_peft_mode: Backbone fine-tuning mode ('full', 'lora', 'frozen').
+                'lora' injects PEFT adapters into the top ``tune_top_llm_layers``
+                LLM layers; 'frozen' freezes the backbone entirely.
+            tune_top_llm_layers: Number of top LLM layers to adapt (full-tune in
+                'full' mode, LoRA scope in 'lora' mode).
+            tune_visual: Whether to fine-tune the vision tower.
+            tune_projector: Whether to fine-tune the cognition/state/action projectors.
+            tune_diffusion_model: Whether to full-tune the MSAT action model
+                (only applies when ``action_peft_mode='full'``).
+            tune_vlln: Whether to fine-tune the VLM-output layer norm.
+            backbone_lora_rank: LoRA rank for the backbone.
+            backbone_lora_alpha: LoRA alpha for the backbone.
+            backbone_lora_dropout: LoRA dropout for the backbone.
+            backbone_lora_targets: Linear module names to wrap with LoRA in the backbone.
+            action_peft_mode: MSAT action-model fine-tuning mode ('full', 'lora').
+            action_lora_rank: LoRA rank for the action model.
+            action_lora_alpha: LoRA alpha for the action model.
+            action_lora_dropout: LoRA dropout for the action model.
+            action_lora_targets: Linear module names to wrap with LoRA in the action model.
             **kwargs: Architecture overrides forwarded to ``__init__``.
 
         Returns:
@@ -160,6 +204,41 @@ class Rldx1Model(Model):
         cfg: RLDXConfig = RLDXConfig.from_pretrained(base_model_path, revision=revision)
         cfg.diffusion_model_cfg["gradient_checkpointing"] = gradient_checkpointing
 
+        # Bridge the Studio-level fine-tuning / PEFT knobs onto the vendored
+        # RLDXConfig. Without this the checkpoint config.json values win and the
+        # policy-interface flags (backbone_peft_mode, action_peft_mode, tune_*)
+        # are silently ignored -- e.g. backbone_use_lora stays False. Applied
+        # before ``RLDX(cfg, ...)`` because the LoRA injection and requires_grad
+        # bookkeeping run in the model constructor.
+        cfg.tune_visual = tune_visual
+        cfg.tune_projector = tune_projector
+        cfg.tune_vlln = tune_vlln
+        if backbone_peft_mode == "lora":
+            cfg.backbone_use_lora = True
+            cfg.tune_llm = False
+            cfg.tune_top_llm_layers = 0
+            cfg.backbone_lora_num_layers = tune_top_llm_layers if tune_top_llm_layers > 0 else -1
+            cfg.backbone_lora_rank = backbone_lora_rank
+            cfg.backbone_lora_alpha = backbone_lora_alpha
+            cfg.backbone_lora_dropout = backbone_lora_dropout
+            cfg.backbone_lora_target_modules = list(backbone_lora_targets)
+        elif backbone_peft_mode == "frozen":
+            cfg.backbone_use_lora = False
+            cfg.tune_llm = False
+            cfg.tune_top_llm_layers = 0
+        else:  # "full"
+            cfg.backbone_use_lora = False
+            cfg.tune_top_llm_layers = tune_top_llm_layers
+        if action_peft_mode == "lora":
+            cfg.action_model_use_lora = True
+            cfg.action_model_lora_rank = action_lora_rank
+            cfg.action_model_lora_alpha = action_lora_alpha
+            cfg.action_model_lora_dropout = action_lora_dropout
+            cfg.action_model_lora_target_modules = list(action_lora_targets)
+        else:  # "full"
+            cfg.action_model_use_lora = False
+            cfg.tune_diffusion_model = tune_diffusion_model
+
         # pop unused fields in cfg.diffusion_model_cfg that are not in the vendored RLDXConfig
         cfg.diffusion_model_cfg.pop("final_dropout", None)
         cfg.diffusion_model_cfg.pop("use_swiglu", None)
@@ -176,6 +255,17 @@ class Rldx1Model(Model):
         # supplies the full backbone + action-head weights. ``trust_remote_code``
         # is force-disabled (lib.security): Qwen3-VL is a native transformers
         # model, so no remote code execution is required.
+        # LoRA adapters must be injected AFTER the base checkpoint weights are
+        # loaded. PEFT wraps each target Linear, renaming its weight
+        # (``...q_proj.weight`` -> ``...q_proj.base_layer.weight``); injecting
+        # during construction makes every base weight key mismatch on load and
+        # trips the ``unexpected`` guard below. Suppress the constructor's
+        # auto-injection, load the base weights, then inject on top.
+        want_backbone_lora = bool(getattr(cfg, "backbone_use_lora", False))
+        want_action_lora = bool(getattr(cfg, "action_model_use_lora", False))
+        cfg.backbone_use_lora = False
+        cfg.action_model_use_lora = False
+
         net = RLDX(
             cfg,
             transformers_loading_kwargs={
@@ -205,6 +295,27 @@ class Rldx1Model(Model):
                 len(missing),
                 missing[:5],
             )
+
+        # Inject LoRA on top of the loaded base weights. The base Linear moves to
+        # ``base_layer`` (weights preserved); fresh adapters are marked trainable.
+        if want_backbone_lora:
+            cfg.backbone_use_lora = True
+            net._apply_backbone_lora()  # noqa: SLF001
+        if want_action_lora:
+            cfg.action_model_use_lora = True
+            net.action_model.set_trainable_parameters(
+                cfg.tune_projector, cfg.tune_diffusion_model, cfg.tune_vlln
+            )
+
+        # Re-assert the fp32 contract on LoRA adapter params: the ``net.to(dtype)``
+        # above cast the base network to bf16, so adapters injected afterwards
+        # land in bf16 too, whose AdamW state underflows on the first optimizer
+        # step and yields NaN losses. Only LoRA params are promoted -- negligible
+        # memory, unlike full-tuned trainable weights.
+        for pname, p in net.named_parameters():
+            if p.requires_grad and any(seg.startswith("lora_") for seg in pname.split(".")):
+                p.data = p.data.to(torch.float32)
+
         net.eval()
 
         # Allow call-site overrides while avoiding duplicate keyword forwarding

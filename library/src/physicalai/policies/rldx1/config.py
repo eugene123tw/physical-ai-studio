@@ -27,7 +27,7 @@ Example (API):
     >>> from physicalai.policies.rldx1 import Rldx1Config
     >>> config = Rldx1Config(
     ...     base_model_path="RLWRLD/RLDX-1-PT",
-    ...     action_peft_mode="lora",
+    ...     use_lora=True,
     ...     action_lora_rank=64,
     ... )
 """
@@ -82,12 +82,13 @@ class Rldx1Config(Config):
         tune_projector: Whether to fine-tune the cognition/state/action projectors.
         tune_diffusion_model: Whether to fine-tune the MSAT action model.
         tune_vlln: Whether to fine-tune the VLM-output layer norm.
-        backbone_peft_mode: PEFT mode for the backbone top layers ('full', 'lora', 'frozen').
-        backbone_lora_rank: LoRA rank for the backbone (when backbone_peft_mode='lora').
+        use_lora: Master LoRA switch. True -> LoRA adapters on both the backbone
+            top layers and the MSAT action model; False -> full fine-tune the
+            backbone top layers and (when tune_diffusion_model) the MSAT.
+        backbone_lora_rank: LoRA rank for the backbone (used when use_lora=True).
         backbone_lora_alpha: LoRA alpha for the backbone.
         backbone_lora_dropout: LoRA dropout for the backbone.
         backbone_lora_targets: Linear module names to wrap with LoRA in the backbone.
-        action_peft_mode: PEFT mode for the MSAT action model ('full', 'lora').
         action_lora_rank: LoRA rank for the action model (paper App. D free-lunch default).
         action_lora_alpha: LoRA alpha for the action model.
         action_lora_dropout: LoRA dropout for the action model.
@@ -120,15 +121,15 @@ class Rldx1Config(Config):
             the MSAT action model during training.
 
     Examples:
-        Free-lunch default (full backbone top-4 + LoRA r=64 action model):
+        LoRA on both the backbone top layers and the MSAT action model (default):
 
         >>> config = Rldx1Config()
-        >>> config.action_peft_mode
-        'lora'
+        >>> config.use_lora
+        True
 
-        Consumer-GPU preset (LoRA on both):
+        Full fine-tune instead of LoRA:
 
-        >>> config = Rldx1Config(backbone_peft_mode="lora")
+        >>> config = Rldx1Config(use_lora=False)
     """
 
     # Model architecture / action chunking
@@ -168,25 +169,34 @@ class Rldx1Config(Config):
     tune_diffusion_model: bool = True
     tune_vlln: bool = True
 
-    # Backbone PEFT (Qwen3-VL top layers). Paper App. D / Table 6.
-    backbone_peft_mode: Literal["full", "lora", "frozen"] = "full"
+    # LoRA master switch. True -> LoRA adapters on both the backbone top layers
+    # and the MSAT action model; False -> full fine-tune (backbone top layers,
+    # plus the MSAT when tune_diffusion_model=True). Paper App. D / Table 6.
+    use_lora: bool = True
+
+    # Backbone (Qwen3-VL top layers) LoRA hyperparameters (used when use_lora).
     backbone_lora_rank: int = 64
     backbone_lora_alpha: int = 64
     backbone_lora_dropout: float = 0.0
     backbone_lora_targets: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj")
 
-    # Action model (MSAT) PEFT. LoRA r=64 is the paper-recommended free lunch.
-    action_peft_mode: Literal["full", "lora"] = "lora"
+    # Action model (MSAT) LoRA hyperparameters (used when use_lora). r=64 is the
+    # paper-recommended free lunch. Targets are MSAT block module names (V-L /
+    # state-action / physics QKV + output projections and the MMDiT inner FFN
+    # linears), not Qwen attention names. Absent targets (e.g. p_qkv/p_proj when
+    # physics is disabled) are filtered before the PEFT call.
     action_lora_rank: int = 64
     action_lora_alpha: int = 64
     action_lora_dropout: float = 0.0
     action_lora_targets: tuple[str, ...] = (
-        "q_proj",
-        "k_proj",
-        "v_proj",
-        "o_proj",
-        "fc1",
-        "fc2",
+        "vl_qkv",
+        "vl_proj",
+        "sa_qkv",
+        "sa_proj",
+        "p_qkv",
+        "p_proj",
+        "linear1",
+        "linear2",
     )
 
     # Flow matching

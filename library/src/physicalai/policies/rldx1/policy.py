@@ -25,8 +25,7 @@ from physicalai.train import Trainer
 
 policy = Rldx1(
     base_model_path="RLWRLD/RLDX-1-PT",
-    action_peft_mode="lora",
-    action_lora_rank=64,
+    use_lora=True,
 )
 datamodule = LeRobotDataModule(repo_id="<user dataset>", train_batch_size=4)
 trainer = Trainer(max_steps=60000, precision="bf16-mixed")
@@ -80,8 +79,8 @@ class Rldx1(Policy):
         tune_visual: Whether to fine-tune the vision tower.
         tune_projector: Whether to fine-tune the projectors.
         tune_diffusion_model: Whether to fine-tune the MSAT action model.
-        backbone_peft_mode: PEFT mode for the backbone ('full', 'lora', 'frozen').
-        action_peft_mode: PEFT mode for the MSAT action model ('full', 'lora').
+        use_lora: Master LoRA switch. True -> LoRA on both the backbone top
+            layers and the MSAT action model; False -> full fine-tune instead.
         learning_rate: Learning rate for the optimizer.
         weight_decay: Weight decay for the optimizer.
         warmup_ratio: Warmup ratio (0.0-1.0) of total training steps.
@@ -115,8 +114,7 @@ class Rldx1(Policy):
         tune_visual: bool = False,
         tune_projector: bool = True,
         tune_diffusion_model: bool = True,
-        backbone_peft_mode: str = "full",
-        action_peft_mode: str = "lora",
+        use_lora: bool = True,
         # Optimizer
         learning_rate: float = 1e-4,
         weight_decay: float = 1e-5,
@@ -148,8 +146,7 @@ class Rldx1(Policy):
             tune_visual=tune_visual,
             tune_projector=tune_projector,
             tune_diffusion_model=tune_diffusion_model,
-            backbone_peft_mode=backbone_peft_mode,  # type: ignore[arg-type]
-            action_peft_mode=action_peft_mode,  # type: ignore[arg-type]
+            use_lora=use_lora,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
             warmup_ratio=warmup_ratio,
@@ -196,8 +193,7 @@ class Rldx1(Policy):
             tune_visual=config.tune_visual,
             tune_projector=config.tune_projector,
             tune_diffusion_model=config.tune_diffusion_model,
-            backbone_peft_mode=config.backbone_peft_mode,
-            action_peft_mode=config.action_peft_mode,
+            use_lora=config.use_lora,
             learning_rate=config.learning_rate,
             weight_decay=config.weight_decay,
             warmup_ratio=config.warmup_ratio,
@@ -235,6 +231,23 @@ class Rldx1(Policy):
             num_inference_timesteps=config.num_inference_timesteps,
             compile_model=config.compile_model,
             gradient_checkpointing=config.gradient_checkpointing,
+            # Fine-tuning / PEFT control -> bridged onto the vendored RLDXConfig.
+            # use_lora=False => full fine-tune the backbone top layers + MSAT.
+            backbone_peft_mode="lora" if config.use_lora else "full",
+            tune_top_llm_layers=config.tune_top_llm_layers,
+            tune_visual=config.tune_visual,
+            tune_projector=config.tune_projector,
+            tune_diffusion_model=config.tune_diffusion_model,
+            tune_vlln=config.tune_vlln,
+            backbone_lora_rank=config.backbone_lora_rank,
+            backbone_lora_alpha=config.backbone_lora_alpha,
+            backbone_lora_dropout=config.backbone_lora_dropout,
+            backbone_lora_targets=config.backbone_lora_targets,
+            action_peft_mode="lora" if config.use_lora else "full",
+            action_lora_rank=config.action_lora_rank,
+            action_lora_alpha=config.action_lora_alpha,
+            action_lora_dropout=config.action_lora_dropout,
+            action_lora_targets=config.action_lora_targets,
         )
         self._preprocessor, self._postprocessor = make_rldx1_transforms(
             stats=dataset_stats,  # type: ignore[arg-type]

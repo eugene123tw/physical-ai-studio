@@ -134,6 +134,7 @@ class SingleStreamBlock(nn.Module):
         pe: Optional[torch.Tensor] = None,
         shared_modulation: Optional[ModulationOut] = None,
         time_token: Optional[torch.Tensor] = None,
+        block_idx: int = 0,
         attn_mask: Optional[torch.Tensor] = None,
     ):
         """
@@ -324,6 +325,7 @@ class DoubleStreamBlock(nn.Module):
         pe: Optional[torch.Tensor] = None,
         shared_modulations: Optional[dict] = None,
         has_time_token: bool = False,
+        block_idx: int = 0,
         encoder_attention_mask: Optional[torch.Tensor] = None,
     ):
         """

@@ -16,6 +16,7 @@ from transformers import Qwen3VLForConditionalGeneration
 from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 
 from .layer_wrapper import LayerWrapper
+from .text_model_forward import install_vtc_text_forward
 
 
 def _checkpoint_has_motion_weights(
@@ -167,6 +168,9 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
                 img_pattern=[151652],
                 motion_token=1,
             )
+        # Stock transformers never threads input_ids into decoder layers and
+        # expects a bare-tensor layer return; the wrapped stack needs both.
+        install_vtc_text_forward(model.model.language_model)
         if "vtc" in pretrained_model_name_or_path.lower():
             if os.path.isdir(pretrained_model_name_or_path):
                 local_dir = pretrained_model_name_or_path

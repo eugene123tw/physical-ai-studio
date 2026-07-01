@@ -101,6 +101,9 @@ class VTCQwen3VLBackbone(nn.Module):
             from transformers import AutoConfig
 
             from physicalai.policies.rldx1.components.backbone.modeling_vtc import LayerWrapper
+            from physicalai.policies.rldx1.components.backbone.text_model_forward import (
+                install_vtc_text_forward,
+            )
 
             backbone_config = AutoConfig.from_pretrained(model_name, **transformers_loading_kwargs)
             if motion_config is not None:
@@ -117,6 +120,9 @@ class VTCQwen3VLBackbone(nn.Module):
                     img_pattern=[151652],
                     motion_token=1,
                 )
+            # Stock transformers never threads input_ids into decoder layers and
+            # expects a bare-tensor layer return; the wrapped stack needs both.
+            install_vtc_text_forward(self.qwen_model.model.language_model)
             if load_bf16:
                 self.qwen_model = self.qwen_model.to(torch.bfloat16)
         else:
@@ -465,9 +471,11 @@ class VTCQwen3VLBackbone(nn.Module):
             )
 
         if pixel_values is not None:
-            image_embeds, deepstack_image_embeds = self.qwen_model.model.get_image_features(
-                pixel_values, image_grid_thw, **moss_kwargs
+            image_outputs = self.qwen_model.model.get_image_features(
+                pixel_values, image_grid_thw, return_dict=True, **moss_kwargs
             )
+            image_embeds = image_outputs.pooler_output
+            deepstack_image_embeds = image_outputs.deepstack_features
             image_embeds = torch.cat(image_embeds, dim=0).to(device, inputs_embeds.dtype)
             image_mask, _ = self.qwen_model.model.get_placeholder_mask(
                 input_ids, inputs_embeds=inputs_embeds, image_features=image_embeds
@@ -475,9 +483,11 @@ class VTCQwen3VLBackbone(nn.Module):
             inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
         if pixel_values_videos is not None:
-            video_embeds, deepstack_video_embeds = self.qwen_model.model.get_video_features(
-                pixel_values_videos, video_grid_thw
+            video_outputs = self.qwen_model.model.get_video_features(
+                pixel_values_videos, video_grid_thw, return_dict=True
             )
+            video_embeds = video_outputs.pooler_output
+            deepstack_video_embeds = video_outputs.deepstack_features
             video_embeds = torch.cat(video_embeds, dim=0).to(device, inputs_embeds.dtype)
             _, video_mask = self.qwen_model.model.get_placeholder_mask(
                 input_ids, inputs_embeds=inputs_embeds, video_features=video_embeds
@@ -611,8 +621,17 @@ class VTCQwen3VLBackbone(nn.Module):
             if (
                 prefill_compiled_stage or prefill_noncompiled_stage
             ) or self.qwen_model.model.rope_deltas is None:
+                # Build mm_token_type_ids for newer transformers versions
+                # 0 = text, 1 = image, 2 = video
+                image_token_id = self.qwen_model.model.config.image_token_id
+                video_token_id = self.qwen_model.model.config.video_token_id
+                mm_token_type_ids = torch.zeros_like(extended_input_ids)
+                mm_token_type_ids[extended_input_ids == image_token_id] = 1
+                mm_token_type_ids[extended_input_ids == video_token_id] = 2
+
                 position_ids, rope_deltas = self.qwen_model.model.get_rope_index(
                     extended_input_ids,
+                    mm_token_type_ids,
                     image_grid_thw,
                     video_grid_thw,
                     attention_mask=attention_mask_tensor,
@@ -637,6 +656,10 @@ class VTCQwen3VLBackbone(nn.Module):
         motion_drop_info = None
         if n_motion_tokens > 0 and self.motion_drop:
             motion_drop_info = {"start": motion_insert_pos, "count": n_motion_tokens}
+        
+        # The patched Qwen3VLTextModel.forward (install_vtc_text_forward) drops
+        # the input_ids/inputs_embeds XOR check and threads input_ids into every
+        # wrapped decoder layer so LayerWrapper can locate image-token spans.
         outputs = self.qwen_model.model.language_model(
             input_ids=extended_input_ids,
             position_ids=position_ids,

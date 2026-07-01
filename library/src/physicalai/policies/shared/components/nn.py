@@ -261,21 +261,27 @@ class MultiEmbodimentActionEncoder(nn.Module):
 
         Args:
             actions: Action tensor of shape (B, T, action_dim).
-            timesteps: Timesteps of shape (B,) replicated across T.
+            timesteps: Timesteps of shape (B,) replicated across T, or per-token
+                timesteps of shape (B, T) (e.g. real-time chunking).
             cat_ids: Category/embodiment IDs of shape (B,).
 
         Returns:
             Encoded features of shape (B, T, hidden_size).
 
         Raises:
-            ValueError: If timesteps shape is not (B,).
+            ValueError: If timesteps shape is neither (B,) nor (B, T).
         """
         b, t, _ = actions.shape
 
         if timesteps.dim() == 1 and timesteps.shape[0] == b:
             timesteps = timesteps.unsqueeze(1).expand(-1, t)
+        elif timesteps.dim() == 2 and timesteps.shape == (b, t):
+            pass
         else:
-            msg = "Expected `timesteps` to have shape (B,) to replicate across T."
+            msg = (
+                f"Expected `timesteps` to have shape ({b},) or ({b}, {t}); "
+                f"got {tuple(timesteps.shape)}."
+            )
             raise ValueError(msg)
 
         a_emb = self.W1(actions, cat_ids)

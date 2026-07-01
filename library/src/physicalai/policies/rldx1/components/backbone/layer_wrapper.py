@@ -106,7 +106,7 @@ class LayerWrapper(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        input_ids: torch.Tensor,
+        input_ids: torch.Tensor | None = None,
         *args: object,
         **kwargs: object,
     ) -> tuple[torch.Tensor, dict[str, object]]:
@@ -114,7 +114,9 @@ class LayerWrapper(nn.Module):
 
         Args:
             hidden_states: Input hidden states of shape ``[B, T, D]``.
-            input_ids: Token IDs used to locate image token spans.
+            input_ids: Token IDs used to locate image token spans. Can be passed
+                as positional argument or extracted from kwargs/module attributes
+                for transformers compatibility.
             *args: Additional positional arguments forwarded to the wrapped layer.
             **kwargs: Additional keyword arguments forwarded to the wrapped layer.
 
@@ -122,6 +124,10 @@ class LayerWrapper(nn.Module):
             A tuple ``(output, kwargs)`` where ``output`` is the wrapped layer
             result and ``kwargs`` contains any updated attention or position data.
         """
+        # The patched Qwen3VLTextModel.forward passes input_ids positionally.
+        # Fall back to kwargs for any caller that routes it as a keyword.
+        if input_ids is None and "input_ids" in kwargs:
+            input_ids = kwargs.pop("input_ids")
         if "image_wise_encoding" in kwargs and isinstance(
             kwargs["image_wise_encoding"], torch.Tensor
         ):

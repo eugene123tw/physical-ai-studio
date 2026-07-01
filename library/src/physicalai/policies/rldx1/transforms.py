@@ -35,12 +35,17 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+
+from PIL import Image  # noqa: PLC0415
+
 import numpy as np
 import torch
 from torch import nn
 
 from physicalai.data.observation import ACTION, IMAGES, STATE, TASK, Observation
 from physicalai.policies.utils.normalization import FeatureNormalizeTransform
+
+from transformers import AutoProcessor
 
 from .preprocessing import (
     build_qwen_conversation,
@@ -209,7 +214,6 @@ class Rldx1Preprocessor(nn.Module):
         self._vlm_processor_cache: ProcessorMixin | None = None
 
     # -- native VLM processor ---------------------------------------------- #
-
     @property
     def _vlm_processor(self) -> ProcessorMixin:
         """Lazily load the HF Qwen processor for the PAS-native VLM path.
@@ -220,8 +224,6 @@ class Rldx1Preprocessor(nn.Module):
             ``revision``.
         """
         if self._vlm_processor_cache is None:
-            from transformers import AutoProcessor  # noqa: PLC0415
-
             # lib.security: never trust_remote_code; pin the processor revision.
             loading_kwargs: dict[str, Any] = {"trust_remote_code": False, "use_fast": True}
             if self.revision is not None:
@@ -232,7 +234,6 @@ class Rldx1Preprocessor(nn.Module):
         return self._vlm_processor_cache
 
     # -- native forward ---------------------------------------------------- #
-
     def _normalize_pad_state_action(
         self,
         batch_dict: dict[str, Any],
@@ -247,10 +248,7 @@ class Rldx1Preprocessor(nn.Module):
             plus ``action_mask``.
         """
         # Run on the normalizer's buffer device (falls back to CPU for Identity).
-        sa_device = torch.device("cpu")
-        for buf in self._state_action_normalizer.buffers():
-            sa_device = buf.device
-            break
+        sa_device = next(iter(self._state_action_normalizer.parameters())).device
 
         state_raw = batch_dict.get(OBSERVATION_STATE, batch_dict.get(STATE))
         sa_batch: dict[str, Any] = {STATE: self._as_float_tensor(state_raw).to(sa_device)}
@@ -283,7 +281,6 @@ class Rldx1Preprocessor(nn.Module):
             A list of ``batch_size`` conversations, each with the sample's
             resized camera views and (optionally formalized) instruction.
         """
-        from PIL import Image  # noqa: PLC0415
 
         conversations: list[list[dict[str, Any]]] = []
         for index in range(batch_size):

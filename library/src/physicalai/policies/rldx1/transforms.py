@@ -63,6 +63,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _module_device(module: nn.Module) -> torch.device:
+    """Return a module's device from its parameters, then buffers, else CPU.
+
+    ``next(iter(module.parameters()))`` raises ``StopIteration`` on a
+    parameter-less module (e.g. ``nn.Identity`` or a buffer-only normalizer).
+    Inside ``training_step`` that exception is silently caught by Lightning's
+    data-fetch loop and misread as end-of-epoch, skipping training entirely.
+    """
+    for tensor in module.parameters():
+        return tensor.device
+    for tensor in module.buffers():
+        return tensor.device
+    return torch.device("cpu")
+
+
 # ============================================================================ #
 # Constants                                                                    #
 # ============================================================================ #
@@ -248,7 +264,7 @@ class Rldx1Preprocessor(nn.Module):
             plus ``action_mask``.
         """
         # Run on the normalizer's buffer device (falls back to CPU for Identity).
-        sa_device = next(iter(self._state_action_normalizer.parameters())).device
+        sa_device = _module_device(self._state_action_normalizer)
 
         state_raw = batch_dict.get(OBSERVATION_STATE, batch_dict.get(STATE))
         sa_batch: dict[str, Any] = {STATE: self._as_float_tensor(state_raw).to(sa_device)}

@@ -234,6 +234,9 @@ class GymnasiumGym(Gym):
             A tuple ``(Observation, reward, terminated, truncated, info)``.
         """
         action_for_env = self._normalize_action_for_env(action)
+        # NumPy has no bfloat16/float16 support; upcast to float32 before conversion.
+        if action_for_env.dtype in (torch.bfloat16, torch.float16):
+            action_for_env = action_for_env.to(torch.float32)
         raw_action = action_for_env.detach().cpu().numpy()
         raw_obs, reward, terminated, truncated, info = self._env.step(raw_action)
         raw_obs = self._normalize_raw_obs(raw_obs)

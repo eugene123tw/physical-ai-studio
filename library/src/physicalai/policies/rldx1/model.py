@@ -114,6 +114,7 @@ class Rldx1Model(Model):
         # Fine-tuning / PEFT control (bridged onto the vendored RLDXConfig).
         backbone_peft_mode: str = "full",
         tune_top_llm_layers: int = 4,
+        tune_llm: bool = False,
         tune_visual: bool = False,
         tune_projector: bool = True,
         tune_diffusion_model: bool = True,
@@ -156,6 +157,9 @@ class Rldx1Model(Model):
                 LLM layers; 'frozen' freezes the backbone entirely.
             tune_top_llm_layers: Number of top LLM layers to adapt (full-tune in
                 'full' mode, LoRA scope in 'lora' mode).
+            tune_llm: Full-tune the entire LLM backbone (all decoder layers +
+                input embeddings + lm_head). Only applies in 'full' mode;
+                overrides ``tune_top_llm_layers``.
             tune_visual: Whether to fine-tune the vision tower.
             tune_projector: Whether to fine-tune the cognition/state/action projectors.
             tune_diffusion_model: Whether to full-tune the MSAT action model
@@ -229,6 +233,7 @@ class Rldx1Model(Model):
             cfg.tune_top_llm_layers = 0
         else:  # "full"
             cfg.backbone_use_lora = False
+            cfg.tune_llm = tune_llm
             cfg.tune_top_llm_layers = tune_top_llm_layers
         if action_peft_mode == "lora":
             cfg.action_model_use_lora = True

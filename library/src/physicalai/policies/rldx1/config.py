@@ -78,6 +78,8 @@ class Rldx1Config(Config):
         attn_implementation: Attention backend ('sdpa', 'flash_attention_2', 'eager').
         n_cog_tokens: Number of cognition tokens routed from the backbone to MSAT.
         tune_top_llm_layers: Number of top LLM layers to fine-tune (lower layers frozen).
+        tune_llm: Whether to fine-tune the entire LLM backbone (all decoder layers,
+            input embeddings, and lm_head). Overrides ``tune_top_llm_layers``.
         tune_visual: Whether to fine-tune the vision tower.
         tune_projector: Whether to fine-tune the cognition/state/action projectors.
         tune_diffusion_model: Whether to fine-tune the MSAT action model.
@@ -164,6 +166,7 @@ class Rldx1Config(Config):
 
     # Fine-tuning control (full / partial)
     tune_top_llm_layers: int = 4
+    tune_llm: bool = False
     tune_visual: bool = False
     tune_projector: bool = True
     tune_diffusion_model: bool = True

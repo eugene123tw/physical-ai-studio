@@ -76,6 +76,8 @@ class Rldx1(Policy):
         attn_implementation: Attention backend ('sdpa', 'flash_attention_2', 'eager').
         n_cog_tokens: Number of cognition tokens routed to MSAT.
         tune_top_llm_layers: Number of top LLM layers to fine-tune.
+        tune_llm: Whether to fine-tune the entire LLM backbone (all decoder
+            layers + input embeddings + lm_head). Overrides tune_top_llm_layers.
         tune_visual: Whether to fine-tune the vision tower.
         tune_projector: Whether to fine-tune the projectors.
         tune_diffusion_model: Whether to fine-tune the MSAT action model.
@@ -111,6 +113,7 @@ class Rldx1(Policy):
         # Fine-tuning control
         *,
         tune_top_llm_layers: int = 4,
+        tune_llm: bool = False,
         tune_visual: bool = False,
         tune_projector: bool = True,
         tune_diffusion_model: bool = True,
@@ -143,6 +146,7 @@ class Rldx1(Policy):
             attn_implementation=attn_implementation,
             n_cog_tokens=n_cog_tokens,
             tune_top_llm_layers=tune_top_llm_layers,
+            tune_llm=tune_llm,
             tune_visual=tune_visual,
             tune_projector=tune_projector,
             tune_diffusion_model=tune_diffusion_model,
@@ -190,6 +194,7 @@ class Rldx1(Policy):
             attn_implementation=config.attn_implementation,
             n_cog_tokens=config.n_cog_tokens,
             tune_top_llm_layers=config.tune_top_llm_layers,
+            tune_llm=config.tune_llm,
             tune_visual=config.tune_visual,
             tune_projector=config.tune_projector,
             tune_diffusion_model=config.tune_diffusion_model,
@@ -235,6 +240,7 @@ class Rldx1(Policy):
             # use_lora=False => full fine-tune the backbone top layers + MSAT.
             backbone_peft_mode="lora" if config.use_lora else "full",
             tune_top_llm_layers=config.tune_top_llm_layers,
+            tune_llm=config.tune_llm,
             tune_visual=config.tune_visual,
             tune_projector=config.tune_projector,
             tune_diffusion_model=config.tune_diffusion_model,

@@ -3,7 +3,7 @@
 
 from typing import Tuple
 
-from physicalai.policies.rldx1.components.config_rldx import RLDXConfig
+from physicalai.policies.rldx1.components.config_rldx import RLDXNetworkConfig
 from physicalai.policies.rldx1.components.action_model.msat import MSAT
 from physicalai.policies.rldx1.components.action_model.physics import init_physics_params_near_zero
 from physicalai.policies.rldx1.components.action_model.physics_head import NoOpPhysicsHead, PhysicsHead
@@ -32,7 +32,7 @@ import tree
 class RLDXActionModel(nn.Module):
     """Action head component for flow matching diffusion policy."""
 
-    def __init__(self, config: RLDXConfig):
+    def __init__(self, config: RLDXNetworkConfig):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size
@@ -781,7 +781,7 @@ class RLDXActionModel(nn.Module):
 class RLDX(PreTrainedModel):
     """RLDX: Vision-Language-Action model with backbone."""
 
-    config_class = RLDXConfig
+    config_class = RLDXNetworkConfig
     supports_gradient_checkpointing = True
 
     @classmethod
@@ -813,7 +813,7 @@ class RLDX(PreTrainedModel):
 
     def __init__(
         self,
-        config: RLDXConfig,
+        config: RLDXNetworkConfig,
         transformers_loading_kwargs: dict = {"trust_remote_code": True},
     ):
         """
@@ -912,7 +912,7 @@ class RLDX(PreTrainedModel):
         if self.use_memory:
             self._init_memory(config)
 
-    def _init_memory(self, config: RLDXConfig):
+    def _init_memory(self, config: RLDXNetworkConfig):
         """Initialize memory module for temporal context aggregation."""
         # Switch backbone to full mode (return VL + cognition tokens)
         if hasattr(self.backbone, "cog_mode"):
@@ -1260,5 +1260,5 @@ class RLDX(PreTrainedModel):
 
 
 # Register the model with HuggingFace
-AutoConfig.register("RLDX-1", RLDXConfig)
-AutoModel.register(RLDXConfig, RLDX)
+AutoConfig.register("RLDX-1", RLDXNetworkConfig)
+AutoModel.register(RLDXNetworkConfig, RLDX)

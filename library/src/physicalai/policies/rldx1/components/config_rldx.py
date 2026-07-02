@@ -30,7 +30,7 @@ from transformers import PretrainedConfig
 
 
 @dataclass
-class RLDXConfig(PretrainedConfig):
+class RLDXNetworkConfig(PretrainedConfig):
     """Unified configuration for RLDX model with backbone and action model."""
 
     # Model identification
@@ -246,7 +246,7 @@ class RLDXConfig(PretrainedConfig):
     # Video input configuration
     # ``use_video`` is an architectural invariant: every supported
     # checkpoint embeds VTC video tokens. The field is kept on
-    # ``RLDXConfig`` so it survives ``save_pretrained`` /
+    # ``RLDXNetworkConfig`` so it survives ``save_pretrained`` /
     # ``from_pretrained`` round-trips, but it is no longer a CLI knob —
     # see ``rldx/experiment/features/video.py``.
     use_video: bool = True

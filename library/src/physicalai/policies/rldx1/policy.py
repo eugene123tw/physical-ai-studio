@@ -241,7 +241,7 @@ class Rldx1(Policy):
             num_inference_timesteps=config.num_inference_timesteps,
             compile_model=config.compile_model,
             gradient_checkpointing=config.gradient_checkpointing,
-            # Fine-tuning / PEFT control -> bridged onto the vendored RLDXConfig.
+            # Fine-tuning / PEFT control -> bridged onto the vendored RLDXNetworkConfig.
             # use_lora=False => full fine-tune the backbone top layers + MSAT.
             backbone_peft_mode="lora" if config.use_lora else "full",
             tune_top_llm_layers=config.tune_top_llm_layers,

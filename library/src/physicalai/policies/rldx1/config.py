@@ -7,9 +7,10 @@ This module provides the dataclass configuration for the RLDX-1 policy, a
 flow-matching Vision-Language-Action model built on a Qwen3-VL-8B backbone and
 a Multi-Stream Action Transformer (MSAT) action head.
 
-The configuration mirrors the **pre-train (PT) shape** of the upstream
-``RLDXConfig`` (RLWRLD/RLDX-1). It deliberately omits the mid-train add-on
-streams (motion / memory / physics) and the RECAP RL plumbing, which are
+The configuration mirrors the **pre-train (PT) shape** of the upstream RLDX
+config (RLWRLD/RLDX-1), vendored here as ``RLDXNetworkConfig``. It deliberately
+omits the mid-train add-on streams (motion / memory / physics) and the RECAP RL
+plumbing, which are
 deferred to phase 2. See ``library/docs/rldx-1-integration.md`` for the full
 scope decision.
 

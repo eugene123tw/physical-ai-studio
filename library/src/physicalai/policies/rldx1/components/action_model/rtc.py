@@ -283,7 +283,7 @@ def guided_velocity(
 
 
 def rtc_config_from_rldx(cfg) -> RTCConfig:
-    """Build an RTCConfig from the flat fields on an RLDXConfig instance."""
+    """Build an RTCConfig from the flat fields on an RLDXNetworkConfig instance."""
     return RTCConfig(
         training_max_delay=int(getattr(cfg, "rtc_training_max_delay", 0) or 0),
         inference_mode=str(getattr(cfg, "rtc_inference_mode", "none")),

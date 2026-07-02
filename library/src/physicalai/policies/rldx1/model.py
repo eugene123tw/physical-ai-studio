@@ -33,6 +33,7 @@ from physicalai.policies.base import Model
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from physicalai.policies.rldx1.components.config_rldx import RLDXNetworkConfig
     from physicalai.policies.rldx1.components.core_rldx import RLDX
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,95 @@ DEFAULT_BACKBONE_NAME = "Qwen/Qwen3-VL-8B-Instruct"
 
 # Safe allowlist for files pulled from the checkpoint repo (lib.security rule 8).
 ALLOW_PATTERNS = ["*.safetensors", "*.json", "*.txt", "*.md"]
+
+
+def _bridge_studio_config(  # noqa: PLR0913
+    cfg: RLDXNetworkConfig,
+    *,
+    backbone_peft_mode: str,
+    tune_top_llm_layers: int,
+    tune_llm: bool,
+    backbone_trainable_params_fp32: bool,
+    tune_visual: bool,
+    tune_projector: bool,
+    tune_diffusion_model: bool,
+    tune_vlln: bool,
+    backbone_lora_rank: int,
+    backbone_lora_alpha: int,
+    backbone_lora_dropout: float,
+    backbone_lora_targets: tuple[str, ...],
+    action_peft_mode: str,
+    action_lora_rank: int,
+    action_lora_alpha: int,
+    action_lora_dropout: float,
+    action_lora_targets: tuple[str, ...],
+) -> None:
+    """Map Studio ``Rldx1Config`` knobs onto a vendored ``RLDXNetworkConfig``.
+
+    The checkpoint ``config.json`` defines the network architecture; this writes
+    the Studio-owned fine-tuning / PEFT decisions on top so they win over the
+    checkpoint defaults. Without it the ``config.json`` values persist and the
+    policy-interface flags are silently ignored (e.g. ``backbone_use_lora``
+    stays ``False``). Mutates ``cfg`` in place. Must run before ``RLDX(cfg,
+    ...)`` -- the LoRA injection and ``requires_grad`` bookkeeping happen in the
+    model constructor.
+
+    The mapping is deliberately not 1:1. ``Rldx1Config.use_lora`` is split by the
+    caller into ``backbone_peft_mode`` / ``action_peft_mode``, and
+    ``tune_top_llm_layers`` feeds ``backbone_lora_num_layers`` only in LoRA mode.
+
+    Args:
+        cfg: Vendored network config loaded from the checkpoint (mutated).
+        backbone_peft_mode: Backbone tuning mode ('full', 'lora', 'frozen').
+        tune_top_llm_layers: Number of top LLM layers to adapt.
+        tune_llm: Full-tune the entire LLM backbone (only in 'full' mode).
+        backbone_trainable_params_fp32: Cast trainable backbone params to fp32.
+        tune_visual: Fine-tune the vision tower.
+        tune_projector: Fine-tune the cognition/state/action projectors.
+        tune_diffusion_model: Full-tune the MSAT (only when action mode is 'full').
+        tune_vlln: Fine-tune the VLM-output layer norm.
+        backbone_lora_rank: LoRA rank for the backbone.
+        backbone_lora_alpha: LoRA alpha for the backbone.
+        backbone_lora_dropout: LoRA dropout for the backbone.
+        backbone_lora_targets: Linear module names to wrap with LoRA (backbone).
+        action_peft_mode: MSAT tuning mode ('full', 'lora').
+        action_lora_rank: LoRA rank for the action model.
+        action_lora_alpha: LoRA alpha for the action model.
+        action_lora_dropout: LoRA dropout for the action model.
+        action_lora_targets: Linear module names to wrap with LoRA (MSAT).
+    """
+    cfg.backbone_trainable_params_fp32 = backbone_trainable_params_fp32
+    cfg.tune_visual = tune_visual
+    cfg.tune_projector = tune_projector
+    cfg.tune_vlln = tune_vlln
+
+    if backbone_peft_mode == "lora":
+        cfg.backbone_use_lora = True
+        cfg.tune_llm = False
+        cfg.tune_top_llm_layers = 0
+        cfg.backbone_lora_num_layers = tune_top_llm_layers if tune_top_llm_layers > 0 else -1
+        cfg.backbone_lora_rank = backbone_lora_rank
+        cfg.backbone_lora_alpha = backbone_lora_alpha
+        cfg.backbone_lora_dropout = backbone_lora_dropout
+        cfg.backbone_lora_target_modules = list(backbone_lora_targets)
+    elif backbone_peft_mode == "frozen":
+        cfg.backbone_use_lora = False
+        cfg.tune_llm = False
+        cfg.tune_top_llm_layers = 0
+    else:  # "full"
+        cfg.backbone_use_lora = False
+        cfg.tune_llm = tune_llm
+        cfg.tune_top_llm_layers = tune_top_llm_layers
+
+    if action_peft_mode == "lora":
+        cfg.action_model_use_lora = True
+        cfg.action_model_lora_rank = action_lora_rank
+        cfg.action_model_lora_alpha = action_lora_alpha
+        cfg.action_model_lora_dropout = action_lora_dropout
+        cfg.action_model_lora_target_modules = list(action_lora_targets)
+    else:  # "full"
+        cfg.action_model_use_lora = False
+        cfg.tune_diffusion_model = tune_diffusion_model
 
 
 class Rldx1Model(Model):
@@ -111,7 +201,7 @@ class Rldx1Model(Model):
         attn_implementation: str = "sdpa",
         use_bf16: bool = True,
         gradient_checkpointing: bool = False,
-        # Fine-tuning / PEFT control (bridged onto the vendored RLDXConfig).
+        # Fine-tuning / PEFT control (bridged onto the vendored RLDXNetworkConfig).
         backbone_peft_mode: str = "full",
         tune_top_llm_layers: int = 4,
         tune_llm: bool = False,
@@ -203,53 +293,41 @@ class Rldx1Model(Model):
         )
         os.environ.setdefault("RLDX_ATTN_IMPL", backbone_attn)
 
-        from physicalai.policies.rldx1.components.config_rldx import RLDXConfig  # noqa: PLC0415
+        from physicalai.policies.rldx1.components.config_rldx import RLDXNetworkConfig  # noqa: PLC0415
         from physicalai.policies.rldx1.components.core_rldx import RLDX  # noqa: PLC0415
         from physicalai.policies.rldx1.pretrained_utils import (  # noqa: PLC0415
             load_rldx_state_dict,
         )
 
-        cfg: RLDXConfig = RLDXConfig.from_pretrained(base_model_path, revision=revision)
+        cfg: RLDXNetworkConfig = RLDXNetworkConfig.from_pretrained(base_model_path, revision=revision)
         cfg.diffusion_model_cfg["gradient_checkpointing"] = gradient_checkpointing
 
         # Bridge the Studio-level fine-tuning / PEFT knobs onto the vendored
-        # RLDXConfig. Without this the checkpoint config.json values win and the
-        # policy-interface flags (backbone_peft_mode, action_peft_mode, tune_*)
-        # are silently ignored -- e.g. backbone_use_lora stays False. Applied
-        # before ``RLDX(cfg, ...)`` because the LoRA injection and requires_grad
-        # bookkeeping run in the model constructor.
-        cfg.backbone_trainable_params_fp32 = backbone_trainable_params_fp32
-        cfg.tune_visual = tune_visual
-        cfg.tune_projector = tune_projector
-        cfg.tune_vlln = tune_vlln
-        if backbone_peft_mode == "lora":
-            cfg.backbone_use_lora = True
-            cfg.tune_llm = False
-            cfg.tune_top_llm_layers = 0
-            cfg.backbone_lora_num_layers = tune_top_llm_layers if tune_top_llm_layers > 0 else -1
-            cfg.backbone_lora_rank = backbone_lora_rank
-            cfg.backbone_lora_alpha = backbone_lora_alpha
-            cfg.backbone_lora_dropout = backbone_lora_dropout
-            cfg.backbone_lora_target_modules = list(backbone_lora_targets)
-        elif backbone_peft_mode == "frozen":
-            cfg.backbone_use_lora = False
-            cfg.tune_llm = False
-            cfg.tune_top_llm_layers = 0
-        else:  # "full"
-            cfg.backbone_use_lora = False
-            cfg.tune_llm = tune_llm
-            cfg.tune_top_llm_layers = tune_top_llm_layers
-        if action_peft_mode == "lora":
-            cfg.action_model_use_lora = True
-            cfg.action_model_lora_rank = action_lora_rank
-            cfg.action_model_lora_alpha = action_lora_alpha
-            cfg.action_model_lora_dropout = action_lora_dropout
-            cfg.action_model_lora_target_modules = list(action_lora_targets)
-        else:  # "full"
-            cfg.action_model_use_lora = False
-            cfg.tune_diffusion_model = tune_diffusion_model
+        # network config before ``RLDX(cfg, ...)`` is built. See
+        # ``_bridge_studio_config`` for the full field-by-field mapping.
+        _bridge_studio_config(
+            cfg,
+            backbone_peft_mode=backbone_peft_mode,
+            tune_top_llm_layers=tune_top_llm_layers,
+            tune_llm=tune_llm,
+            backbone_trainable_params_fp32=backbone_trainable_params_fp32,
+            tune_visual=tune_visual,
+            tune_projector=tune_projector,
+            tune_diffusion_model=tune_diffusion_model,
+            tune_vlln=tune_vlln,
+            backbone_lora_rank=backbone_lora_rank,
+            backbone_lora_alpha=backbone_lora_alpha,
+            backbone_lora_dropout=backbone_lora_dropout,
+            backbone_lora_targets=backbone_lora_targets,
+            action_peft_mode=action_peft_mode,
+            action_lora_rank=action_lora_rank,
+            action_lora_alpha=action_lora_alpha,
+            action_lora_dropout=action_lora_dropout,
+            action_lora_targets=action_lora_targets,
+        )
 
-        # pop unused fields in cfg.diffusion_model_cfg that are not in the vendored RLDXConfig
+        # pop unused fields in cfg.diffusion_model_cfg that are not in the
+        # vendored RLDXNetworkConfig
         cfg.diffusion_model_cfg.pop("final_dropout", None)
         cfg.diffusion_model_cfg.pop("use_swiglu", None)
 

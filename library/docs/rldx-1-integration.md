@@ -28,6 +28,20 @@ we ship into the `physicalai` runtime, and what we leave on the floor.
 > Sections referring to MT, memory, motion, and physics below are kept
 > as **context for that future work**, not as v1 deliverables.
 
+> **Correctness carve-out (2026-07): VTC multi-frame video + image
+> geometry/augmentation are promoted into phase 1.**
+> v1 validation runs the pretrained `RLDX-1-FT-ROBOCASA` weight through
+> the PAS `Rldx1` policy and compares success rate **1:1** against the
+> paper number. `FT-ROBOCASA` was trained with the VTC video path always
+> on (4 frames/step at strides `[-6,-4,-2,0]`) and the upstream
+> `AspectAreaResizeAndCrop` geometry. A single-frame or
+> different-geometry input changes the backbone's visual tokens and makes
+> SR non-comparable, so these are **correctness requirements, not
+> deferred work**. This is unrelated to the memory module (still phase-2):
+> the 4 frames are a temporal window *inside one observation step*, not
+> cross-step history — `memory_length=1` stays the default. Full gap list
+> and required changes: [§0.1](#01-phase-1-correctness-additions--vtc-multi-frame-video--image-geometry).
+
 ---
 
 ## 0. Scope summary
@@ -38,6 +52,9 @@ we ship into the `physicalai` runtime, and what we leave on the floor.
 | MSAT action head + Qwen3-VL-8B backbone                  | ✅               | Pure-torch, exportable.                                                                                                                                                                                     |
 | Flow-matching `PT → FT` post-train loop                  | ✅               | The one and only training path in v1.                                                                                                                                                                       |
 | LoRA PEFT (paper App. D)                                 | ✅               | Action-LoRA default; backbone-LoRA optional. See §5.3.                                                                                                                                                      |
+| VTC multi-frame video input (`video_length=4`, `video_stride=2` → strides `[-6,-4,-2,0]`) | ✅ **v1 (correctness)** | FT-ROBOCASA trains 4 video frames/step; single-frame input breaks SR parity. Promoted from phase 2 (2026-07). See §0.1. |
+| Image geometry — `AspectAreaResizeAndCrop` (area-budget resize + 32-aligned crop) | ✅ **v1 (correctness)** | Eval geometry must match the checkpoint exactly; replaces the ported deterministic `resize_and_center_crop`. See §0.1. |
+| Replay-consistent augmentation (`ReplayCompose` + `apply_with_replay`: ColorJitter, random crop) | ✅ **v1** | Required for train-from-PT parity — one sampled replay blob shared across the 4 frames. See §0.1. |
 | RoboCasa Kitchen as the alignment benchmark              | ✅               | **Primary parity target** — matches `RLDX-1-FT-ROBOCASA`; lerobot reference wrapper exists; commercial-friendly data. See §7.4.                                                                             |
 | SimplerEnv WidowX as the alignment benchmark             | ⚠️ secondary     | Useful only as a single-arm-gripper triangulation check. RLDX-1-FT-SIMPLER-WIDOWX matches the SO-101-style embodiment but the upstream `simpler-env` is semi-stale and RLDX-1 ships its own forked adapter. |
 | Motion module (STSS)                                     | ❌ phase 2       | MT-only; no released FT uses it.                                                                                                                                                                            |
@@ -51,6 +68,114 @@ we ship into the `physicalai` runtime, and what we leave on the floor.
 | RECAP post-training (RL)                                 | ❌ phase 2+      | **Not in upstream repo.** Paper-only.                                                                                                                                                                       |
 | Triton kernel chain                                      | ❌ for inference | CUDA-only. We rely on OV/ONNX fusion.                                                                                                                                                                       |
 | CUDA Graph + Static Graph Conversion                     | ❌ for inference | Replaced by OV `compile_model` cache.                                                                                                                                                                       |
+
+---
+
+## 0.1 Phase-1 correctness additions — VTC multi-frame video + image geometry
+
+**Promoted from phase 2 (2026-07).** Validation runs the pretrained
+`RLDX-1-FT-ROBOCASA` weight through the PAS `Rldx1` policy and compares
+success rate 1:1 against the paper / upstream number. Any input-pipeline
+deviation that changes the model's visual tokens breaks that comparison,
+so the following upstream behaviours are **v1 correctness requirements**,
+not deferred work.
+
+### Why this is a correctness issue
+
+`RLDX-1-FT-ROBOCASA` was trained with the VTC video path **always on** —
+`VideoFeature.is_active` returns `True` unconditionally
+([video.py](../../RLDX-1/rldx/experiment/features/video.py#L14-L20)). The
+RoboCasa video modality anchors at `delta_indices=[0]`
+([robocasa_config.py](../../RLDX-1/rldx/configs/data/robocasa_config.py#L34-L35)),
+and the video feature unions the strides `{(i-(L-1))·S : i∈[0,L)}` with
+`L=4, S=2` → **`[-6,-4,-2,0]`**
+([video.py](../../RLDX-1/rldx/experiment/features/video.py#L34-L39)).
+Result: every observation step feeds the backbone **4 temporal frames**,
+each tiled to `image_grid_thw = [1,6,6]`. A single-frame input produces a
+different visual-token count and different backbone activations — the
+success rate is not comparable.
+
+This is distinct from the memory module (still phase-2): the 4 frames are
+a temporal window *inside one observation step* (video tokens), not
+cross-step history. `memory_length=1` stays the default and never enters
+the `memory_length > 1 and self.training` branch.
+
+### What is currently missing in the ported code
+
+The v1 port (`library/src/physicalai/policies/rldx1/`) currently ships a
+single-frame, deterministic-geometry pipeline. Gaps to close for phase 1:
+
+| # | Missing behaviour | Upstream reference | Current PAS state |
+| - | ----------------- | ------------------ | ----------------- |
+| 1 | 4-frame temporal stacking at strides `[-6,-4,-2,0]` | [`extract_step_data`](../../RLDX-1/rldx/data/dataset/sharded_single_step_dataset.py#L31), [video.py](../../RLDX-1/rldx/experiment/features/video.py#L22-L40) | `NUM_FRAMES` hardcoded to `1` — [transforms.py#L363](../src/physicalai/policies/rldx1/transforms.py#L363); `video_length`/`video_stride` present but unused — [config_rldx.py#L253](../src/physicalai/policies/rldx1/components/config_rldx.py#L253) |
+| 2 | `AspectAreaResizeAndCrop` (area-budget resize → 32-aligned crop) | [augmentations.py#L137](../../RLDX-1/rldx/data/augmentations.py#L137) | deterministic `resize_and_center_crop` — [preprocessing.py#L353](../src/physicalai/policies/rldx1/preprocessing.py#L353) |
+| 3 | Replay-consistent augmentation (`apply_with_replay` + `ReplayCompose`: ColorJitter, random crop) — one sampled param set across all 4 frames | [augmentations.py#L84](../../RLDX-1/rldx/data/augmentations.py#L84) | dropped — [preprocessing.py#L30](../src/physicalai/policies/rldx1/preprocessing.py#L30) |
+| 4 | Multi-frame conversation assembly (`num_frames` image tokens per view into the Qwen chat template) | RLDXProcessor `_get_vlm_inputs` — [processing_rldx.py](../../RLDX-1/rldx/model/core/processing_rldx.py#L615) | single-frame conversation — `_build_conversations` in [transforms.py](../src/physicalai/policies/rldx1/transforms.py) |
+| 5 | **Inference-time** frame stacking — assemble the `[-6,-4,-2,0]` window from a per-env-step history buffer at rollout | `MultiStepWrapper` — [multistep_wrapper.py](../../RLDX-1/rldx/eval/sim/wrapper/multistep_wrapper.py#L175-L270) (deque size `span+1`, reset-filled with the initial frame, sampled at the delta offsets) | not implemented — gyms feed a single frame per step |
+
+The backbone adapter already accepts `num_frames`
+([adapter.py#L450](../src/physicalai/policies/rldx1/components/backbone/adapter.py#L450)),
+so the **model path is capable** — only the data (train) and rollout
+(inference) paths need the multi-frame wiring. Items 1–4 are the training
+path; item 5 is the rollout path, and both must produce the identical
+`(num_frames, C, H, W)` per-view stack the backbone was trained on.
+
+### Eval-critical vs. train-critical
+
+- **Eval / SR parity (pretrained weight):** items **1 and 2** are
+  load-bearing. Inference applies no stochastic augmentation, but it
+  *does* consume 4 frames with the exact `AspectAreaResizeAndCrop`
+  geometry.
+- **Train-from-PT parity:** item **3** (stochastic replay augmentation)
+  additionally matters — FT training saw ColorJitter / random-crop with
+  per-sample-consistent params across the 4 frames.
+
+Ship all four in phase 1 so both eval parity and train-from-PT parity
+hold.
+
+### Required changes (phase 1)
+
+Items 1–5 (training + preprocessor) are **implemented** (2026-07); item 6
+(rollout) lands with the RoboCasa gym.
+
+1. ✅ **Data fetch** — `get_rldx1_delta_timestamps` +
+   `get_delta_timestamps_from_policy("rldx1", ...)` emit the video window
+   `[-6,-4,-2,0]` (from `video_length` / `video_stride`) for each camera
+   key, so `LeRobotDataModule` returns 4 frames per step
+   ([delta_timestamps.py](../src/physicalai/data/lerobot/utils/delta_timestamps.py)).
+   `Rldx1.get_delta_timestamps(dataset_or_repo_id)` reads `video_length` /
+   `video_stride` / `chunk_size` off the config and auto-detects the camera
+   keys + fps from the dataset metadata (no per-view key lists).
+2. ✅ **Preprocessor** — `NUM_FRAMES` now reports the real frame count and
+   `_build_conversations` stacks frames **frame-major / view-inner** into
+   the Qwen conversation ([transforms.py](../src/physicalai/policies/rldx1/transforms.py)).
+3. ✅ **Image geometry** — the eval path already uses `resize_and_center_crop`
+   (pixel-identical to `AspectAreaResizeAndCrop`); the same geometry is the
+   step-1 stage of the train transform.
+4. ✅ **Augmentation** — `apply_with_replay` + `ReplayCompose` ported to
+   [augmentations.py](../src/physicalai/policies/rldx1/augmentations.py);
+   train mode shares one replay blob across a sample's frames/views, eval
+   bypasses to the deterministic geometry. Off by default (params `None`).
+5. ✅ **Parity test** — `test_multiframe_forward_matches_vendored` diffs the
+   native multi-frame `forward` against the vendored upstream
+   `_get_vlm_inputs` + collator (`pixel_values`, `image_grid_thw`,
+   `num_frames`).
+6. ⏳ **Rollout frame stacking** — the gyms feed a single frame per step, so
+   eval parity needs the `[-6,-4,-2,0]` window assembled at **env-step
+   cadence** and handed to the preprocessor as a `(B, num_frames, C, H, W)`
+   per-view stack. Two options, both matching upstream `MultiStepWrapper`
+   semantics (deque size `span+1`, reset-filled with the initial frame): a
+   RoboCasa gym frame-stacking wrapper, or a frame-history buffer in the
+   policy (`reset()` clears it; `select_action` — called every env step —
+   appends; `predict_action_chunk` gathers the window). Lands with the
+   RoboCasa gym (§7.4) so it is testable end-to-end. Until then the
+   preprocessor still runs single-frame when only one frame is supplied.
+
+**Still deferred to phase 2** (unchanged): `ShardedMixtureDataset` /
+`ShardedSingleStepDataset` sharding + background caching, per-embodiment
+statistics merging, and the memory / motion / physics streams. Sharding is
+a throughput optimisation only — it does not affect SR parity, so
+`LeRobotDataModule` remains the v1 dataset path.
 
 ---
 
@@ -75,6 +200,44 @@ we ship into the `physicalai` runtime, and what we leave on the floor.
   - Refuse `trust_remote_code=True` unless the call site documents the
     Qwen3-VL repo + pins revision. Qwen3-VL has first-party
     `transformers` support → we should not need `trust_remote_code` at all.
+
+### 1.1 Parameter budget by tuning flag
+
+The 6.9 B total splits across five sub-module groups, each gated by one
+`tune_*` flag on `Rldx1Config`. Measured on a real
+`Rldx1Model.from_pretrained("RLWRLD/RLDX-1-PT")` load (via
+[`tmp_scripts/rldx1_param_breakdown.py`](../../tmp_scripts/rldx1_param_breakdown.py)):
+
+| Flag (`Rldx1Config`)   | Module(s)                                                                                  |         Params | % of total |
+| ---------------------- | ------------------------------------------------------------------------------------------ | -------------: | ---------: |
+| `tune_llm`             | Qwen3-VL LLM backbone — the 18 kept decoder layers (`select_layer=18` truncates 36 → 18) + `embed_tokens` + `lm_head` | 4,732,314,112 |     68.27% |
+| `tune_diffusion_model` | MSAT action head (the flow-matching DiT)                                                    | 1,263,763,280 |     18.23% |
+| `tune_visual`          | Vision tower                                                                                |   576,388,336 |      8.31% |
+| `tune_projector`       | State/action encoders + decoder, position embedding, mask token (CategorySpecific per-embodiment) | 359,303,424 |      5.18% |
+| `tune_vlln`            | VLM-output LayerNorm — `nn.Identity` in the PT checkpoint, so 0 params                      |             0 |      0.00% |
+| **Total**              |                                                                                            | 6,932,031,296 |    100.00% |
+
+Key consequences for the training recipe:
+
+- **`tune_llm` is the dominant lever (68%).** The backbone truncates at
+  `select_layer=18`, so "full LLM" is ~4.7 B, not the ~7 B of a complete
+  Qwen3-VL-8B. Flipping `tune_llm` on is what moves a run from the ~2.4 B
+  default toward the full 6.9 B.
+- **The paper/PAS default trains a 2.4 B slice, not the whole model.**
+  With the shipped defaults (`tune_top_llm_layers=4`, `tune_visual=False`,
+  `tune_projector=True`, `tune_diffusion_model=True`) the trainable set is
+  the top 4 of 18 LLM layers (~0.78 B) + projector (0.36 B) + diffusion
+  head (1.26 B) + vlln (0) ≈ **2.4 B**, matching the App. D
+  "Full FT top-4 + Full FT action" row (§5.3). The frozen ~4.5 B is the
+  other 14 LLM layers + embeddings + `lm_head` + vision tower.
+- **`tune_top_llm_layers=N` is the middle ground** — it unfreezes only
+  `language_model.layers[-N:]` (a subset of the `tune_llm` group), leaving
+  embeddings and `lm_head` frozen. `tune_llm=True` overrides it and
+  unfreezes the entire LLM group.
+- **The action head is cheap to adapt (5%).** Keep `tune_projector=True`
+  for any new embodiment — the CategorySpecific projectors are what map to
+  the target robot's action space; freezing them pins the output mapping
+  to the pretrained `general_embodiment` values.
 
 ---
 
@@ -192,7 +355,7 @@ library/src/physicalai/policies/rldx1/
 ├── config.py                # @dataclass(frozen=True) Rldx1Config — mirror RLDXConfig (PT-shape only)
 ├── model.py                 # nn.Module — pure torch, exportable
 ├── policy.py                # Lightning wrapper, subclass of policies.base.Policy
-├── preprocessor.py          # image/text/state preprocessors (no memory queue in v1)
+├── preprocessor.py          # image/text/state preprocessors — VTC 4-frame stacking + AspectAreaResizeAndCrop + replay aug (§0.1); no memory queue in v1
 ├── pretrained_utils.py      # PT weight loader, key fix-ups, dataset_stats extraction
 └── components/
     ├── msat.py              # Multi-Stream Action Transformer (port from rldx/model/modules/action_model/)
@@ -218,7 +381,8 @@ Mapping vs upstream:
 | [`rldx/model/modules/action_model/msat.py`](../../RLDX-1/rldx/model/modules/action_model/msat.py) + `blocks.py`     | `rldx1/components/msat.py`     | The double-stream + single-stream blocks, joint self-attention.                                                                      |
 | [`rldx/model/modules/memory.py`](../../RLDX-1/rldx/model/modules/memory.py)                                         | `rldx1/components/memory.py`   | Verbatim — already pure torch + transformers `LlamaConfig`.                                                                          |
 | [`rldx/model/modules/action_model/rtc.py`](../../RLDX-1/rldx/model/modules/action_model/rtc.py)                     | `rldx1/components/rtc.py`      | Drop `guided_velocity` (autograd VJP — see §8). Keep `sample_training_prefix`, `build_per_token_time`, `build_noisy_trajectory_rtc`. |
-| [`rldx/data/state_action/state_action_processor.py`](../../RLDX-1/rldx/data/state_action/state_action_processor.py) | `rldx1/preprocessor.py`        | Normalization (1st/99th percentile), sin/cos state encoding, color jitter.                                                           |
+| [`rldx/data/state_action/state_action_processor.py`](../../RLDX-1/rldx/data/state_action/state_action_processor.py) | `rldx1/preprocessor.py`        | Normalization (1st/99th percentile), sin/cos state encoding.                                                                         |
+| [`rldx/data/augmentations.py`](../../RLDX-1/rldx/data/augmentations.py) (`AspectAreaResizeAndCrop`, `apply_with_replay`, `ReplayCompose`) | `rldx1/preprocessor.py`        | **v1 correctness (§0.1)** — 4-frame VTC geometry + replay-consistent ColorJitter/crop. Same random params across the 4 frames.       |
 
 `Rldx1.forward(batch)` returns loss in train mode (`self.training`) and
 delegates to `predict_action_chunk(batch)` in eval — same contract as

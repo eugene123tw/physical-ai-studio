@@ -579,3 +579,200 @@ def test_denormalize_action_matches_vendored(use_percentiles: bool) -> None:
     torch.testing.assert_close(native, torch.from_numpy(np.asarray(gold)).to(native.dtype), atol=1e-5, rtol=0.0)
 
 
+# ---------------------------------------------------------------------------- #
+# VTC multi-frame: delta timestamps + frame stacking parity                    #
+# ---------------------------------------------------------------------------- #
+
+_FPS = 10
+_VIDEO_LENGTH = 4
+_VIDEO_STRIDE = 2
+_NUM_VIEWS = 2
+
+
+def test_rldx1_delta_timestamps_video_window() -> None:
+    """The RLDX-1 video window is [-6, -4, -2, 0] / fps for L=4, S=2."""
+    from physicalai.data.lerobot.utils.delta_timestamps import get_rldx1_delta_timestamps
+
+    delta = get_rldx1_delta_timestamps(
+        fps=_FPS,
+        obs_image_key="observation.images.top",
+        video_length=_VIDEO_LENGTH,
+        video_stride=_VIDEO_STRIDE,
+        action_horizon=ACTION_HORIZON,
+    )
+
+    assert delta["observation.images.top"] == [-6 / _FPS, -4 / _FPS, -2 / _FPS, 0.0]
+    assert delta["observation.state"] == [0.0]
+    assert delta["action"] == [i / _FPS for i in range(ACTION_HORIZON)]
+
+
+def test_rldx1_delta_timestamps_multi_camera() -> None:
+    """Every camera key gets the full video window."""
+    from physicalai.data.lerobot.utils.delta_timestamps import get_rldx1_delta_timestamps
+
+    cams = ["observation.images.left", "observation.images.right", "observation.images.wrist"]
+    delta = get_rldx1_delta_timestamps(fps=_FPS, obs_image_key=cams)
+
+    window = [-6 / _FPS, -4 / _FPS, -2 / _FPS, 0.0]
+    for cam in cams:
+        assert delta[cam] == window
+
+
+def test_rldx1_delta_timestamps_via_policy_router() -> None:
+    """``get_delta_timestamps_from_policy('rldx1')`` routes to the video window."""
+    from physicalai.data.lerobot.utils.delta_timestamps import get_delta_timestamps_from_policy
+
+    delta = get_delta_timestamps_from_policy("rldx1", fps=_FPS)
+    assert delta["observation.images.top"] == [-6 / _FPS, -4 / _FPS, -2 / _FPS, 0.0]
+    assert len(delta["action"]) == ACTION_HORIZON
+
+
+@pytest.mark.parametrize(
+    ("shape", "expected_frames"),
+    [
+        ((3, 8, 8), 1),  # (C, H, W)
+        ((8, 8, 3), 1),  # (H, W, C)
+        ((_VIDEO_LENGTH, 3, 8, 8), _VIDEO_LENGTH),  # (T, C, H, W)
+        ((_VIDEO_LENGTH, 8, 8, 3), _VIDEO_LENGTH),  # (T, H, W, C)
+    ],
+)
+def test_split_frames_single_and_multi(shape: tuple[int, ...], expected_frames: int) -> None:
+    """``_split_frames`` returns one array for 3-D and T arrays for 4-D inputs."""
+    from physicalai.policies.rldx1.transforms import Rldx1Preprocessor
+
+    arr = np.zeros(shape, dtype=np.uint8)
+    frames = Rldx1Preprocessor._split_frames(arr)  # noqa: SLF001 - unit under test
+    assert len(frames) == expected_frames
+
+
+def _make_multiframe_obs(*, num_frames: int, num_views: int, seed: int) -> tuple[dict[str, object], dict[str, list]]:
+    """Build matched native (CHW) and oracle (HWC) multi-frame image batches.
+
+    Returns:
+        ``(native_batch, oracle_images)`` -- the flat Observation dict (images
+        ``(1, T, C, H, W)``) and the upstream ``images`` dict (view -> list of
+        ``T`` HWC uint8 frames), carrying pixel-identical content.
+    """
+    rng = np.random.default_rng(seed)
+    native_batch: dict[str, object] = {
+        OBSERVATION_STATE: torch.zeros(1, STATE_DIM, dtype=torch.float32),
+        "task": ["Pick the RED block!"],
+    }
+    oracle_images: dict[str, list] = {}
+    for view in range(num_views):
+        # (T, H, W, C) uint8 raw content, shared by both pipelines.
+        raw = rng.integers(0, 256, size=(num_frames, 64, 64, 3), dtype=np.uint8)
+        oracle_images[f"cam{view}"] = [raw[t] for t in range(num_frames)]
+        # Native consumes (B=1, T, C, H, W).
+        chw = np.transpose(raw, (0, 3, 1, 2))[None]
+        native_batch[f"observation.images.cam{view}"] = torch.from_numpy(chw)
+    return native_batch, oracle_images
+
+
+def _vendored_vtc_processor(model_name: str):  # noqa: ANN202
+    """Construct the vendored RLDXProcessor (VTC) for the VLM-path oracle."""
+    from tests.unit.policies.rldx1_vendored.data_types import (
+        ActionConfig,
+        ActionFormat,
+        ActionRepresentation,
+        ActionType,
+        ModalityConfig,
+    )
+    from tests.unit.policies.rldx1_vendored.processing_rldx import RLDXProcessor
+
+    emb = "new_embodiment"
+    views = [f"cam{i}" for i in range(_NUM_VIEWS)]
+    modality_configs = {
+        emb: {
+            "state": ModalityConfig(delta_indices=[0], modality_keys=["state"]),
+            "action": ModalityConfig(
+                delta_indices=list(range(ACTION_HORIZON)),
+                modality_keys=["action"],
+                action_configs=[
+                    ActionConfig(
+                        rep=ActionRepresentation.ABSOLUTE,
+                        type=ActionType.NON_EEF,
+                        format=ActionFormat.DEFAULT,
+                        state_key="state",
+                    ),
+                ],
+            ),
+            "video": ModalityConfig(
+                delta_indices=[(i - (_VIDEO_LENGTH - 1)) * _VIDEO_STRIDE for i in range(_VIDEO_LENGTH)],
+                modality_keys=views,
+            ),
+        },
+    }
+    statistics = {
+        emb: {
+            "state": {"state": _stat(STATE_DIM, seed=0)},
+            "action": {"action": _stat(ACTION_DIM, seed=1)},
+        },
+    }
+    processor = RLDXProcessor(
+        modality_configs=modality_configs,
+        statistics=statistics,
+        model_name=model_name,
+        model_type="vtc_qwen3_vl",
+        use_percentiles=False,
+        transformers_loading_kwargs=_VLM_LOADING_KWARGS,
+    )
+    processor.eval()
+    return processor
+
+
+def test_multiframe_forward_matches_vendored() -> None:
+    """Native multi-frame VLM inputs match the vendored upstream stacking.
+
+    Runs the native :meth:`Rldx1Preprocessor.forward` (eval) on a 4-frame /
+    2-view observation and the vendored upstream ``_get_vlm_inputs`` + collator
+    on pixel-identical frames, then asserts identical ``pixel_values``,
+    ``image_grid_thw`` and ``num_frames`` -- the frame-major / view-inner
+    ordering and the reported frame count.
+    """
+    from physicalai.policies.rldx1.preprocessing import formalize_language as native_formalize
+    from physicalai.policies.rldx1.transforms import Rldx1Preprocessor
+
+    try:
+        processor = _vendored_vtc_processor(_VLM_MODEL_NAME)
+    except Exception as exc:  # noqa: BLE001 - any load failure -> skip offline
+        pytest.skip(f"Qwen processor unavailable offline: {exc}")
+
+    native_batch, oracle_images = _make_multiframe_obs(
+        num_frames=_VIDEO_LENGTH,
+        num_views=_NUM_VIEWS,
+        seed=3,
+    )
+
+    # -- oracle: upstream frame stacking + collation (eval geometry) --
+    language = native_formalize("Pick the RED block!")
+    vlm = processor._get_vlm_inputs(  # noqa: SLF001 - parity oracle
+        [f"cam{i}" for i in range(_NUM_VIEWS)],
+        oracle_images,
+        processor.eval_image_transform,
+        language,
+        memory_length=1,
+    )
+    assert vlm["vlm_content"]["num_frames"] == _VIDEO_LENGTH
+    gold = processor.collator._collate_vlm_content([vlm["vlm_content"]])  # noqa: SLF001
+
+    # -- native: multi-frame preprocessor forward (eval) --
+    stats = {OBSERVATION_STATE: _stat(STATE_DIM, seed=0), "action": _stat(ACTION_DIM, seed=1)}
+    pre = Rldx1Preprocessor(
+        stats=stats,
+        max_state_dim=MAX_STATE_DIM,
+        max_action_dim=MAX_ACTION_DIM,
+        action_horizon=ACTION_HORIZON,
+        use_percentiles=False,
+        model_name=_VLM_MODEL_NAME,
+    )
+    pre.eval()
+    out = pre.forward(native_batch)
+
+    assert int(out["num_frames"][0]) == _VIDEO_LENGTH
+    assert int(out["num_views"][0]) == _NUM_VIEWS
+    torch.testing.assert_close(out["image_grid_thw"], gold["image_grid_thw"], atol=0, rtol=0)
+    torch.testing.assert_close(out["pixel_values"], gold["pixel_values"], atol=0.0, rtol=0.0)
+
+
+

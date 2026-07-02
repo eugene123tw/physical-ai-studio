@@ -107,6 +107,14 @@ class Rldx1Config(Config):
         state_additive_noise_scale: Scale of additive Gaussian noise on state features.
         image_max_area: Target max area (pixels) for aspect-preserving image resize.
         image_resize_m: Alignment multiple for the resized/cropped image dimensions.
+        video_length: Number of VTC temporal frames per observation step.
+        video_stride: Action-step stride between VTC video frames.
+        random_crop_fraction: Train-time fractional crop size in ``(0, 1]``
+            (``None`` disables the crop stage).
+        random_rotation_angle: Train-time rotation limit in degrees (``None`` /
+            ``0`` disables rotation).
+        color_jitter_params: Train-time ``A.ColorJitter`` params (``None``
+            disables color jitter).
         use_relative_action: Must be False in v1. Relative actions are not supported.
         use_percentiles: Whether to normalize with 1st/99th percentiles (vs min/max).
         rtc_inference_mode: Real-Time Chunking inference mode ('none', 'trained').
@@ -224,6 +232,18 @@ class Rldx1Config(Config):
     # Image / language pipeline
     image_max_area: int = 65536  # 256 * 256
     image_resize_m: int = 32
+    # VTC video window: each camera view carries ``video_length`` temporal frames
+    # sampled at ``video_stride`` action-steps (offsets [-6, -4, -2, 0]). Used to
+    # build ``delta_timestamps`` (see ``get_rldx1_delta_timestamps``); the
+    # released FT checkpoints were all trained with 4 frames at stride 2.
+    video_length: int = 4
+    video_stride: int = 2
+    # Train-time image augmentation (upstream ReplayCompose). All default off so
+    # eval / inference is deterministic; set to reproduce an FT training recipe.
+    # One sampled param set is shared across a sample's frames and views.
+    random_crop_fraction: float | None = None
+    random_rotation_angle: int | None = None
+    color_jitter_params: dict[str, float] | None = None
     use_relative_action: bool = False
     use_percentiles: bool = True
 

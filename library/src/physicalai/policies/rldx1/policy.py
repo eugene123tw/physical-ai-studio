@@ -46,6 +46,8 @@ from .config import Rldx1Config
 from .model import Rldx1Model
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from physicalai.data import Observation
 
     from .transforms import Rldx1Postprocessor, Rldx1Preprocessor
@@ -216,6 +218,64 @@ class Rldx1(Policy):
             gradient_checkpointing=config.gradient_checkpointing,
         )
 
+    def get_delta_timestamps(
+        self,
+        dataset: Any = None,
+        *,
+        repo_id: str | None = None,
+        root: str | Path | None = None,
+        revision: str | None = None,
+        fps: float | None = None,
+        image_keys: str | list[str] | None = None,
+        obs_state_key: str = "observation.state",
+    ) -> dict[str, list[float]]:
+        """Build ``LeRobotDataModule`` delta timestamps for the VTC video window.
+
+        Wires the config's ``video_length`` / ``video_stride`` / ``chunk_size``
+        into per-camera frame offsets so the datamodule returns ``video_length``
+        frames per step (offsets ``[-6, -4, -2, 0]`` for the defaults). Pass the
+        result to ``LeRobotDataModule(delta_timestamps=...)`` so training feeds
+        the backbone the same multi-frame stack the released FT checkpoints saw.
+
+        Camera keys and fps are read from the dataset metadata, so the caller
+        normally passes only the dataset (or its ``repo_id``) -- every camera in
+        the dataset gets the window automatically, no per-view key lists.
+
+        Args:
+            dataset: A built dataset (``LeRobotDataset`` / Studio adapter) whose
+                metadata provides the camera keys and fps.
+            repo_id: Dataset repo id, used to load metadata when ``dataset`` is
+                not given.
+            root: Local dataset root for the ``repo_id`` lookup.
+            revision: Dataset git revision for the ``repo_id`` lookup.
+            fps: Override the dataset fps (defaults to the metadata fps).
+            image_keys: Override the auto-detected camera keys (rarely needed).
+            obs_state_key: State observation key.
+
+        Returns:
+            A ``delta_timestamps`` dict mapping each camera key to the video
+            window, plus the state and action offsets.
+
+        Examples:
+            >>> policy = Rldx1()
+            >>> dt = policy.get_delta_timestamps(repo_id="<dataset>")  # keys auto-detected
+            >>> datamodule = LeRobotDataModule(repo_id="<dataset>", delta_timestamps=dt)
+        """
+        from physicalai.data.lerobot import get_rldx1_delta_timestamps  # noqa: PLC0415
+
+        return get_rldx1_delta_timestamps(
+            fps=fps,
+            obs_image_key=image_keys,
+            obs_state_key=obs_state_key,
+            dataset=dataset,
+            repo_id=repo_id,
+            root=root,
+            revision=revision,
+            video_length=self.config.video_length,
+            video_stride=self.config.video_stride,
+            action_horizon=self.config.chunk_size,
+        )
+
     def _initialize_model(
         self,
         env_action_dim: int,
@@ -275,6 +335,9 @@ class Rldx1(Policy):
             use_percentiles=config.use_percentiles,
             image_max_area=config.image_max_area,
             image_resize_m=config.image_resize_m,
+            random_crop_fraction=config.random_crop_fraction,
+            random_rotation_angle=config.random_rotation_angle,
+            color_jitter_params=config.color_jitter_params,
             embodiment_id=config.embodiment_id,
         )
         self._is_setup_complete = True ## ??? is it neceesary???

@@ -36,7 +36,7 @@ trainer.fit(policy, datamodule)
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import torch
 
@@ -122,6 +122,7 @@ class Rldx1(Policy):
         tune_diffusion_model: bool = True,
         use_lora: bool = True,
         # Optimizer
+        optim: Literal["adamw_torch", "adamw_torch_fused", "adafactor"] = "adamw_torch",
         learning_rate: float = 1e-4,
         weight_decay: float = 1e-5,
         warmup_ratio: float = 0.05,
@@ -155,6 +156,7 @@ class Rldx1(Policy):
             tune_projector=tune_projector,
             tune_diffusion_model=tune_diffusion_model,
             use_lora=use_lora,
+            optim=optim,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
             warmup_ratio=warmup_ratio,
@@ -204,6 +206,7 @@ class Rldx1(Policy):
             tune_projector=config.tune_projector,
             tune_diffusion_model=config.tune_diffusion_model,
             use_lora=config.use_lora,
+            optim=config.optim,
             learning_rate=config.learning_rate,
             weight_decay=config.weight_decay,
             warmup_ratio=config.warmup_ratio,
@@ -366,7 +369,11 @@ class Rldx1(Policy):
         return self.model.compute_val_loss(preprocessed)
 
     def configure_optimizers(self) -> dict[str, Any]:
-        """Create AdamW optimizer and a linear-warmup scheduler.
+        """Create the configured optimizer and a linear-warmup scheduler.
+
+        The optimizer is selected by ``config.optim``:
+        ``"adamw_torch"``/``"adamw_torch_fused"`` use AdamW; ``"adafactor"`` uses
+        transformers' Adafactor with a fixed learning rate to cut optimizer memory.
 
         Returns:
             Lightning optimizer configuration dictionary.
@@ -379,12 +386,7 @@ class Rldx1(Policy):
             raise RuntimeError(msg)
 
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
-        optimizer = torch.optim.AdamW(
-            trainable_params,
-            lr=self.config.learning_rate,
-            weight_decay=self.config.weight_decay,
-            betas=(0.9, 0.95),
-        )
+        optimizer = self._build_optimizer(trainable_params)
 
         total_steps = 10000
         if hasattr(self, "trainer") and self.trainer is not None:
@@ -405,6 +407,46 @@ class Rldx1(Policy):
                 "interval": "step",
             },
         }
+
+    def _build_optimizer(
+        self, params: list[torch.nn.Parameter]
+    ) -> torch.optim.Optimizer:
+        """Build the optimizer selected by ``config.optim``.
+
+        Args:
+            params: Trainable parameters to optimize.
+
+        Returns:
+            The instantiated optimizer.
+
+        Raises:
+            ValueError: If ``config.optim`` is not a supported value.
+        """
+        optim = self.config.optim
+        if optim in ("adamw_torch", "adamw_torch_fused"):
+            return torch.optim.AdamW(
+                params,
+                lr=self.config.learning_rate,
+                weight_decay=self.config.weight_decay,
+                betas=(0.9, 0.95),
+                fused=optim == "adamw_torch_fused",
+            )
+        if optim == "adafactor":
+            # Fixed-LR Adafactor: factoring the second moment cuts optimizer
+            # state memory. relative_step/scale_parameter disabled so the
+            # external warmup scheduler drives the LR.
+            from transformers.optimization import Adafactor  # noqa: PLC0415
+
+            return Adafactor(
+                params,
+                lr=self.config.learning_rate,
+                weight_decay=self.config.weight_decay,
+                scale_parameter=False,
+                relative_step=False,
+                warmup_init=False,
+            )
+        msg = f"Unsupported optim {optim!r}; expected one of 'adamw_torch', 'adamw_torch_fused', 'adafactor'."
+        raise ValueError(msg)
 
     def predict_action_chunk(self, batch: Observation) -> torch.Tensor:
         """Predict a chunk of actions of shape ``(B, T, D)``.

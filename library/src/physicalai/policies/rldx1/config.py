@@ -116,6 +116,10 @@ class Rldx1Config(Config):
         use_memory: Phase-2 memory stream. Must be False in v1.
         use_motion: Phase-2 motion stream. Must be False in v1.
         use_physics: Phase-2 physics stream. Must be False in v1.
+        optim: Optimizer to build in ``configure_optimizers``. ``"adamw_torch"``
+            (default) and ``"adamw_torch_fused"`` keep full Adam moment state;
+            ``"adafactor"`` factors the second moment to cut optimizer memory
+            (roughly halves optimizer state) at a small quality/throughput cost.
         learning_rate: Learning rate for the optimizer.
         weight_decay: Weight decay for the optimizer.
         warmup_ratio: Warmup ratio (0.0-1.0) of total training steps.
@@ -237,6 +241,7 @@ class Rldx1Config(Config):
     use_physics: bool = False
 
     # Optimizer / training hyperparameters
+    optim: Literal["adamw_torch", "adamw_torch_fused", "adafactor"] = "adamw_torch"
     learning_rate: float = 1e-4
     weight_decay: float = 1e-5
     warmup_ratio: float = 0.05

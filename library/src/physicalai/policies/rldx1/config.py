@@ -80,6 +80,8 @@ class Rldx1Config(Config):
         tune_top_llm_layers: Number of top LLM layers to fine-tune (lower layers frozen).
         tune_llm: Whether to fine-tune the entire LLM backbone (all decoder layers,
             input embeddings, and lm_head). Overrides ``tune_top_llm_layers``.
+        backbone_trainable_params_fp32: Whether to cast trainable backbone
+            parameters to float32 after bf16 loading for optimizer stability.
         tune_visual: Whether to fine-tune the vision tower.
         tune_projector: Whether to fine-tune the cognition/state/action projectors.
         tune_diffusion_model: Whether to fine-tune the MSAT action model.
@@ -167,6 +169,7 @@ class Rldx1Config(Config):
     # Fine-tuning control (full / partial)
     tune_top_llm_layers: int = 4
     tune_llm: bool = False
+    backbone_trainable_params_fp32: bool = True
     tune_visual: bool = False
     tune_projector: bool = True
     tune_diffusion_model: bool = True

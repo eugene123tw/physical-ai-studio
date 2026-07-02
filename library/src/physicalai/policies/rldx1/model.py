@@ -115,6 +115,7 @@ class Rldx1Model(Model):
         backbone_peft_mode: str = "full",
         tune_top_llm_layers: int = 4,
         tune_llm: bool = False,
+        backbone_trainable_params_fp32: bool = True,
         tune_visual: bool = False,
         tune_projector: bool = True,
         tune_diffusion_model: bool = True,
@@ -160,6 +161,8 @@ class Rldx1Model(Model):
             tune_llm: Full-tune the entire LLM backbone (all decoder layers +
                 input embeddings + lm_head). Only applies in 'full' mode;
                 overrides ``tune_top_llm_layers``.
+            backbone_trainable_params_fp32: Whether to cast trainable backbone
+                parameters to float32 after bf16 loading for optimizer stability.
             tune_visual: Whether to fine-tune the vision tower.
             tune_projector: Whether to fine-tune the cognition/state/action projectors.
             tune_diffusion_model: Whether to full-tune the MSAT action model
@@ -215,6 +218,7 @@ class Rldx1Model(Model):
         # are silently ignored -- e.g. backbone_use_lora stays False. Applied
         # before ``RLDX(cfg, ...)`` because the LoRA injection and requires_grad
         # bookkeeping run in the model constructor.
+        cfg.backbone_trainable_params_fp32 = backbone_trainable_params_fp32
         cfg.tune_visual = tune_visual
         cfg.tune_projector = tune_projector
         cfg.tune_vlln = tune_vlln

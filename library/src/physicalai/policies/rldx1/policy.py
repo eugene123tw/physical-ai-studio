@@ -78,6 +78,8 @@ class Rldx1(Policy):
         tune_top_llm_layers: Number of top LLM layers to fine-tune.
         tune_llm: Whether to fine-tune the entire LLM backbone (all decoder
             layers + input embeddings + lm_head). Overrides tune_top_llm_layers.
+        backbone_trainable_params_fp32: Whether to cast trainable backbone
+            parameters to float32 after bf16 loading for optimizer stability.
         tune_visual: Whether to fine-tune the vision tower.
         tune_projector: Whether to fine-tune the projectors.
         tune_diffusion_model: Whether to fine-tune the MSAT action model.
@@ -114,6 +116,7 @@ class Rldx1(Policy):
         *,
         tune_top_llm_layers: int = 4,
         tune_llm: bool = False,
+        backbone_trainable_params_fp32: bool = True,
         tune_visual: bool = False,
         tune_projector: bool = True,
         tune_diffusion_model: bool = True,
@@ -147,6 +150,7 @@ class Rldx1(Policy):
             n_cog_tokens=n_cog_tokens,
             tune_top_llm_layers=tune_top_llm_layers,
             tune_llm=tune_llm,
+            backbone_trainable_params_fp32=backbone_trainable_params_fp32,
             tune_visual=tune_visual,
             tune_projector=tune_projector,
             tune_diffusion_model=tune_diffusion_model,
@@ -195,6 +199,7 @@ class Rldx1(Policy):
             n_cog_tokens=config.n_cog_tokens,
             tune_top_llm_layers=config.tune_top_llm_layers,
             tune_llm=config.tune_llm,
+            backbone_trainable_params_fp32=config.backbone_trainable_params_fp32,
             tune_visual=config.tune_visual,
             tune_projector=config.tune_projector,
             tune_diffusion_model=config.tune_diffusion_model,
@@ -241,6 +246,7 @@ class Rldx1(Policy):
             backbone_peft_mode="lora" if config.use_lora else "full",
             tune_top_llm_layers=config.tune_top_llm_layers,
             tune_llm=config.tune_llm,
+            backbone_trainable_params_fp32=config.backbone_trainable_params_fp32,
             tune_visual=config.tune_visual,
             tune_projector=config.tune_projector,
             tune_diffusion_model=config.tune_diffusion_model,

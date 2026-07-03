@@ -95,6 +95,9 @@ class Rldx1(Policy):
         compile_model: Whether to torch.compile the model.
         gradient_checkpointing: Whether to enable activation checkpointing in
             MSAT during training.
+        color_jitter_params: Train-time ``A.ColorJitter`` params
+            (``{"brightness", "contrast", "saturation", "hue"}``). ``None``
+            (default) disables color augmentation.
         env_action_dim: Environment action dimension. If provided, enables eager init.
         dataset_stats: Dataset normalization statistics for eager init.
     """
@@ -133,6 +136,8 @@ class Rldx1(Policy):
         use_bf16: bool = True,
         compile_model: bool = False,
         gradient_checkpointing: bool = True,
+        # Image augmentation (train only)
+        color_jitter_params: dict[str, float] | None = None,
         # Eager initialization (optional)
         env_action_dim: int | None = None,
         dataset_stats: dict[str, dict[str, list[float] | str | tuple]] | None = None,
@@ -166,6 +171,7 @@ class Rldx1(Policy):
             use_bf16=use_bf16,
             compile_model=compile_model,
             gradient_checkpointing=gradient_checkpointing,
+            color_jitter_params=color_jitter_params,
         )
 
         # Save individual args (not the config object) for checkpoint restoration.
@@ -216,6 +222,7 @@ class Rldx1(Policy):
             use_bf16=config.use_bf16,
             compile_model=config.compile_model,
             gradient_checkpointing=config.gradient_checkpointing,
+            color_jitter_params=config.color_jitter_params,
         )
 
     def get_delta_timestamps(

@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import torch
 
 from physicalai.policies.base import Policy
+from physicalai.train.schedulers import cosine_decay_with_warmup_scheduler
 
 from .config import Rldx1Config
 from .model import Rldx1Model
@@ -98,6 +99,10 @@ class Rldx1(Policy):
         color_jitter_params: Train-time ``A.ColorJitter`` params
             (``{"brightness", "contrast", "saturation", "hue"}``). ``None``
             (default) disables color augmentation.
+        clip_outliers: Clip normalized state/action to ``[-1, 1]`` at train and
+            inference (upstream default ``True``). Set ``False`` (Pi05-style, no
+            clip) for wide-range action spaces where ``QUANTILES`` bounds would
+            truncate task-critical extremes (e.g. PushT).
         env_action_dim: Environment action dimension. If provided, enables eager init.
         dataset_stats: Dataset normalization statistics for eager init.
     """
@@ -138,6 +143,8 @@ class Rldx1(Policy):
         gradient_checkpointing: bool = True,
         # Image augmentation (train only)
         color_jitter_params: dict[str, float] | None = None,
+        # Normalization
+        clip_outliers: bool = True,
         # Eager initialization (optional)
         env_action_dim: int | None = None,
         dataset_stats: dict[str, dict[str, list[float] | str | tuple]] | None = None,
@@ -172,6 +179,7 @@ class Rldx1(Policy):
             compile_model=compile_model,
             gradient_checkpointing=gradient_checkpointing,
             color_jitter_params=color_jitter_params,
+            clip_outliers=clip_outliers,
         )
 
         # Save individual args (not the config object) for checkpoint restoration.
@@ -223,8 +231,8 @@ class Rldx1(Policy):
             compile_model=config.compile_model,
             gradient_checkpointing=config.gradient_checkpointing,
             color_jitter_params=config.color_jitter_params,
+            clip_outliers=config.clip_outliers,
         )
-
     def get_delta_timestamps(
         self,
         dataset: Any = None,
@@ -340,6 +348,7 @@ class Rldx1(Policy):
             model_name=config.model_name,
             revision=config.revision,
             use_percentiles=config.use_percentiles,
+            clip_outliers=config.clip_outliers,
             image_max_area=config.image_max_area,
             image_resize_m=config.image_resize_m,
             random_crop_fraction=config.random_crop_fraction,
@@ -439,11 +448,15 @@ class Rldx1(Policy):
         return self.model.compute_val_loss(preprocessed)
 
     def configure_optimizers(self) -> dict[str, Any]:
-        """Create the configured optimizer and a linear-warmup scheduler.
+        """Create the configured optimizer and a cosine-decay-with-warmup scheduler.
 
         The optimizer is selected by ``config.optim``:
         ``"adamw_torch"``/``"adamw_torch_fused"`` use AdamW; ``"adafactor"`` uses
         transformers' Adafactor with a fixed learning rate to cut optimizer memory.
+
+        The LR schedule matches pi05: linear warmup for ``warmup_ratio`` of total
+        steps, then cosine decay from ``learning_rate`` down to
+        ``config.scheduler_decay_lr`` over the remaining training steps.
 
         Returns:
             Lightning optimizer configuration dictionary.
@@ -463,12 +476,14 @@ class Rldx1(Policy):
             total_steps = int(getattr(self.trainer, "estimated_stepping_batches", total_steps))
         warmup_steps = max(1, int(total_steps * self.config.warmup_ratio))
 
-        def lr_lambda(step: int) -> float:
-            if step < warmup_steps:
-                return step / max(1, warmup_steps)
-            return 1.0
-
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+        scheduler = cosine_decay_with_warmup_scheduler(
+            optimizer,
+            peak_lr=self.config.learning_rate,
+            decay_lr=self.config.scheduler_decay_lr,
+            num_warmup_steps=warmup_steps,
+            num_decay_steps=total_steps,
+            num_training_steps=total_steps,
+        )
 
         return {
             "optimizer": optimizer,

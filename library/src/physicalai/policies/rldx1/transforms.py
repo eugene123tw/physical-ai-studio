@@ -161,6 +161,11 @@ class Rldx1Preprocessor(nn.Module):
         normalize: Retained for API compatibility; normalization is always
             applied from ``stats``.
         use_percentiles: Use 1st/99th percentile bounds instead of min/max.
+        clip_outliers: Clip normalized state/action to ``[-1, 1]`` (upstream
+            ``clip_outliers``). ``True`` (default) matches upstream: the forward
+            pass clamps train targets and :meth:`denormalize_action` clamps before
+            the inverse. ``False`` (Pi05-style) skips both clamps, preserving
+            out-of-percentile action tails for wide-range tasks (e.g. PushT).
         image_max_area: Target max area (pixels) for aspect-preserving resize.
         image_resize_m: Alignment multiple for resized/cropped dimensions.
         random_crop_fraction: Train-time fractional crop size in ``(0, 1]``.
@@ -193,6 +198,7 @@ class Rldx1Preprocessor(nn.Module):
         revision: str | None = None,
         normalize: bool = True,
         use_percentiles: bool = True,
+        clip_outliers: bool = True,
         image_max_area: int = 65536,
         image_resize_m: int = 32,
         random_crop_fraction: float | None = None,
@@ -212,6 +218,7 @@ class Rldx1Preprocessor(nn.Module):
         self.revision = revision
         self.normalize = normalize
         self.use_percentiles = use_percentiles
+        self.clip_outliers = clip_outliers
         self.image_max_area = image_max_area
         self.image_resize_m = image_resize_m
         self.default_task = default_task
@@ -358,7 +365,7 @@ class Rldx1Preprocessor(nn.Module):
             sa_batch[ACTION] = self._as_float_tensor(batch_dict[ACTION]).to(sa_device)
 
         sa_batch = self._state_action_normalizer(sa_batch)
-        if self._has_sa_features:
+        if self._has_sa_features and self.clip_outliers:
             sa_batch = clip_state_action(sa_batch)
         sa_batch = pad_state_action(
             sa_batch,
@@ -510,9 +517,10 @@ class Rldx1Preprocessor(nn.Module):
         """Decode a normalized action chunk to the environment space (Stage 5).
 
         PAS-native inverse of the forward action normalization: slices to the
-        unpadded action width and prediction horizon, clamps to ``[-1, 1]``
-        (matching the vendored ``unnormalize_values_minmax`` clip), then applies
-        the inverse :class:`FeatureNormalizeTransform`.
+        unpadded action width and prediction horizon, optionally clamps to
+        ``[-1, 1]`` when ``clip_outliers`` is set (matching the vendored
+        ``unnormalize_values_minmax`` clip), then applies the inverse
+        :class:`FeatureNormalizeTransform`.
 
         Args:
             action: Predicted action ``(B, T, max_action_dim)``.
@@ -528,7 +536,9 @@ class Rldx1Preprocessor(nn.Module):
             msg = "Cannot denormalize action: no action statistics were provided to the preprocessor."
             raise RuntimeError(msg)
 
-        sliced = action[..., : self.action_horizon, : self._action_dim].clamp(-1.0, 1.0)
+        sliced = action[..., : self.action_horizon, : self._action_dim]
+        if self.clip_outliers:
+            sliced = sliced.clamp(-1.0, 1.0)
 
         denorm_device = sliced.device
         for buf in self._action_denormalizer.buffers():
@@ -700,6 +710,7 @@ def make_rldx1_transforms(
     revision: str | None = None,
     normalize: bool = True,
     use_percentiles: bool = True,
+    clip_outliers: bool = True,
     image_max_area: int = 65536,
     image_resize_m: int = 32,
     random_crop_fraction: float | None = None,
@@ -722,6 +733,8 @@ def make_rldx1_transforms(
         revision: Pinned git commit SHA for the processor download.
         normalize: Retained for API compatibility (normalization always applied).
         use_percentiles: Prefer 1st/99th percentile bounds over min/max.
+        clip_outliers: Clip normalized state/action to ``[-1, 1]`` at train and
+            inference (upstream default ``True``; ``False`` = Pi05-style no clip).
         image_max_area: Target max area (pixels) for aspect-preserving resize.
         image_resize_m: Alignment multiple for resized/cropped dimensions.
         random_crop_fraction: Train-time fractional crop size in ``(0, 1]``
@@ -744,6 +757,7 @@ def make_rldx1_transforms(
         revision=revision,
         normalize=normalize,
         use_percentiles=use_percentiles,
+        clip_outliers=clip_outliers,
         image_max_area=image_max_area,
         image_resize_m=image_resize_m,
         random_crop_fraction=random_crop_fraction,

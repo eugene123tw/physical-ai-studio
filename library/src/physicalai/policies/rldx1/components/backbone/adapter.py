@@ -309,6 +309,8 @@ class VTCQwen3VLBackbone(nn.Module):
             for layer in self.qwen_model.model.language_model.layers[-tune_top_llm_layers:]:
                 for param in layer.parameters():
                     param.requires_grad = True
+            # Unfreeze lm_head if top layers are trainable, since it depends on the last layer
+            self.qwen_model.lm_head.requires_grad_(True)
 
         if print_params:
             _print("=" * 50)

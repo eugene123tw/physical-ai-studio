@@ -117,6 +117,12 @@ class Rldx1Config(Config):
             disables color jitter).
         use_relative_action: Must be False in v1. Relative actions are not supported.
         use_percentiles: Whether to normalize with 1st/99th percentiles (vs min/max).
+        clip_outliers: Whether to clip normalized state/action to ``[-1, 1]`` (upstream
+            ``clip_outliers``). ``True`` (default) matches the upstream RLDX-1 recipe:
+            training targets and decoded actions are clamped to the normalization
+            bounds. Set ``False`` (Pi05-style, no clip) for wide-range action spaces
+            where ``QUANTILES`` bounds would truncate task-critical extremes (e.g.
+            PushT). Gates both the train-time clip and the inference denormalize clamp.
         rtc_inference_mode: Real-Time Chunking inference mode ('none', 'trained').
         rtc_training_max_delay: Max prefix delay sampled per step during RTC training.
         rtc_inference_delay: Inference-time prefix delay for RTC.
@@ -131,6 +137,9 @@ class Rldx1Config(Config):
         learning_rate: Learning rate for the optimizer.
         weight_decay: Weight decay for the optimizer.
         warmup_ratio: Warmup ratio (0.0-1.0) of total training steps.
+        scheduler_decay_lr: Final learning rate after cosine decay. The LR is
+            cosine-decayed from ``learning_rate`` down to this value over the
+            remaining (post-warmup) training steps.
         grad_clip_norm: Gradient clipping norm (0.0 = disabled).
         use_bf16: Whether to use bfloat16 precision.
         compile_model: Whether to torch.compile the model.
@@ -246,6 +255,10 @@ class Rldx1Config(Config):
     color_jitter_params: dict[str, float] | None = None
     use_relative_action: bool = False
     use_percentiles: bool = True
+    # Clip normalized state/action to [-1, 1] (upstream clip_outliers). True keeps
+    # upstream parity; False (Pi05-style) preserves out-of-percentile action tails
+    # for wide-range tasks like PushT. Gates both the train clip and infer clamp.
+    clip_outliers: bool = True
 
     # Real-Time Chunking (optional; no released checkpoint enables it).
     # "guided" mode is intentionally unsupported (autograd VJP, not exportable).
@@ -265,6 +278,7 @@ class Rldx1Config(Config):
     learning_rate: float = 1e-4
     weight_decay: float = 1e-5
     warmup_ratio: float = 0.05
+    scheduler_decay_lr: float = 1e-5
     grad_clip_norm: float = 1.0
 
     # Precision / compilation

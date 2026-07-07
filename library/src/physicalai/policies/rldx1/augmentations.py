@@ -4,9 +4,9 @@
 """Train-time image augmentation for the RLDX-1 policy (albumentations).
 
 Faithful port of the upstream ``rldx/data/augmentations.py`` pipeline, wired to
-the PAS-native geometry helper in :mod:`preprocessing`. The eval path is the
-deterministic :func:`~physicalai.policies.rldx1.preprocessing.resize_and_center_crop`
-(pure ``cv2``); this module adds the train-time stochastic stages that
+the PAS-native geometry helper in :mod:`preprocessing`. Both the eval and train
+paths run through ``AspectAreaResizeAndCrop`` (deterministic area-budget resize +
+``m``-aligned center crop); the train path adds the stochastic stages that
 ``FT-*`` checkpoints were trained with:
 
 1. ``AspectAreaResizeAndCrop`` -- deterministic area-budget resize + ``m``-aligned
@@ -102,24 +102,31 @@ class AspectAreaResizeAndCrop(A.DualTransform):
         interpolation: int = cv2.INTER_AREA,
         p: float = 1.0,
         always_apply: bool | None = None,
+        min_area: int | None = None,
     ) -> None:
         """Store the area budget, alignment multiple, and interpolation mode."""
         super().__init__(p=p, always_apply=always_apply)
         self.max_area = max_area
         self.m = m
         self.interpolation = interpolation
+        self.min_area = min_area
 
     def apply(self, img, resize_hw=(0, 0), crop_coords=(0, 0, 0, 0), **params):  # noqa: ANN001, ANN201, ARG002
         """Resize to ``resize_hw`` then slice ``crop_coords`` (x_min, y_min, x_max, y_max)."""
         h_r, w_r = resize_hw
-        resized = cv2.resize(img, (w_r, h_r), interpolation=self.interpolation)
+        h, w = img.shape[:2]
+        # INTER_AREA is a decimation filter; use cubic when the target enlarges.
+        interpolation = cv2.INTER_CUBIC if h_r * w_r > h * w else self.interpolation
+        resized = cv2.resize(img, (w_r, h_r), interpolation=interpolation)
         x_min, y_min, x_max, y_max = crop_coords
         return resized[y_min:y_max, x_min:x_max]
 
     def get_params_dependent_on_data(self, params, data):  # noqa: ANN001, ANN201, ARG002
         """Compute the resize target and centered crop box from the input shape."""
         h, w = params["shape"][:2]
-        (h_r, w_r), (h_c, w_c) = compute_aspect_area_resize_crop(h, w, max_area=self.max_area, m=self.m)
+        (h_r, w_r), (h_c, w_c) = compute_aspect_area_resize_crop(
+            h, w, max_area=self.max_area, m=self.m, min_area=self.min_area
+        )
         y_min = (h_r - h_c) // 2
         x_min = (w_r - w_c) // 2
         return {
@@ -129,7 +136,7 @@ class AspectAreaResizeAndCrop(A.DualTransform):
 
     def get_transform_init_args_names(self):  # noqa: ANN201
         """Return the ctor arg names albumentations serializes for replay."""
-        return ("max_area", "m", "interpolation")
+        return ("max_area", "m", "interpolation", "min_area")
 
 
 class _FractionalCropAndResizeBase(A.DualTransform):
@@ -205,6 +212,7 @@ def build_image_transformations_albumentations(
     random_crop_fraction: float | None = None,
     random_rotation_angle: int | None = None,
     color_jitter_params: dict[str, float] | None = None,
+    image_min_area: int | None = None,
 ) -> tuple[A.BaseCompose, A.BaseCompose]:
     """Build the ``(train_transform, eval_transform)`` pair.
 
@@ -222,6 +230,8 @@ def build_image_transformations_albumentations(
         random_rotation_angle: Optional ``A.Rotate(limit=...)`` (train only).
         color_jitter_params: Optional ``A.ColorJitter`` params
             ``{"brightness", "contrast", "saturation", "hue"}`` (train only).
+        image_min_area: Optional minimum pixel-area floor; tiny frames are
+            upscaled to it before the crop (``None`` keeps never-upscale).
 
     Returns:
         ``(train_transform, eval_transform)`` -- albumentations composes taking
@@ -231,10 +241,14 @@ def build_image_transformations_albumentations(
         ValueError: If ``random_crop_fraction`` is outside ``(0, 1]``.
     """
     train_list: list = [
-        AspectAreaResizeAndCrop(max_area=image_max_area, m=image_resize_m, interpolation=cv2.INTER_AREA),
+        AspectAreaResizeAndCrop(
+            max_area=image_max_area, m=image_resize_m, interpolation=cv2.INTER_AREA, min_area=image_min_area
+        ),
     ]
     eval_list: list = [
-        AspectAreaResizeAndCrop(max_area=image_max_area, m=image_resize_m, interpolation=cv2.INTER_AREA),
+        AspectAreaResizeAndCrop(
+            max_area=image_max_area, m=image_resize_m, interpolation=cv2.INTER_AREA, min_area=image_min_area
+        ),
     ]
 
     if random_crop_fraction is not None:

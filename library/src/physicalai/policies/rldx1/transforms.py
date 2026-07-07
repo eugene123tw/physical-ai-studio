@@ -60,9 +60,11 @@ from .preprocessing import (
     clip_state_action,
     formalize_language,
     pad_state_action,
-    resize_and_center_crop,
     tokenize_vlm_batch,
 )
+
+from .augmentations import apply_with_replay
+from .augmentations import build_image_transformations_albumentations
 
 if TYPE_CHECKING:
     from transformers import ProcessorMixin
@@ -167,6 +169,11 @@ class Rldx1Preprocessor(nn.Module):
             the inverse. ``False`` (Pi05-style) skips both clamps, preserving
             out-of-percentile action tails for wide-range tasks (e.g. PushT).
         image_max_area: Target max area (pixels) for aspect-preserving resize.
+        image_min_area: Minimum pixel-area floor forwarded to the Qwen vision
+            tiler as ``min_pixels``. Frames below this area are upscaled to it
+            (aspect-preserving) before encoding. ``None`` (default) leaves the
+            tiler's own floor untouched. Set to e.g. ``65536`` (256x256) to lift
+            tiny frames such as 96x96 PushT into a richer visual token sequence.
         image_resize_m: Alignment multiple for resized/cropped dimensions.
         random_crop_fraction: Train-time fractional crop size in ``(0, 1]``.
             ``None`` (default) disables the crop stage. Eval always uses a
@@ -200,6 +207,7 @@ class Rldx1Preprocessor(nn.Module):
         use_percentiles: bool = True,
         clip_outliers: bool = True,
         image_max_area: int = 65536,
+        image_min_area: int = 50176,
         image_resize_m: int = 32,
         random_crop_fraction: float | None = None,
         random_rotation_angle: int | None = None,
@@ -220,22 +228,24 @@ class Rldx1Preprocessor(nn.Module):
         self.use_percentiles = use_percentiles
         self.clip_outliers = clip_outliers
         self.image_max_area = image_max_area
+        self.image_min_area = image_min_area
         self.image_resize_m = image_resize_m
         self.default_task = default_task
         self.embodiment_id = embodiment_id
 
-        # Train-time image augmentation (upstream ReplayCompose). Engaged only
-        # when a stochastic stage is configured; otherwise both train and eval
-        # use the deterministic ``resize_and_center_crop`` geometry (pixel-
-        # identical to the eval ``AspectAreaResizeAndCrop``). The albumentations
-        # transform is built lazily so the default no-aug path stays light.
+        # Image geometry runs through the albumentations ``AspectAreaResizeAndCrop``
+        # for both eval and train. Eval uses a deterministic ``A.Compose``; train
+        # adds the configured stochastic stages in a ``ReplayCompose`` so one
+        # sampled param set is shared across a sample's frames/views. ``_augment``
+        # selects the train pipeline; both composes are built lazily to defer the
+        # albumentations import until the first frame is processed.
         self.random_crop_fraction = random_crop_fraction
         self.random_rotation_angle = random_rotation_angle
         self.color_jitter_params = color_jitter_params
         self._augment = (
             random_crop_fraction is not None or bool(random_rotation_angle) or color_jitter_params is not None
         )
-        self._train_transform_cache: Any = None
+        self._image_transforms_cache: tuple[Any, Any] | None = None
 
         # PAS-native state/action normalizer (Stage 1). An nn.Module submodule so
         # its min/max/q01/q99 buffers move with `.to(device)` and export cleanly.
@@ -286,40 +296,44 @@ class Rldx1Preprocessor(nn.Module):
             self._vlm_processor_cache = processor
         return self._vlm_processor_cache
 
-    # -- train-time augmentation ------------------------------------------- #
+    # -- image geometry / augmentation ------------------------------------- #
     @property
-    def _train_transform(self) -> Any:  # noqa: ANN401
-        """Lazily build the albumentations ``ReplayCompose`` train transform.
+    def _image_transforms(self) -> tuple[Any, Any]:
+        """Lazily build and cache the ``(train, eval)`` albumentations transforms.
+
+        Both share the deterministic ``AspectAreaResizeAndCrop`` geometry
+        (area-budget resize + ``m``-aligned center crop, optional ``min_area``
+        upscale). The train transform adds the configured stochastic stages in a
+        ``ReplayCompose``; the eval transform is a deterministic ``A.Compose``.
+        Built lazily so the albumentations import is deferred until the first
+        frame is processed.
 
         Returns:
-            The train ``ReplayCompose`` (step-1 geometry + configured stochastic
-            stages). Only reached when ``self._augment`` is True.
+            ``(train_transform, eval_transform)``.
         """
-        if self._train_transform_cache is None:
-            from .augmentations import build_image_transformations_albumentations  # noqa: PLC0415
-
-            train_transform, _eval = build_image_transformations_albumentations(
+        if self._image_transforms_cache is None:
+            self._image_transforms_cache = build_image_transformations_albumentations(
                 image_max_area=self.image_max_area,
                 image_resize_m=self.image_resize_m,
                 random_crop_fraction=self.random_crop_fraction,
                 random_rotation_angle=self.random_rotation_angle,
                 color_jitter_params=self.color_jitter_params,
+                image_min_area=self.image_min_area,
             )
-            self._train_transform_cache = train_transform
-        return self._train_transform_cache
+        return self._image_transforms_cache
 
     def _transform_frames(
         self,
         frames: list[np.ndarray],
         replay: dict | None,
     ) -> tuple[list[Image.Image], dict | None]:
-        """Resize (eval) or augment (train) a sample's frames into PIL images.
+        """Resize a sample's frames into PIL images via the albumentations geometry.
 
-        In train mode with augmentation configured, one ``ReplayCompose`` blob
-        is shared across every frame of the sample (threaded via ``replay``) so
-        the random params are identical across frames and views -- matching
-        upstream ``_get_vlm_inputs``. Otherwise the deterministic ``cv2``
-        geometry is applied.
+        Both eval and train route through ``AspectAreaResizeAndCrop``. In train
+        mode with augmentation configured, the ``ReplayCompose`` blob is shared
+        across every frame of the sample (threaded via ``replay``) so the random
+        params are identical across frames and views -- matching upstream
+        ``_get_vlm_inputs``. Otherwise the deterministic eval compose is applied.
 
         Args:
             frames: ``(H, W, 3)`` uint8 frames for one view of one sample.
@@ -329,17 +343,11 @@ class Rldx1Preprocessor(nn.Module):
         Returns:
             ``(pil_frames, replay)``.
         """
-        if self.training and self._augment:
-            from .augmentations import apply_with_replay  # noqa: PLC0415
 
-            tensors, replay = apply_with_replay(self._train_transform, frames, replay)
-            pil = [Image.fromarray(np.ascontiguousarray(t.permute(1, 2, 0).numpy())) for t in tensors]
-            return pil, replay
-
-        pil = [
-            Image.fromarray(resize_and_center_crop(frame, max_area=self.image_max_area, m=self.image_resize_m))
-            for frame in frames
-        ]
+        train_transform, eval_transform = self._image_transforms
+        transform = train_transform if (self.training and self._augment) else eval_transform
+        tensors, replay = apply_with_replay(transform, frames, replay)
+        pil = [Image.fromarray(np.ascontiguousarray(t.permute(1, 2, 0).numpy())) for t in tensors]
         return pil, replay
 
     # -- native forward ---------------------------------------------------- #
@@ -712,6 +720,7 @@ def make_rldx1_transforms(
     use_percentiles: bool = True,
     clip_outliers: bool = True,
     image_max_area: int = 65536,
+    image_min_area: int = 50176,
     image_resize_m: int = 32,
     random_crop_fraction: float | None = None,
     random_rotation_angle: int | None = None,
@@ -736,6 +745,10 @@ def make_rldx1_transforms(
         clip_outliers: Clip normalized state/action to ``[-1, 1]`` at train and
             inference (upstream default ``True``; ``False`` = Pi05-style no clip).
         image_max_area: Target max area (pixels) for aspect-preserving resize.
+        image_min_area: Minimum pixel-area floor forwarded to the Qwen vision
+            tiler as ``min_pixels`` (frames below it are upscaled, aspect-
+            preserving). ``None`` (default) leaves the tiler's floor untouched;
+            e.g. ``65536`` lifts 96x96 PushT frames to 256x256.
         image_resize_m: Alignment multiple for resized/cropped dimensions.
         random_crop_fraction: Train-time fractional crop size in ``(0, 1]``
             (``None`` disables the crop stage).
@@ -759,6 +772,7 @@ def make_rldx1_transforms(
         use_percentiles=use_percentiles,
         clip_outliers=clip_outliers,
         image_max_area=image_max_area,
+        image_min_area=image_min_area,
         image_resize_m=image_resize_m,
         random_crop_fraction=random_crop_fraction,
         random_rotation_angle=random_rotation_angle,

@@ -27,7 +27,6 @@ from physicalai.policies.rldx1.preprocessing import (
     compute_aspect_area_resize_crop,
     formalize_language,
     pad_state_action,
-    resize_and_center_crop,
     tokenize_vlm_batch,
 )
 from physicalai.policies.utils.normalization import FeatureNormalizeTransform
@@ -330,25 +329,29 @@ def test_compute_resize_crop_matches_vendored(height: int, width: int) -> None:
 
 
 @pytest.mark.parametrize(("height", "width"), _IMAGE_SHAPES)
-def test_resize_and_center_crop_matches_vendored(height: int, width: int) -> None:
-    """Native resize+crop is pixel-identical to the vendored eval transform."""
+def test_aspect_area_resize_crop_matches_vendored(height: int, width: int) -> None:
+    """Native eval geometry is pixel-identical to the vendored eval transform."""
     import albumentations as A
 
+    from physicalai.policies.rldx1.augmentations import AspectAreaResizeAndCrop
     from tests.unit.policies.rldx1_vendored.augmentations import (
-        AspectAreaResizeAndCrop,
+        AspectAreaResizeAndCrop as VendoredAspectAreaResizeAndCrop,
     )
 
     rng = np.random.default_rng(height * 1000 + width)
     image = rng.integers(0, 256, size=(height, width, 3), dtype=np.uint8)
 
     vendored = A.Compose(
+        [VendoredAspectAreaResizeAndCrop(max_area=_IMAGE_MAX_AREA, m=_IMAGE_RESIZE_M)],
+    )
+    native = A.Compose(
         [AspectAreaResizeAndCrop(max_area=_IMAGE_MAX_AREA, m=_IMAGE_RESIZE_M)],
     )
     gold = vendored(image=image)["image"]
-    native = resize_and_center_crop(image, max_area=_IMAGE_MAX_AREA, m=_IMAGE_RESIZE_M)
+    got = native(image=image)["image"]
 
-    assert native.shape == gold.shape
-    np.testing.assert_array_equal(native, gold)
+    assert got.shape == gold.shape
+    np.testing.assert_array_equal(got, gold)
 
 
 # ---------------------------------------------------------------------------- #

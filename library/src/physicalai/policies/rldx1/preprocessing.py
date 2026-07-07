@@ -24,14 +24,13 @@ reproduces the in-``__call__`` padding from the vendored ``RLDXProcessor``
 (zero-pad state to ``max_state_dim``; zero-pad the action chunk to
 ``max_action_horizon`` x ``max_action_dim`` and build the validity mask).
 
-Stage 3 scope: deterministic (eval) image geometry.
-:func:`compute_aspect_area_resize_crop` ports the integer geometry of the
-vendored ``resize_preserve_aspect_area_then_crop``; :func:`resize_and_center_crop`
-reproduces the vendored ``AspectAreaResizeAndCrop`` eval transform
-(``cv2.INTER_AREA`` resize + ``m``-aligned center crop) as a plain function,
-dropping the albumentations ``DualTransform`` / ``ReplayCompose`` machinery.
-``cv2.INTER_AREA`` is required for bit-exact parity: torch ``area``
-interpolation diverges by tens of levels at non-integer scales.
+Stage 3 scope: image geometry. :func:`compute_aspect_area_resize_crop` ports the
+integer geometry of the vendored ``resize_preserve_aspect_area_then_crop`` (with
+an optional ``min_area`` upscale floor). Both the eval and train paths consume it
+through the albumentations ``AspectAreaResizeAndCrop`` in :mod:`augmentations`;
+``cv2.INTER_AREA`` is used when downscaling for bit-exact parity (torch ``area``
+interpolation diverges by tens of levels at non-integer scales), ``cv2.INTER_CUBIC``
+when the ``min_area`` floor enlarges a tiny frame.
 
 Stage 4 scope: Qwen VLM tokenization orchestration. :func:`formalize_language`
 ports the vendored lowercase + punctuation strip; :func:`build_qwen_conversation`
@@ -54,7 +53,6 @@ import math
 import re
 from typing import TYPE_CHECKING, Any
 
-import cv2
 import numpy as np
 import torch
 from torch.nn import functional as F  # noqa: N812
@@ -314,63 +312,60 @@ def compute_aspect_area_resize_crop(
     *,
     max_area: int,
     m: int,
+    min_area: int | None = None,
 ) -> tuple[tuple[int, int], tuple[int, int]]:
     """Compute aspect-preserving resize + ``m``-aligned crop sizes.
 
-    Exact integer port of the vendored
-    ``resize_preserve_aspect_area_then_crop`` (``components/processing/
-    augmentations.py``). Never upscales: picks the largest scale whose area is
-    at most ``max_area`` with the shorter side a multiple of ``m``; the longer
-    side follows from the aspect ratio and both dims are floored to a multiple
-    of ``m`` for the crop.
+    Integer port of the vendored ``resize_preserve_aspect_area_then_crop``
+    (``components/processing/augmentations.py``), extended with an optional
+    ``min_area`` upscale floor.
+
+    Without ``min_area`` (default) the geometry is byte-identical to upstream and
+    never upscales: it picks the largest scale whose area is at most ``max_area``
+    with the shorter side a multiple of ``m``; the longer side follows from the
+    aspect ratio and both dims are floored to a multiple of ``m``.
+
+    With ``min_area`` set, any image whose area is below it is *upscaled* so the
+    resized area is approximately ``min_area``, aspect ratio preserved, both dims
+    rounded to the nearest multiple of ``m`` (``round``, not ``floor``, so a
+    tiny square such as 96x96 lands exactly on 256x256 rather than undershooting
+    to 224 through float truncation). ``min_area`` takes precedence over the
+    ``max_area`` cap when both would apply.
 
     Args:
         height: Input image height.
         width: Input image width.
         max_area: Maximum pixel-area budget for the resized image.
         m: Alignment multiple for the output dimensions.
+        min_area: Optional minimum pixel-area floor. ``None`` (default) keeps the
+            upstream never-upscale behavior.
 
     Returns:
         ``((h_r, w_r), (h_c, w_c))`` -- the aspect-preserving resize target and
         the final ``m``-aligned center crop.
     """
-    smax = min(1.0, math.sqrt(max_area / (height * width)))
-    short, long_ = (height, width) if height <= width else (width, height)
+    area = height * width
+    if min_area is not None and area < min_area:
+        # Upscale branch (new, non-parity): scale so the resized area is about
+        # ``min_area``, then round each side to a multiple of ``m``. round()
+        # avoids float-floor undershoot and keeps square inputs square.
+        scale = math.sqrt(min_area / area)
+        h_r = max(m, round(height * scale / m) * m)
+        w_r = max(m, round(width * scale / m) * m)
+    else:
+        # Vendored geometry (parity-tested): never upscales.
+        smax = min(1.0, math.sqrt(max_area / area))
+        short, long_ = (height, width) if height <= width else (width, height)
 
-    short_r = max(m, int((short * smax) // m) * m)
-    scale = short_r / short
-    long_r = int(long_ * scale)
+        short_r = max(m, int((short * smax) // m) * m)
+        scale = short_r / short
+        long_r = int(long_ * scale)
 
-    h_r, w_r = (short_r, long_r) if height <= width else (long_r, short_r)
+        h_r, w_r = (short_r, long_r) if height <= width else (long_r, short_r)
+
     h_c = h_r - (h_r % m)
     w_c = w_r - (w_r % m)
     return (h_r, w_r), (h_c, w_c)
-
-
-def resize_and_center_crop(image: np.ndarray, *, max_area: int, m: int) -> np.ndarray:
-    """Aspect-area resize then ``m``-aligned center crop (eval geometry).
-
-    Reproduces the vendored ``AspectAreaResizeAndCrop`` eval transform pixel for
-    pixel: ``cv2.resize`` with ``INTER_AREA`` to the aspect-preserving target,
-    then a center crop to multiples of ``m``. This is the deterministic step the
-    inference path needs; train-time stochastic augmentation is out of scope.
-
-    Args:
-        image: ``(H, W, 3)`` uint8 image (HWC, the layout fed to ``PIL.Image``).
-        max_area: Maximum pixel-area budget for the resized image.
-        m: Alignment multiple for the output dimensions.
-
-    Returns:
-        The resized + center-cropped ``(h_c, w_c, 3)`` uint8 image.
-    """
-    height, width = image.shape[:2]
-    (h_r, w_r), (h_c, w_c) = compute_aspect_area_resize_crop(height, width, max_area=max_area, m=m)
-
-    resized = cv2.resize(image, (w_r, h_r), interpolation=cv2.INTER_AREA)
-    y_min = (h_r - h_c) // 2
-    x_min = (w_r - w_c) // 2
-    cropped = resized[y_min : y_min + h_c, x_min : x_min + w_c]
-    return np.ascontiguousarray(cropped)
 
 
 # Qwen vision tiler patch size used by the vendored collator (image_patch_size).
@@ -413,7 +408,7 @@ def build_qwen_conversation(
     Returns:
         A one-element conversation list with a single ``user`` turn.
     """
-    image_blocks = [{"type": "image", "image": img} for img in images]
+    image_blocks: list[dict[str, Any]] = [{"type": "image", "image": img} for img in images]
     text_block = {"type": "text", "text": text}
     content = [*image_blocks, text_block] if image_first else [text_block, *image_blocks]
     return [{"role": "user", "content": content}]

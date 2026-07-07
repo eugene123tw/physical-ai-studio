@@ -53,7 +53,7 @@ we ship into the `physicalai` runtime, and what we leave on the floor.
 | Flow-matching `PT → FT` post-train loop                  | ✅               | The one and only training path in v1.                                                                                                                                                                       |
 | LoRA PEFT (paper App. D)                                 | ✅               | Action-LoRA default; backbone-LoRA optional. See §5.3.                                                                                                                                                      |
 | VTC multi-frame video input (`video_length=4`, `video_stride=2` → strides `[-6,-4,-2,0]`) | ✅ **v1 (correctness)** | FT-ROBOCASA trains 4 video frames/step; single-frame input breaks SR parity. Promoted from phase 2 (2026-07). See §0.1. |
-| Image geometry — `AspectAreaResizeAndCrop` (area-budget resize + 32-aligned crop) | ✅ **v1 (correctness)** | Eval geometry must match the checkpoint exactly; replaces the ported deterministic `resize_and_center_crop`. See §0.1. |
+| Image geometry — `AspectAreaResizeAndCrop` (area-budget resize + 32-aligned crop) | ✅ **v1 (correctness)** | Eval geometry must match the checkpoint exactly; eval and train share the single `AspectAreaResizeAndCrop` transform. See §0.1. |
 | Replay-consistent augmentation (`ReplayCompose` + `apply_with_replay`: ColorJitter, random crop) | ✅ **v1** | Required for train-from-PT parity — one sampled replay blob shared across the 4 frames. See §0.1. |
 | RoboCasa Kitchen as the alignment benchmark              | ✅               | **Primary parity target** — matches `RLDX-1-FT-ROBOCASA`; lerobot reference wrapper exists; commercial-friendly data. See §7.4.                                                                             |
 | SimplerEnv WidowX as the alignment benchmark             | ⚠️ secondary     | Useful only as a single-arm-gripper triangulation check. RLDX-1-FT-SIMPLER-WIDOWX matches the SO-101-style embodiment but the upstream `simpler-env` is semi-stale and RLDX-1 ships its own forked adapter. |
@@ -108,7 +108,7 @@ single-frame, deterministic-geometry pipeline. Gaps to close for phase 1:
 | # | Missing behaviour | Upstream reference | Current PAS state |
 | - | ----------------- | ------------------ | ----------------- |
 | 1 | 4-frame temporal stacking at strides `[-6,-4,-2,0]` | [`extract_step_data`](../../RLDX-1/rldx/data/dataset/sharded_single_step_dataset.py#L31), [video.py](../../RLDX-1/rldx/experiment/features/video.py#L22-L40) | `NUM_FRAMES` hardcoded to `1` — [transforms.py#L363](../src/physicalai/policies/rldx1/transforms.py#L363); `video_length`/`video_stride` present but unused — [config_rldx.py#L253](../src/physicalai/policies/rldx1/components/config_rldx.py#L253) |
-| 2 | `AspectAreaResizeAndCrop` (area-budget resize → 32-aligned crop) | [augmentations.py#L137](../../RLDX-1/rldx/data/augmentations.py#L137) | deterministic `resize_and_center_crop` — [preprocessing.py#L353](../src/physicalai/policies/rldx1/preprocessing.py#L353) |
+| 2 | `AspectAreaResizeAndCrop` (area-budget resize → 32-aligned crop) | [augmentations.py#L137](../../RLDX-1/rldx/data/augmentations.py#L137) | `AspectAreaResizeAndCrop` (shared eval+train geometry) — [augmentations.py](../src/physicalai/policies/rldx1/augmentations.py) |
 | 3 | Replay-consistent augmentation (`apply_with_replay` + `ReplayCompose`: ColorJitter, random crop) — one sampled param set across all 4 frames | [augmentations.py#L84](../../RLDX-1/rldx/data/augmentations.py#L84) | dropped — [preprocessing.py#L30](../src/physicalai/policies/rldx1/preprocessing.py#L30) |
 | 4 | Multi-frame conversation assembly (`num_frames` image tokens per view into the Qwen chat template) | RLDXProcessor `_get_vlm_inputs` — [processing_rldx.py](../../RLDX-1/rldx/model/core/processing_rldx.py#L615) | single-frame conversation — `_build_conversations` in [transforms.py](../src/physicalai/policies/rldx1/transforms.py) |
 | 5 | **Inference-time** frame stacking — assemble the `[-6,-4,-2,0]` window from a per-env-step history buffer at rollout | `MultiStepWrapper` — [multistep_wrapper.py](../../RLDX-1/rldx/eval/sim/wrapper/multistep_wrapper.py#L175-L270) (deque size `span+1`, reset-filled with the initial frame, sampled at the delta offsets) | not implemented — gyms feed a single frame per step |
@@ -135,8 +135,9 @@ hold.
 
 ### Required changes (phase 1)
 
-Items 1–5 (training + preprocessor) are **implemented** (2026-07); item 6
-(rollout) lands with the RoboCasa gym.
+Items 1–6 are **implemented** (2026-07) — items 1–5 (training +
+preprocessor) plus item 6 (rollout frame stacking, gym-agnostic in the
+policy).
 
 1. ✅ **Data fetch** — `get_rldx1_delta_timestamps` +
    `get_delta_timestamps_from_policy("rldx1", ...)` emit the video window
@@ -149,9 +150,9 @@ Items 1–5 (training + preprocessor) are **implemented** (2026-07); item 6
 2. ✅ **Preprocessor** — `NUM_FRAMES` now reports the real frame count and
    `_build_conversations` stacks frames **frame-major / view-inner** into
    the Qwen conversation ([transforms.py](../src/physicalai/policies/rldx1/transforms.py)).
-3. ✅ **Image geometry** — the eval path already uses `resize_and_center_crop`
-   (pixel-identical to `AspectAreaResizeAndCrop`); the same geometry is the
-   step-1 stage of the train transform.
+3. ✅ **Image geometry** — eval and train share a single `AspectAreaResizeAndCrop`
+   transform; eval runs it as a deterministic `A.Compose`, train wraps it with
+   the stochastic stages in a `ReplayCompose`.
 4. ✅ **Augmentation** — `apply_with_replay` + `ReplayCompose` ported to
    [augmentations.py](../src/physicalai/policies/rldx1/augmentations.py);
    train mode shares one replay blob across a sample's frames/views, eval
@@ -160,16 +161,19 @@ Items 1–5 (training + preprocessor) are **implemented** (2026-07); item 6
    native multi-frame `forward` against the vendored upstream
    `_get_vlm_inputs` + collator (`pixel_values`, `image_grid_thw`,
    `num_frames`).
-6. ⏳ **Rollout frame stacking** — the gyms feed a single frame per step, so
-   eval parity needs the `[-6,-4,-2,0]` window assembled at **env-step
-   cadence** and handed to the preprocessor as a `(B, num_frames, C, H, W)`
-   per-view stack. Two options, both matching upstream `MultiStepWrapper`
-   semantics (deque size `span+1`, reset-filled with the initial frame): a
-   RoboCasa gym frame-stacking wrapper, or a frame-history buffer in the
-   policy (`reset()` clears it; `select_action` — called every env step —
-   appends; `predict_action_chunk` gathers the window). Lands with the
-   RoboCasa gym (§7.4) so it is testable end-to-end. Until then the
-   preprocessor still runs single-frame when only one frame is supplied.
+6. ✅ **Rollout frame stacking** — the policy now assembles the
+   `[-6,-4,-2,0]` window at **env-step cadence** from a per-view frame-history
+   buffer, matching upstream `MultiStepWrapper` semantics (deque size
+   `span+1`, reset-filled with the oldest frame). `Rldx1.reset()` clears the
+   buffer, `select_action` (called every env step) appends the current frame,
+   and `predict_action_chunk` gathers the window and hands the preprocessor a
+   `(B, num_frames, C, H, W)` per-view stack
+   ([policy.py](../src/physicalai/policies/rldx1/policy.py)). A batch that
+   already carries a temporal axis (the training / validation
+   `delta_timestamps` path, 5-D views) is passed through unchanged, so this is
+   gym-agnostic — PushT eval and the gym validation rollout both get the
+   4-frame stack without a per-env wrapper. Buffer mechanics covered offline by
+   [test_rldx1_video_window.py](../../tests/unit/policies/test_rldx1_video_window.py).
 
 **Still deferred to phase 2** (unchanged): `ShardedMixtureDataset` /
 `ShardedSingleStepDataset` sharding + background caching, per-embodiment

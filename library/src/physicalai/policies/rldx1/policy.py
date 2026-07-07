@@ -36,10 +36,13 @@ trainer.fit(policy, datamodule)
 from __future__ import annotations
 
 import logging
+from collections import deque
 from typing import TYPE_CHECKING, Any, Literal
 
+import numpy as np
 import torch
 
+from physicalai.data import Observation
 from physicalai.policies.base import Policy
 from physicalai.train.schedulers import cosine_decay_with_warmup_scheduler
 
@@ -48,8 +51,6 @@ from .model import Rldx1Model
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from physicalai.data import Observation
 
     from .transforms import Rldx1Postprocessor, Rldx1Preprocessor
 
@@ -190,6 +191,13 @@ class Rldx1(Policy):
         self._preprocessor: Rldx1Preprocessor | None = None
         self._postprocessor: Rldx1Postprocessor | None = None
         self._is_setup_complete: bool = False
+
+        # Per-view VTC frame history for rollout. Populated every env-step by
+        # ``select_action`` and sampled at the video window offsets in
+        # ``predict_action_chunk`` so the backbone sees the same multi-frame
+        # stack it was trained on (see ``_apply_video_window``). ``None`` until
+        # the first rollout step; cleared on ``reset``.
+        self._frame_history: dict[str, deque[torch.Tensor]] | None = None
 
         if env_action_dim is not None:
             self._initialize_model(env_action_dim, dataset_stats)
@@ -350,6 +358,7 @@ class Rldx1(Policy):
             use_percentiles=config.use_percentiles,
             clip_outliers=config.clip_outliers,
             image_max_area=config.image_max_area,
+            image_min_area=config.image_min_area,
             image_resize_m=config.image_resize_m,
             random_crop_fraction=config.random_crop_fraction,
             random_rotation_angle=config.random_rotation_angle,
@@ -536,6 +545,14 @@ class Rldx1(Policy):
     def predict_action_chunk(self, batch: Observation) -> torch.Tensor:
         """Predict a chunk of actions of shape ``(B, T, D)``.
 
+        Assembles the VTC temporal window (``video_length`` frames at
+        ``video_stride`` env-steps, offsets ``[-6, -4, -2, 0]`` for the
+        defaults) so the backbone receives the same multi-frame stack it was
+        trained on. A batch that already carries a temporal axis (the training /
+        validation ``delta_timestamps`` path) is passed through unchanged; a
+        single-frame rollout observation is stacked from the per-view history
+        buffer maintained by :meth:`select_action` (see :meth:`_apply_video_window`).
+
         Args:
             batch: Input observation batch.
 
@@ -549,10 +566,175 @@ class Rldx1(Policy):
             msg = "Model not initialized. Call trainer.fit() or pass env_action_dim."
             raise RuntimeError(msg)
         self.model.eval()
-        preprocessed = self._preprocessor(batch)
+        model_input = self._prepare_video_window(batch)
+        preprocessed = self._preprocessor(model_input)
         preprocessed = {
             k: v.to(self.device) if isinstance(v, torch.Tensor) else v
             for k, v in preprocessed.items()
         }
         actions = self.model.get_action(preprocessed)
         return self._postprocessor(actions)
+
+    # -- VTC rollout frame stacking --------------------------------------- #
+
+    def reset(self) -> None:
+        """Reset the policy state at an episode boundary.
+
+        Clears the action queue (base) and the VTC frame-history buffer so the
+        next episode's video window is rebuilt from scratch.
+        """
+        super().reset()
+        self._frame_history = None
+
+    def select_action(self, batch: Observation) -> torch.Tensor:
+        """Select a single action, recording the frame for the VTC window.
+
+        Records the current observation into the per-view history every
+        env-step (regardless of the action queue) so
+        :meth:`predict_action_chunk` can sample the ``[-6, -4, -2, 0]`` temporal
+        window from the correct env-step strides, then delegates to the base
+        action-chunking logic.
+
+        Args:
+            batch: Input observation batch.
+
+        Returns:
+            Single action tensor of shape ``(B, D)`` or ``(D,)``.
+        """
+        self._record_video_frames(batch)
+        return super().select_action(batch)
+
+    def _prepare_video_window(self, batch: Observation | dict[str, Any]) -> Observation | dict[str, Any]:
+        """Return a model input with the VTC temporal window applied.
+
+        Passes the batch through unchanged when the window is a single frame
+        (``video_length <= 1``), when there are no camera views, or when the
+        batch already carries a temporal axis (training / validation
+        ``delta_timestamps`` path). Otherwise stacks the per-view history into a
+        ``(B, T, C, H, W)`` window.
+
+        Returns:
+            The original batch, or a flat dict with stacked multi-frame views.
+        """
+        if self.config.video_length <= 1:
+            return batch
+
+        batch_dict = self._to_flat_dict(batch)
+        view_keys = self._image_keys(batch_dict)
+        if not view_keys or self._is_multiframe(batch_dict, view_keys):
+            return batch
+
+        # Direct call that bypassed ``select_action`` (e.g. eval ``forward``):
+        # seed the history with the current frame so the window is well-defined.
+        if self._frame_history is None or not all(key in self._frame_history for key in view_keys):
+            self._record_video_frames(batch_dict, view_keys)
+
+        return self._apply_video_window(batch_dict, view_keys)
+
+    def _record_video_frames(
+        self,
+        batch: Observation | dict[str, Any],
+        view_keys: list[str] | None = None,
+    ) -> None:
+        """Append the current per-view frames to the rollout history buffer.
+
+        No-op when the window is a single frame, when there are no camera views,
+        or when the batch is already multi-frame (temporal axis present).
+
+        Args:
+            batch: Current observation (single frame per view).
+            view_keys: Precomputed camera keys; resolved from ``batch`` when None.
+        """
+        if self.config.video_length <= 1:
+            return
+
+        batch_dict = self._to_flat_dict(batch)
+        if view_keys is None:
+            view_keys = self._image_keys(batch_dict)
+        if not view_keys or self._is_multiframe(batch_dict, view_keys):
+            return
+
+        if self._frame_history is None:
+            span = (self.config.video_length - 1) * self.config.video_stride
+            self._frame_history = {key: deque(maxlen=span + 1) for key in view_keys}
+
+        for key in view_keys:
+            self._frame_history[key].append(self._as_frame_tensor(batch_dict[key]))
+
+    def _apply_video_window(
+        self,
+        batch_dict: dict[str, Any],
+        view_keys: list[str],
+    ) -> dict[str, Any]:
+        """Stack each view's history into a ``(B, T, C, H, W)`` VTC window.
+
+        Samples the history at offsets ``[(i - (L - 1)) * S : i in [0, L)]``
+        (``[-6, -4, -2, 0]`` for the defaults), clamping to the oldest available
+        frame when the episode is shorter than the window span -- matching the
+        upstream reset-fill behaviour.
+
+        Returns:
+            A shallow copy of ``batch_dict`` with the view arrays replaced by
+            their stacked multi-frame windows.
+        """
+        vl = self.config.video_length
+        vs = self.config.video_stride
+        offsets = [(i - (vl - 1)) * vs for i in range(vl)]
+
+        out = dict(batch_dict)
+        assert self._frame_history is not None  # noqa: S101 - populated in _prepare_video_window
+        for key in view_keys:
+            buffer = self._frame_history[key]
+            count = len(buffer)
+            frames = [buffer[max(0, count - 1 + offset)] for offset in offsets]
+            out[key] = torch.stack(frames, dim=1)  # (B, T, C, H, W)
+        return out
+
+    @staticmethod
+    def _to_flat_dict(batch: Observation | dict[str, Any]) -> dict[str, Any]:
+        """Return a flat observation dict for both Observation and dict inputs.
+
+        Returns:
+            The flattened observation dict.
+        """
+        if isinstance(batch, Observation):
+            return batch.to_dict(flatten=True)
+        return dict(batch)
+
+    @staticmethod
+    def _image_keys(batch_dict: dict[str, Any]) -> list[str]:
+        """Return the camera view keys, reusing the preprocessor's detection.
+
+        Returns:
+            Sorted list of image keys (possibly empty).
+        """
+        from .transforms import Rldx1Preprocessor  # noqa: PLC0415
+
+        return Rldx1Preprocessor._image_keys(batch_dict)  # noqa: SLF001
+
+    @staticmethod
+    def _as_frame_tensor(value: Any) -> torch.Tensor:  # noqa: ANN401
+        """Coerce a single-frame view value to a ``(B, C, H, W)`` tensor.
+
+        Returns:
+            A torch tensor view of ``value``.
+        """
+        if isinstance(value, torch.Tensor):
+            return value
+        return torch.as_tensor(np.asarray(value))
+
+    @staticmethod
+    def _is_multiframe(batch_dict: dict[str, Any], view_keys: list[str]) -> bool:
+        """Return True when the views already carry a temporal axis.
+
+        A batched single frame is ``(B, C, H, W)`` (4-D); a batched VTC window is
+        ``(B, T, C, H, W)`` (5-D). The rollout always supplies batched
+        observations, so a 5-D view means the ``delta_timestamps`` path already
+        produced the window and no history stacking is needed.
+
+        Returns:
+            True when the first view is 5-D (already multi-frame).
+        """
+        value = batch_dict[view_keys[0]]
+        ndim = value.dim() if isinstance(value, torch.Tensor) else np.asarray(value).ndim
+        return ndim == 5  # noqa: PLR2004 - (B, T, C, H, W)

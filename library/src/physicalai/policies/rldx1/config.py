@@ -106,6 +106,11 @@ class Rldx1Config(Config):
         state_dropout_prob: Probability of dropping the state input during training.
         state_additive_noise_scale: Scale of additive Gaussian noise on state features.
         image_max_area: Target max area (pixels) for aspect-preserving image resize.
+        image_min_area: Minimum pixel-area floor for the Qwen vision tiler. Frames
+            below it are upscaled (aspect-preserving) before encoding. ``None``
+            (default) leaves the tiler's own floor untouched; set e.g. ``65536``
+            (256x256) to lift tiny frames such as 96x96 PushT to a richer token
+            sequence.
         image_resize_m: Alignment multiple for the resized/cropped image dimensions.
         video_length: Number of VTC temporal frames per observation step.
         video_stride: Action-step stride between VTC video frames.
@@ -240,6 +245,7 @@ class Rldx1Config(Config):
 
     # Image / language pipeline
     image_max_area: int = 65536  # 256 * 256
+    image_min_area: int | None = None
     image_resize_m: int = 32
     # VTC video window: each camera view carries ``video_length`` temporal frames
     # sampled at ``video_stride`` action-steps (offsets [-6, -4, -2, 0]). Used to

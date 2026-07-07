@@ -281,8 +281,8 @@ class Rldx1Config(Config):
 
     # Optimizer / training hyperparameters
     optim: Literal["adamw_torch", "adamw_torch_fused", "adafactor"] = "adamw_torch"
-    learning_rate: float = 1e-4
-    weight_decay: float = 1e-5
+    learning_rate: float = 1e-5
+    weight_decay: float = 0.01
     warmup_ratio: float = 0.05
     scheduler_decay_lr: float = 1e-5
     grad_clip_norm: float = 1.0

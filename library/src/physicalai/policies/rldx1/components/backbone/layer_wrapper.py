@@ -86,8 +86,6 @@ class LayerWrapper(nn.Module):
                 [m[-1] for m in match_lists], device=hidden_states.device
             ).unsqueeze(1)
 
-        # \end_idx   = torch.tensor([m[-1 * self.num_views] for m in match_lists], device=hidden_states.device).unsqueeze(1)
-
         return begin_idx, end_idx
 
     def left_pad_emb_list(self, emb_list: Sequence[torch.Tensor]) -> torch.Tensor:

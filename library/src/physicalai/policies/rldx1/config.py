@@ -288,7 +288,7 @@ class Rldx1Config(Config):
     weight_decay: float = 0.01
     warmup_ratio: float = 0.05
     scheduler_decay_lr: float = 1e-5
-    grad_clip_norm: float = 1.0
+    grad_clip_norm: float = 35.0
 
     # Precision / compilation
     use_bf16: bool = True

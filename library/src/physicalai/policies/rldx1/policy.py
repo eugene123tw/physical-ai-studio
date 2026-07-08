@@ -146,7 +146,7 @@ class Rldx1(Policy):
         learning_rate: float = 1e-5,
         weight_decay: float = 0.01,
         warmup_ratio: float = 0.05,
-        grad_clip_norm: float = 1.0,
+        grad_clip_norm: float = 35.0,
         # Precision / compilation
         use_bf16: bool = True,
         compile_model: bool = False,
@@ -552,6 +552,22 @@ class Rldx1(Policy):
             )
         msg = f"Unsupported optim {optim!r}; expected one of 'adamw_torch', 'adamw_torch_fused', 'adafactor'."
         raise ValueError(msg)
+
+    def configure_gradient_clipping(
+        self,
+        optimizer: torch.optim.Optimizer,
+        gradient_clip_val: float | None = None,
+        gradient_clip_algorithm: str | None = None,
+    ) -> None:
+        """Configure gradient clipping from policy config."""
+        clip_val = gradient_clip_val if gradient_clip_val is not None else self.config.grad_clip_norm
+
+        if clip_val and clip_val > 0:
+            self.clip_gradients(
+                optimizer,
+                gradient_clip_val=clip_val,
+                gradient_clip_algorithm=gradient_clip_algorithm or "norm",
+            )
 
     def predict_action_chunk(self, batch: Observation) -> torch.Tensor:
         """Predict a chunk of actions of shape ``(B, T, D)``.

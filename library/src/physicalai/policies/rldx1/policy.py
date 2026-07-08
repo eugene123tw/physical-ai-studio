@@ -20,13 +20,19 @@ Scope (v1): pre-train (PT) -> fine-tune (FT) path only, starting from
 
 ```python
 from physicalai.data.lerobot import LeRobotDataModule
-from physicalai.policies.rldx1 import Rldx1, Rldx1Config
+from physicalai.policies.rldx1 import Rldx1
 from physicalai.train import Trainer
 
+# Default: LoRA on both backbone and action model
+policy = Rldx1(base_model_path="RLWRLD/RLDX-1-PT")
+
+# Paper Table 6, Row 1: Full FT backbone + LoRA action (62.67% success)
 policy = Rldx1(
     base_model_path="RLWRLD/RLDX-1-PT",
-    use_lora=True,
+    backbone_use_lora=False,  # Full fine-tune top-4 LLM layers
+    action_use_lora=True,     # LoRA on MSAT (r=64)
 )
+
 datamodule = LeRobotDataModule(repo_id="<user dataset>", train_batch_size=4)
 trainer = Trainer(max_steps=60000, precision="bf16-mixed")
 trainer.fit(policy, datamodule)
@@ -87,8 +93,10 @@ class Rldx1(Policy):
         tune_visual: Whether to fine-tune the vision tower.
         tune_projector: Whether to fine-tune the projectors.
         tune_diffusion_model: Whether to fine-tune the MSAT action model.
-        use_lora: Master LoRA switch. True -> LoRA on both the backbone top
-            layers and the MSAT action model; False -> full fine-tune instead.
+        backbone_use_lora: Whether to use LoRA on the backbone top layers.
+            Default False (full fine-tuning). Set to True for LoRA.
+        action_use_lora: Whether to use LoRA on the MSAT action model.
+            Default False (full fine-tuning). Set to True for LoRA (Paper Table 6, row 1).
         learning_rate: Learning rate for the optimizer.
         weight_decay: Weight decay for the optimizer.
         warmup_ratio: Warmup ratio (0.0-1.0) of total training steps.
@@ -131,7 +139,8 @@ class Rldx1(Policy):
         tune_visual: bool = False,
         tune_projector: bool = True,
         tune_diffusion_model: bool = True,
-        use_lora: bool = True,
+        backbone_use_lora: bool = False,
+        action_use_lora: bool = False,
         # Optimizer
         optim: Literal["adamw_torch", "adamw_torch_fused", "adafactor"] = "adamw_torch",
         learning_rate: float = 1e-4,
@@ -170,7 +179,8 @@ class Rldx1(Policy):
             tune_visual=tune_visual,
             tune_projector=tune_projector,
             tune_diffusion_model=tune_diffusion_model,
-            use_lora=use_lora,
+            backbone_use_lora=backbone_use_lora,
+            action_use_lora=action_use_lora,
             optim=optim,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
@@ -229,7 +239,8 @@ class Rldx1(Policy):
             tune_visual=config.tune_visual,
             tune_projector=config.tune_projector,
             tune_diffusion_model=config.tune_diffusion_model,
-            use_lora=config.use_lora,
+            backbone_use_lora=config.backbone_use_lora,
+            action_use_lora=config.action_use_lora,
             optim=config.optim,
             learning_rate=config.learning_rate,
             weight_decay=config.weight_decay,
@@ -328,8 +339,8 @@ class Rldx1(Policy):
             compile_model=config.compile_model,
             gradient_checkpointing=config.gradient_checkpointing,
             # Fine-tuning / PEFT control -> bridged onto the vendored RLDXNetworkConfig.
-            # use_lora=False => full fine-tune the backbone top layers + MSAT.
-            backbone_peft_mode="lora" if config.use_lora else "full",
+            # Use independent backbone/action PEFT control with fallback to master switch.
+            backbone_peft_mode="lora" if config.backbone_use_lora else "full",
             tune_top_llm_layers=config.tune_top_llm_layers,
             tune_llm=config.tune_llm,
             backbone_trainable_params_fp32=config.backbone_trainable_params_fp32,
@@ -341,7 +352,7 @@ class Rldx1(Policy):
             backbone_lora_alpha=config.backbone_lora_alpha,
             backbone_lora_dropout=config.backbone_lora_dropout,
             backbone_lora_targets=config.backbone_lora_targets,
-            action_peft_mode="lora" if config.use_lora else "full",
+            action_peft_mode="lora" if config.action_use_lora else "full",
             action_lora_rank=config.action_lora_rank,
             action_lora_alpha=config.action_lora_alpha,
             action_lora_dropout=config.action_lora_dropout,

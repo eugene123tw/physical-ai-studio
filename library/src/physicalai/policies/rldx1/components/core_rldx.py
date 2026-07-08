@@ -27,7 +27,7 @@ import torch.nn.functional as F
 from transformers import AutoConfig, AutoModel, PreTrainedModel
 from transformers.feature_extraction_utils import BatchFeature
 import tree
-
+from peft import LoraConfig, inject_adapter_in_model
 
 class RLDXActionModel(nn.Module):
     """Action head component for flow matching diffusion policy."""
@@ -114,10 +114,6 @@ class RLDXActionModel(nn.Module):
         self.state_additive_noise_scale = config.state_additive_noise_scale
 
         self.beta_dist = Beta(config.noise_beta_alpha, config.noise_beta_beta)
-        # self.beta_dist = Beta(
-        #     torch.tensor(config.noise_beta_alpha, dtype=torch.float32),
-        #     torch.tensor(config.noise_beta_beta, dtype=torch.float32),
-        # )
         self.num_timestep_buckets = config.num_timestep_buckets
 
         # Real-Time Chunking.
@@ -223,12 +219,6 @@ class RLDXActionModel(nn.Module):
         ``use_physics=False``) are filtered before the PEFT call so PEFT
         doesn't raise on a missing target.
         """
-        try:
-            from peft import LoraConfig, inject_adapter_in_model
-        except ImportError as e:
-            raise ImportError(
-                "peft is required for action_model_use_lora=True. Install with `pip install peft`."
-            ) from e
 
         target_modules = list(
             getattr(
@@ -262,8 +252,8 @@ class RLDXActionModel(nn.Module):
         self.model.requires_grad_(False)
 
         lora_config = LoraConfig(
-            r=int(getattr(self.config, "action_model_lora_rank", 16)),
-            lora_alpha=int(getattr(self.config, "action_model_lora_alpha", 32)),
+            r=int(getattr(self.config, "action_model_lora_rank", 64)),
+            lora_alpha=int(getattr(self.config, "action_model_lora_alpha", 64)),
             lora_dropout=float(getattr(self.config, "action_model_lora_dropout", 0.0)),
             bias="none",
             target_modules=filtered,
@@ -982,12 +972,6 @@ class RLDX(PreTrainedModel):
         cast bf16 → fp32 to avoid NaN losses on the first optimizer step
         (mirrors VTC's ``trainable_params_fp32`` policy).
         """
-        try:
-            from peft import LoraConfig, inject_adapter_in_model
-        except ImportError as e:
-            raise ImportError(
-                "peft is required for backbone_use_lora=True. Install with `pip install peft`."
-            ) from e
 
         config = self.config
         num = int(getattr(config, "backbone_lora_num_layers", -1))

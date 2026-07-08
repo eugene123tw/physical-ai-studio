@@ -76,8 +76,8 @@ def _bridge_studio_config(  # noqa: PLR0913
     ...)`` -- the LoRA injection and ``requires_grad`` bookkeeping happen in the
     model constructor.
 
-    The mapping is deliberately not 1:1. ``Rldx1Config.use_lora`` is split by the
-    caller into ``backbone_peft_mode`` / ``action_peft_mode``, and
+    The mapping converts the Studio config's ``backbone_use_lora`` and
+    ``action_use_lora`` into ``backbone_peft_mode`` / ``action_peft_mode``, and
     ``tune_top_llm_layers`` feeds ``backbone_lora_num_layers`` only in LoRA mode.
 
     Args:

@@ -28,7 +28,7 @@ Example (API):
     >>> from physicalai.policies.rldx1 import Rldx1Config
     >>> config = Rldx1Config(
     ...     base_model_path="RLWRLD/RLDX-1-PT",
-    ...     use_lora=True,
+    ...     backbone_use_lora=False,
     ...     action_lora_rank=64,
     ... )
 """
@@ -87,10 +87,11 @@ class Rldx1Config(Config):
         tune_projector: Whether to fine-tune the cognition/state/action projectors.
         tune_diffusion_model: Whether to fine-tune the MSAT action model.
         tune_vlln: Whether to fine-tune the VLM-output layer norm.
-        use_lora: Master LoRA switch. True -> LoRA adapters on both the backbone
-            top layers and the MSAT action model; False -> full fine-tune the
-            backbone top layers and (when tune_diffusion_model) the MSAT.
-        backbone_lora_rank: LoRA rank for the backbone (used when use_lora=True).
+        backbone_use_lora: Whether to use LoRA on the backbone top layers.
+            Default False (full fine-tuning). Set to True to use LoRA.
+        action_use_lora: Whether to use LoRA on the MSAT action model.
+            Default False (full fine-tuning). Set to True to use LoRA.
+        backbone_lora_rank: LoRA rank for the backbone.
         backbone_lora_alpha: LoRA alpha for the backbone.
         backbone_lora_dropout: LoRA dropout for the backbone.
         backbone_lora_targets: Linear module names to wrap with LoRA in the backbone.
@@ -155,12 +156,12 @@ class Rldx1Config(Config):
         LoRA on both the backbone top layers and the MSAT action model (default):
 
         >>> config = Rldx1Config()
-        >>> config.use_lora
-        True
+        >>> config.get_backbone_use_lora(), config.get_action_use_lora()
+        (True, True)
 
-        Full fine-tune instead of LoRA:
+        Full fine-tune backbone + LoRA on action (Paper Table 6, row 1):
 
-        >>> config = Rldx1Config(use_lora=False)
+        >>> config = Rldx1Config(backbone_use_lora=False, action_use_lora=True)
     """
 
     # Model architecture / action chunking
@@ -202,22 +203,24 @@ class Rldx1Config(Config):
     tune_diffusion_model: bool = True
     tune_vlln: bool = True
 
-    # LoRA master switch. True -> LoRA adapters on both the backbone top layers
-    # and the MSAT action model; False -> full fine-tune (backbone top layers,
-    # plus the MSAT when tune_diffusion_model=True). Paper App. D / Table 6.
-    use_lora: bool = True
+    # Independent LoRA control for backbone and action model. Allows mixed
+    # configurations like full fine-tune on backbone + LoRA on action (Paper Table 6, row 1):
+    #   backbone_use_lora=False  # Full FT on top-4 LLM layers
+    #   action_use_lora=True     # LoRA (r=64) on MSAT
+    backbone_use_lora: bool = False
+    action_use_lora: bool = False
 
-    # Backbone (Qwen3-VL top layers) LoRA hyperparameters (used when use_lora).
+    # Backbone (Qwen3-VL top layers) LoRA hyperparameters.
     backbone_lora_rank: int = 64
     backbone_lora_alpha: int = 64
     backbone_lora_dropout: float = 0.0
     backbone_lora_targets: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj")
 
-    # Action model (MSAT) LoRA hyperparameters (used when use_lora). r=64 is the
-    # paper-recommended free lunch. Targets are MSAT block module names (V-L /
-    # state-action / physics QKV + output projections and the MMDiT inner FFN
-    # linears), not Qwen attention names. Absent targets (e.g. p_qkv/p_proj when
-    # physics is disabled) are filtered before the PEFT call.
+    # Action model (MSAT) LoRA hyperparameters. r=64 is the paper-recommended
+    # free lunch. Targets are MSAT block module names (V-L / state-action / physics
+    # QKV + output projections and the MMDiT inner FFN linears), not Qwen attention
+    # names. Absent targets (e.g. p_qkv/p_proj when physics is disabled) are
+    # filtered before the PEFT call.
     action_lora_rank: int = 64
     action_lora_alpha: int = 64
     action_lora_dropout: float = 0.0
@@ -317,6 +320,8 @@ class Rldx1Config(Config):
             raise NotImplementedError(msg)
 
         self.embodiment_id = self._resolve_embodiment_id(self.embodiment_id)
+
+
 
     @staticmethod
     def _resolve_embodiment_id(value: int | str) -> int:

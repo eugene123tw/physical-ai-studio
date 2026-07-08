@@ -127,8 +127,8 @@ class RLDXNetworkConfig(PretrainedConfig):
     # exist in the current MSAT (e.g. ``p_qkv``/``p_proj`` when
     # ``use_physics=False``) are filtered before the PEFT call.
     action_model_use_lora: bool = False
-    action_model_lora_rank: int = 16
-    action_model_lora_alpha: int = 32
+    action_model_lora_rank: int = 64
+    action_model_lora_alpha: int = 64
     action_model_lora_dropout: float = 0.0
     action_model_lora_target_modules: list[str] = field(
         default_factory=lambda: [
@@ -153,8 +153,8 @@ class RLDXNetworkConfig(PretrainedConfig):
     # ``backbone_lora_target_modules`` covers Qwen3 attention + MLP
     # projections.
     backbone_use_lora: bool = False
-    backbone_lora_rank: int = 16
-    backbone_lora_alpha: int = 32
+    backbone_lora_rank: int = 64
+    backbone_lora_alpha: int = 64
     backbone_lora_dropout: float = 0.0
     backbone_lora_num_layers: int = -1
     backbone_lora_target_modules: list[str] = field(

@@ -43,7 +43,7 @@ class RLDXNetworkConfig(PretrainedConfig):
     # model-construction time.
     backbone_model_type: str = "vtc_qwen3_vl"
     model_revision: str | None = None
-    tune_top_llm_layers: int = 0  # Number of top LLM layers to tune
+    tune_top_llm_layers: int = 4  # Number of top LLM layers to tune
     backbone_embedding_dim: int = 4096  # project_to_dim
     tune_llm: bool = False
     tune_visual: bool = False
@@ -82,7 +82,7 @@ class RLDXNetworkConfig(PretrainedConfig):
     # Global parameters from YAML
     add_pos_embed: bool = True
     attn_dropout: float = 0.2
-    use_vlln: bool = False
+    use_vlln: bool = True
     max_seq_len: int = 1024
 
     # MSAT configuration
@@ -305,40 +305,3 @@ class RLDXNetworkConfig(PretrainedConfig):
         # so reaching __getattr__ means the attribute was never declared
         # on this class — fail fast.
         raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
-
-    def to_filtered_dict(self, exclude_augment: bool = True) -> dict:
-        """Return a dictionary representation of this config, optionally excluding augmentation keys."""
-        if is_dataclass(self):
-            cfg = asdict(self)
-        else:
-            cfg = dict(self.__dict__)
-
-        if exclude_augment:
-            exclude_keys = {
-                "random_rotation_angle",
-                "color_jitter_params",
-                "random_crop_fraction",
-                "formalize_language",
-            }
-            cfg = {k: v for k, v in cfg.items() if k not in exclude_keys}
-
-        return cfg
-
-    def to_filtered_json(self, exclude_augment: bool = True, **kwargs) -> str:
-        """Return a JSON string of this config, optionally excluding augmentation keys."""
-
-        def default(o):
-            if isinstance(o, (Path, torch.dtype, torch.device)):
-                return str(o)
-            if isinstance(o, Enum):
-                return o.value
-            return str(o)
-
-        return json.dumps(
-            self.to_filtered_dict(exclude_augment),
-            indent=2,
-            default=default,
-            **kwargs,
-        )
-
-

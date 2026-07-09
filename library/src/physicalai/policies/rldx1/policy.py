@@ -101,7 +101,6 @@ class Rldx1(Policy):
         learning_rate: Learning rate for the optimizer.
         weight_decay: Weight decay for the optimizer.
         warmup_ratio: Warmup ratio (0.0-1.0) of total training steps.
-        grad_clip_norm: Gradient clipping norm (0.0 = disabled).
         use_bf16: Whether to use bfloat16 precision.
         compile_model: Whether to torch.compile the model.
         gradient_checkpointing: Whether to enable activation checkpointing in
@@ -148,7 +147,6 @@ class Rldx1(Policy):
         learning_rate: float = 1e-4,
         weight_decay: float = 0.01,
         warmup_ratio: float = 0.05,
-        grad_clip_norm: float = 35.0,
         # Precision / compilation
         use_bf16: bool = True,
         compile_model: bool = False,
@@ -188,7 +186,6 @@ class Rldx1(Policy):
             learning_rate=learning_rate,
             weight_decay=weight_decay,
             warmup_ratio=warmup_ratio,
-            grad_clip_norm=grad_clip_norm,
             use_bf16=use_bf16,
             compile_model=compile_model,
             gradient_checkpointing=gradient_checkpointing,
@@ -249,7 +246,6 @@ class Rldx1(Policy):
             learning_rate=config.learning_rate,
             weight_decay=config.weight_decay,
             warmup_ratio=config.warmup_ratio,
-            grad_clip_norm=config.grad_clip_norm,
             use_bf16=config.use_bf16,
             compile_model=config.compile_model,
             gradient_checkpointing=config.gradient_checkpointing,
@@ -350,6 +346,7 @@ class Rldx1(Policy):
             backbone_trainable_params_fp32=config.backbone_trainable_params_fp32,
             tune_visual=config.tune_visual,
             tune_projector=config.tune_projector,
+            use_vlln=config.use_vlln,
             tune_diffusion_model=config.tune_diffusion_model,
             tune_vlln=config.tune_vlln,
             backbone_lora_rank=config.backbone_lora_rank,
@@ -556,22 +553,6 @@ class Rldx1(Policy):
             )
         msg = f"Unsupported optim {optim!r}; expected one of 'adamw_torch', 'adamw_torch_fused', 'adafactor'."
         raise ValueError(msg)
-
-    def configure_gradient_clipping(
-        self,
-        optimizer: torch.optim.Optimizer,
-        gradient_clip_val: float | None = None,
-        gradient_clip_algorithm: str | None = None,
-    ) -> None:
-        """Configure gradient clipping from policy config."""
-        clip_val = gradient_clip_val if gradient_clip_val is not None else self.config.grad_clip_norm
-
-        if clip_val and clip_val > 0:
-            self.clip_gradients(
-                optimizer,
-                gradient_clip_val=clip_val,
-                gradient_clip_algorithm=gradient_clip_algorithm or "norm",
-            )
 
     def predict_action_chunk(self, batch: Observation) -> torch.Tensor:
         """Predict a chunk of actions of shape ``(B, T, D)``.

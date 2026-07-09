@@ -85,6 +85,8 @@ class Rldx1Config(Config):
             parameters to float32 after bf16 loading for optimizer stability.
         tune_visual: Whether to fine-tune the vision tower.
         tune_projector: Whether to fine-tune the cognition/state/action projectors.
+        use_vlln: Whether to construct the VLM-output layer norm in the action head.
+            Default ``True``. Set ``False`` to replace it with identity.
         tune_diffusion_model: Whether to fine-tune the MSAT action model.
         tune_vlln: Whether to fine-tune the VLM-output layer norm.
         backbone_use_lora: Whether to use LoRA on the backbone top layers.
@@ -146,7 +148,6 @@ class Rldx1Config(Config):
         scheduler_decay_lr: Final learning rate after cosine decay. The LR is
             cosine-decayed from ``learning_rate`` down to this value over the
             remaining (post-warmup) training steps.
-        grad_clip_norm: Gradient clipping norm (0.0 = disabled).
         use_bf16: Whether to use bfloat16 precision.
         compile_model: Whether to torch.compile the model.
         gradient_checkpointing: Whether to enable activation checkpointing in
@@ -200,6 +201,7 @@ class Rldx1Config(Config):
     backbone_trainable_params_fp32: bool = True
     tune_visual: bool = False
     tune_projector: bool = True
+    use_vlln: bool = True
     tune_diffusion_model: bool = True
     tune_vlln: bool = True
 
@@ -284,11 +286,10 @@ class Rldx1Config(Config):
 
     # Optimizer / training hyperparameters
     optim: Literal["adamw_torch", "adamw_torch_fused", "adafactor"] = "adamw_torch"
-    learning_rate: float = 1e-5
+    learning_rate: float = 1e-4
     weight_decay: float = 0.01
     warmup_ratio: float = 0.05
     scheduler_decay_lr: float = 1e-5
-    grad_clip_norm: float = 35.0
 
     # Precision / compilation
     use_bf16: bool = True

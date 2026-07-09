@@ -54,6 +54,7 @@ def _bridge_studio_config(  # noqa: PLR0913
     backbone_trainable_params_fp32: bool,
     tune_visual: bool,
     tune_projector: bool,
+    use_vlln: bool,
     tune_diffusion_model: bool,
     tune_vlln: bool,
     backbone_lora_rank: int,
@@ -88,6 +89,7 @@ def _bridge_studio_config(  # noqa: PLR0913
         backbone_trainable_params_fp32: Cast trainable backbone params to fp32.
         tune_visual: Fine-tune the vision tower.
         tune_projector: Fine-tune the cognition/state/action projectors.
+        use_vlln: Build the VLM-output layer norm in the action head.
         tune_diffusion_model: Full-tune the MSAT (only when action mode is 'full').
         tune_vlln: Fine-tune the VLM-output layer norm.
         backbone_lora_rank: LoRA rank for the backbone.
@@ -103,7 +105,14 @@ def _bridge_studio_config(  # noqa: PLR0913
     cfg.backbone_trainable_params_fp32 = backbone_trainable_params_fp32
     cfg.tune_visual = tune_visual
     cfg.tune_projector = tune_projector
+    cfg.use_vlln = use_vlln
     cfg.tune_vlln = tune_vlln
+    if not cfg.use_vlln and cfg.tune_vlln:
+        logger.warning(
+            "Ignoring tune_vlln=True because use_vlln=False; "
+            "VLLN is not constructed in this architecture."
+        )
+        cfg.tune_vlln = False
 
     if backbone_peft_mode == "lora":
         cfg.backbone_use_lora = True
@@ -200,7 +209,7 @@ class Rldx1Model(Model):
         revision: str | None = None,
         attn_implementation: str = "sdpa",
         use_bf16: bool = True,
-        gradient_checkpointing: bool = False,
+        gradient_checkpointing: bool = True,
         # Fine-tuning / PEFT control (bridged onto the vendored RLDXNetworkConfig).
         backbone_peft_mode: str = "full",
         tune_top_llm_layers: int = 4,
@@ -208,6 +217,7 @@ class Rldx1Model(Model):
         backbone_trainable_params_fp32: bool = True,
         tune_visual: bool = False,
         tune_projector: bool = True,
+        use_vlln: bool = True,
         tune_diffusion_model: bool = True,
         tune_vlln: bool = True,
         backbone_lora_rank: int = 64,
@@ -255,6 +265,8 @@ class Rldx1Model(Model):
                 parameters to float32 after bf16 loading for optimizer stability.
             tune_visual: Whether to fine-tune the vision tower.
             tune_projector: Whether to fine-tune the cognition/state/action projectors.
+            use_vlln: Whether to build the VLM-output layer norm in the action
+                head (else identity).
             tune_diffusion_model: Whether to full-tune the MSAT action model
                 (only applies when ``action_peft_mode='full'``).
             tune_vlln: Whether to fine-tune the VLM-output layer norm.
@@ -313,6 +325,7 @@ class Rldx1Model(Model):
             backbone_trainable_params_fp32=backbone_trainable_params_fp32,
             tune_visual=tune_visual,
             tune_projector=tune_projector,
+            use_vlln=use_vlln,
             tune_diffusion_model=tune_diffusion_model,
             tune_vlln=tune_vlln,
             backbone_lora_rank=backbone_lora_rank,

@@ -93,6 +93,7 @@ class Rldx1(Policy):
         tune_visual: Whether to fine-tune the vision tower.
         tune_projector: Whether to fine-tune the projectors.
         tune_diffusion_model: Whether to fine-tune the MSAT action model.
+        num_inference_timesteps: Number of flow-matching denoising steps at inference.
         backbone_use_lora: Whether to use LoRA on the backbone top layers.
             Default False (full fine-tuning). Set to True for LoRA.
         action_use_lora: Whether to use LoRA on the MSAT action model.
@@ -139,6 +140,7 @@ class Rldx1(Policy):
         tune_visual: bool = False,
         tune_projector: bool = True,
         tune_diffusion_model: bool = True,
+        num_inference_timesteps: int = 4,
         backbone_use_lora: bool = False,
         action_use_lora: bool = False,
         # Optimizer
@@ -179,6 +181,7 @@ class Rldx1(Policy):
             tune_visual=tune_visual,
             tune_projector=tune_projector,
             tune_diffusion_model=tune_diffusion_model,
+            num_inference_timesteps=num_inference_timesteps,
             backbone_use_lora=backbone_use_lora,
             action_use_lora=action_use_lora,
             optim=optim,
@@ -239,6 +242,7 @@ class Rldx1(Policy):
             tune_visual=config.tune_visual,
             tune_projector=config.tune_projector,
             tune_diffusion_model=config.tune_diffusion_model,
+            num_inference_timesteps=config.num_inference_timesteps,
             backbone_use_lora=config.backbone_use_lora,
             action_use_lora=config.action_use_lora,
             optim=config.optim,
@@ -622,6 +626,10 @@ class Rldx1(Policy):
         window from the correct env-step strides, then delegates to the base
         action-chunking logic.
 
+        During the warmup phase (buffer not yet full), returns zero actions to
+        allow the frame history to accumulate. This matches training conditions
+        where observations have complete temporal structure from delta_timestamps.
+
         Args:
             batch: Input observation batch.
 
@@ -629,6 +637,25 @@ class Rldx1(Policy):
             Single action tensor of shape ``(B, D)`` or ``(D,)``.
         """
         self._record_video_frames(batch)
+        
+        # Warmup phase: delay inference until buffer is full so temporal window is stable.
+        # During training, delta_timestamps ensures observations have complete temporal
+        # structure from the first step. During eval rollout, we build frame history
+        # incrementally, so the temporal window shifts until we have enough frames.
+        # This check ensures we only inference when the model sees a window matching
+        # training conditions (full temporal context, not growing).
+        if self._frame_history is not None:
+            # Get any view key to check buffer fullness
+            view_keys = list(self._frame_history.keys())
+            if view_keys:
+                buffer = self._frame_history[view_keys[0]]
+                buffer_len = len(buffer)
+                # Warmup needed until buffer is full (accounts for video_stride gaps)
+                target_len = (self.config.video_length - 1) * self.config.video_stride + 1
+                if buffer_len < target_len:
+                    env_action_dim = self.hparams.get("env_action_dim", self.config.max_action_dim)
+                    return self._get_warmup_hold_action(batch, env_action_dim)
+        
         return super().select_action(batch)
 
     def _prepare_video_window(self, batch: Observation | dict[str, Any]) -> Observation | dict[str, Any]:
@@ -716,6 +743,44 @@ class Rldx1(Policy):
             frames = [buffer[max(0, count - 1 + offset)] for offset in offsets]
             out[key] = torch.stack(frames, dim=1)  # (B, T, C, H, W)
         return out
+
+    def _get_warmup_hold_action(self, batch: Observation, env_action_dim: int) -> torch.Tensor:
+        """Return a safe warmup action while frame history is filling.
+
+        For PushT-like position-control tasks, action represents the target
+        position. Returning zeros would command motion toward ``(0, 0)``.
+        During warmup we instead try to hold the current state position.
+
+        Args:
+            batch: Current observation batch.
+            env_action_dim: Real environment action dimension.
+
+        Returns:
+            Warmup action tensor of shape ``(B, env_action_dim)``.
+        """
+        batch_size = batch.batch_size
+
+        state = batch.state
+        if isinstance(state, torch.Tensor):
+            state_t = state
+        elif isinstance(state, dict):
+            state_t = None
+            for key in ("agent_pos", "state"):
+                value = state.get(key)
+                if isinstance(value, torch.Tensor):
+                    state_t = value
+                    break
+        else:
+            state_t = None
+
+        if state_t is not None:
+            if state_t.ndim == 1:
+                state_t = state_t.unsqueeze(0)
+            if state_t.shape[-1] >= env_action_dim:
+                return state_t[..., :env_action_dim].to(device=self.device, dtype=torch.bfloat16)
+
+        # Fallback for tasks without compatible state-to-action mapping.
+        return torch.zeros(batch_size, env_action_dim, dtype=torch.bfloat16, device=self.device)
 
     @staticmethod
     def _to_flat_dict(batch: Observation | dict[str, Any]) -> dict[str, Any]:

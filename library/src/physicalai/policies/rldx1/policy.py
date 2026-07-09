@@ -145,7 +145,7 @@ class Rldx1(Policy):
         action_use_lora: bool = False,
         # Optimizer
         optim: Literal["adamw_torch", "adamw_torch_fused", "adafactor"] = "adamw_torch",
-        learning_rate: float = 1e-5,
+        learning_rate: float = 1e-4,
         weight_decay: float = 0.01,
         warmup_ratio: float = 0.05,
         grad_clip_norm: float = 35.0,

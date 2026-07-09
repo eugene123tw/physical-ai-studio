@@ -112,7 +112,7 @@ class CategorySpecificLinear(nn.Module):
             Output tensor of shape (B, T, hidden_dim).
         """
         max_action_dim = x.shape[-1]
-        selected_w = self.W[cat_ids][:, :max_action_dim, :]
+        selected_w = self.W[cat_ids]
         selected_b = self.b[cat_ids]
         return torch.bmm(x, selected_w) + selected_b.unsqueeze(1)
 

@@ -155,11 +155,16 @@ class RLDXActionModel(nn.Module):
             self.physics = NoOpPhysicsHead()
 
         self.set_trainable_parameters(
-            config.tune_projector, config.tune_diffusion_model, config.tune_vlln
+            config.tune_projector, 
+            config.tune_diffusion_model, 
+            config.tune_vlln,
         )
 
     def set_trainable_parameters(
-        self, tune_projector: bool, tune_diffusion_model: bool, tune_vlln: bool
+        self, 
+        tune_projector: bool, 
+        tune_diffusion_model: bool, 
+        tune_vlln: bool,
     ):
         # When LoRA is on, the diffusion model is no longer full-tuned —
         # LoRA adapters are the only trainable surface inside ``self.model``.
@@ -195,6 +200,12 @@ class RLDXActionModel(nn.Module):
 
         if not tune_vlln:
             self.vlln.requires_grad_(False)
+        elif self.config.backbone_trainable_params_fp32:
+            # Keep the trainable vlln in fp32. Its weight inits to 1.0, where the
+            # bf16 ULP is 2**-7 ~= 0.0078 -- larger than a typical AdamW step
+            # (~lr), so in-place bf16 updates round back to 1.0 and the gain
+            # never moves. fp32 storage lets small updates accumulate.
+            self.vlln.to(torch.float32)
 
         _print(f"[MSAT] Tune action model projector: {self.tune_projector}")
         _print(f"[MSAT] Tune action model diffusion model: {self.tune_diffusion_model}")

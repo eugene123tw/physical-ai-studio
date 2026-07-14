@@ -93,6 +93,7 @@ class Rldx1(Policy):
         tune_visual: Whether to fine-tune the vision tower.
         tune_projector: Whether to fine-tune the projectors.
         tune_diffusion_model: Whether to fine-tune the MSAT action model.
+        tune_vlln: Whether to fine-tune the VLM-output layer norm in the action head.
         num_inference_timesteps: Number of flow-matching denoising steps at inference.
         backbone_use_lora: Whether to use LoRA on the backbone top layers.
             Default False (full fine-tuning). Set to True for LoRA.
@@ -139,6 +140,7 @@ class Rldx1(Policy):
         tune_visual: bool = False,
         tune_projector: bool = True,
         tune_diffusion_model: bool = True,
+        tune_vlln: bool = True,
         num_inference_timesteps: int = 4,
         backbone_use_lora: bool = False,
         action_use_lora: bool = False,
@@ -179,6 +181,7 @@ class Rldx1(Policy):
             tune_visual=tune_visual,
             tune_projector=tune_projector,
             tune_diffusion_model=tune_diffusion_model,
+            tune_vlln=tune_vlln,
             num_inference_timesteps=num_inference_timesteps,
             backbone_use_lora=backbone_use_lora,
             action_use_lora=action_use_lora,
@@ -239,6 +242,7 @@ class Rldx1(Policy):
             tune_visual=config.tune_visual,
             tune_projector=config.tune_projector,
             tune_diffusion_model=config.tune_diffusion_model,
+            tune_vlln=config.tune_vlln,
             num_inference_timesteps=config.num_inference_timesteps,
             backbone_use_lora=config.backbone_use_lora,
             action_use_lora=config.action_use_lora,

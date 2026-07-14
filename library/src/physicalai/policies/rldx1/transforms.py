@@ -207,7 +207,7 @@ class Rldx1Preprocessor(nn.Module):
         use_percentiles: bool = True,
         clip_outliers: bool = True,
         image_max_area: int = 65536,
-        image_min_area: int = 50176,
+        image_min_area: int | None = None,
         image_resize_m: int = 32,
         random_crop_fraction: float | None = None,
         random_rotation_angle: int | None = None,

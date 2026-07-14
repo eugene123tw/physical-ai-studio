@@ -155,6 +155,7 @@ class Rldx1(Policy):
         gradient_checkpointing: bool = True,
         # Image augmentation (train only)
         color_jitter_params: dict[str, float] | None = None,
+        image_min_area: int | None = None,
         # Normalization
         clip_outliers: bool = True,
         # Eager initialization (optional)
@@ -193,6 +194,7 @@ class Rldx1(Policy):
             compile_model=compile_model,
             gradient_checkpointing=gradient_checkpointing,
             color_jitter_params=color_jitter_params,
+            image_min_area=image_min_area,
             clip_outliers=clip_outliers,
         )
 

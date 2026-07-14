@@ -250,7 +250,7 @@ class Rldx1Config(Config):
 
     # Image / language pipeline
     image_max_area: int = 65536  # 256 * 256
-    image_min_area: int = 50176
+    image_min_area: int | None = None
     image_resize_m: int = 32
     # VTC video window: each camera view carries ``video_length`` temporal frames
     # sampled at ``video_stride`` action-steps (offsets [-6, -4, -2, 0]). Used to

@@ -109,6 +109,10 @@ class Rldx1(Policy):
         color_jitter_params: Train-time ``A.ColorJitter`` params
             (``{"brightness", "contrast", "saturation", "hue"}``). ``None``
             (default) disables color augmentation.
+        video_length: Number of VTC temporal frames per observation step (default 4).
+        video_stride: Action-step stride between VTC video frames (default 2).
+            With ``video_length=4, video_stride=2`` the offsets are ``[-6,-4,-2,0]``
+            (600 ms at 10 fps). Set ``video_stride=1`` for contiguous frames.
         clip_outliers: Clip normalized state/action to ``[-1, 1]`` at train and
             inference (upstream default ``True``). Set ``False`` (Pi05-style, no
             clip) for wide-range action spaces where ``QUANTILES`` bounds would
@@ -153,6 +157,9 @@ class Rldx1(Policy):
         use_bf16: bool = True,
         compile_model: bool = False,
         gradient_checkpointing: bool = True,
+        # VTC video window
+        video_length: int = 4,
+        video_stride: int = 2,
         # Image augmentation (train only)
         color_jitter_params: dict[str, float] | None = None,
         image_min_area: int | None = None,
@@ -193,6 +200,8 @@ class Rldx1(Policy):
             use_bf16=use_bf16,
             compile_model=compile_model,
             gradient_checkpointing=gradient_checkpointing,
+            video_length=video_length,
+            video_stride=video_stride,
             color_jitter_params=color_jitter_params,
             image_min_area=image_min_area,
             clip_outliers=clip_outliers,

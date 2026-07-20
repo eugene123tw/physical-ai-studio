@@ -111,7 +111,7 @@ smolvla = [
 # normalization, relative actions, albumentations image resize, Qwen3-VL
 # vision processing) so Studio feeds the model byte-identical inputs.
 rldx1 = [
-    "transformers>=5.3.0,<5.4.0",
+    "transformers>=5.3.0,<5.6.0",
     "safetensors>=0.4.3,<1.0.0",
     "Pillow>=10.0.0,<13.0.0",
     "albumentations>=2.0.0,<3.0.0",

@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from physicalai.policies.shared.components.nn import SinusoidalPositionalEncoding
 from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 
+from physicalai.policies.rldx1.components.action_model.blocks import ExpandedDoubleStreamBlock, ExpandedSingleStreamBlock
 
 class PhysicalSignalEncoder(nn.Module):
     """Encode physics history tokens: (B, T_hist, input_dim) -> (B, T_hist, output_dim)."""
@@ -110,10 +111,6 @@ def init_physics_params_near_zero(action_model: nn.Module) -> None:
     so that the physics stream outputs ~0 at Day-0 and does not disturb the
     pretrained action stream.
     """
-    from physicalai.policies.rldx1.components.action_model_original_20260625.msat import (
-        ExpandedDoubleStreamBlock,
-        ExpandedSingleStreamBlock,
-    )
 
     msat = action_model.model
 

@@ -118,6 +118,52 @@ def test_multiframe_input_not_recorded() -> None:
     assert policy._frame_history is None  # noqa: SLF001
 
 
+# ---------------------------------------------------------------------------
+# Rldx1Model.observation_delta_indices
+# ---------------------------------------------------------------------------
+
+
+def _bare_model(video_length: int = 4, video_stride: int = 2) -> "Rldx1Model":
+    from physicalai.policies.rldx1.model import Rldx1Model  # noqa: PLC0415
+
+    return Rldx1Model(video_length=video_length, video_stride=video_stride)
+
+
+def test_observation_delta_indices_default() -> None:
+    """Default (length=4, stride=2) yields [-6, -4, -2, 0]."""
+    model = _bare_model()
+    assert model.observation_delta_indices == [-6, -4, -2, 0]
+
+
+def test_observation_delta_indices_ends_at_zero() -> None:
+    """The last index is always 0 (current timestep)."""
+    for vl, vs in [(1, 1), (2, 3), (4, 2), (6, 1)]:
+        assert _bare_model(vl, vs).observation_delta_indices[-1] == 0
+
+
+def test_observation_delta_indices_length_matches_video_length() -> None:
+    """Number of indices equals video_length."""
+    for vl in [1, 2, 4, 8]:
+        assert len(_bare_model(video_length=vl).observation_delta_indices) == vl
+
+
+def test_observation_delta_indices_stride_1() -> None:
+    """Stride 1, length 4 yields contiguous [-3, -2, -1, 0]."""
+    assert _bare_model(video_length=4, video_stride=1).observation_delta_indices == [-3, -2, -1, 0]
+
+
+def test_observation_delta_indices_single_frame() -> None:
+    """video_length=1 always yields [0] regardless of stride."""
+    assert _bare_model(video_length=1, video_stride=5).observation_delta_indices == [0]
+
+
+def test_observation_delta_indices_returns_list_of_int() -> None:
+    """Return type is list[int]."""
+    indices = _bare_model().observation_delta_indices
+    assert isinstance(indices, list)
+    assert all(isinstance(i, int) for i in indices)
+
+
 def test_numpy_frames_are_coerced() -> None:
     """Numpy view arrays are accepted and coerced to tensors."""
     policy = _bare_policy()

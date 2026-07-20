@@ -5,95 +5,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-
 from lerobot.policies.factory import make_policy_config
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
-# RLDX-1 VTC video window defaults (upstream ``video_length`` / ``video_stride``).
-# The backbone always consumes ``video_length`` temporal frames per step; the
-# released FT checkpoints were trained with 4 frames at stride 2.
-RLDX1_VIDEO_LENGTH = 4
-RLDX1_VIDEO_STRIDE = 2
-RLDX1_ACTION_HORIZON = 16
-
-
-def _load_lerobot_metadata(
-    *,
-    dataset: Any = None,  # noqa: ANN401
-    repo_id: str | None = None,
-    root: str | Path | None = None,
-    revision: str | None = None,
-) -> Any:  # noqa: ANN401
-    """Return LeRobot dataset metadata from a dataset object or a ``repo_id``.
-
-    Args:
-        dataset: A dataset exposing ``.meta`` (``LeRobotDataset`` or the Studio
-            adapter). Preferred when a dataset is already built.
-        repo_id: Dataset repo id, used to load metadata only (no episode data).
-        root: Local dataset root for the ``repo_id`` lookup.
-        revision: Dataset git revision for the ``repo_id`` lookup.
-
-    Returns:
-        A ``LeRobotDatasetMetadata`` (or the dataset's ``.meta``) exposing
-        ``camera_keys`` and ``fps``.
-
-    Raises:
-        ValueError: If neither ``dataset`` nor ``repo_id`` is provided.
-        TypeError: If ``dataset`` exposes no ``.meta``.
-    """
-    if dataset is not None:
-        meta = getattr(dataset, "meta", None) or getattr(
-            getattr(dataset, "_lerobot_dataset", None), "meta", None
-        )
-        if meta is None:
-            msg = "`dataset` exposes no `.meta`; pass `repo_id` or explicit `obs_image_key` and `fps`."
-            raise TypeError(msg)
-        return meta
-
-    if repo_id is None:
-        msg = "Provide `dataset`, `repo_id`, or explicit `obs_image_key` and `fps`."
-        raise ValueError(msg)
-
-    from lerobot.datasets import LeRobotDatasetMetadata  # noqa: PLC0415
-
-    return LeRobotDatasetMetadata(repo_id, root=root, revision=revision)
-
-
-def _resolve_image_keys_and_fps(
-    obs_image_key: str | list[str] | None,
-    fps: float | None,
-    *,
-    dataset: Any = None,  # noqa: ANN401
-    repo_id: str | None = None,
-    root: str | Path | None = None,
-    revision: str | None = None,
-) -> tuple[list[str], float]:
-    """Resolve the camera keys and fps, reading dataset metadata when omitted.
-
-    Returns:
-        ``(image_keys, fps)``. Camera keys default to every ``camera_keys`` entry
-        in the dataset metadata; fps defaults to the dataset fps.
-
-    Raises:
-        ValueError: If metadata carries no camera keys.
-    """
-    if obs_image_key is not None and fps is not None:
-        keys = [obs_image_key] if isinstance(obs_image_key, str) else list(obs_image_key)
-        return keys, fps
-
-    meta = _load_lerobot_metadata(dataset=dataset, repo_id=repo_id, root=root, revision=revision)
-    if obs_image_key is None:
-        keys = list(meta.camera_keys)
-        if not keys:
-            msg = "No camera keys found in dataset metadata; pass `obs_image_key` explicitly."
-            raise ValueError(msg)
-    else:
-        keys = [obs_image_key] if isinstance(obs_image_key, str) else list(obs_image_key)
-    resolved_fps = fps if fps is not None else meta.fps
-    return keys, resolved_fps
 
 def get_delta_timestamps_from_policy(
     policy_name: str,
@@ -111,13 +24,8 @@ def get_delta_timestamps_from_policy(
     we use the length of action_delta_indices rather than chunk_size to ensure
     the generated delta timestamps match what the policy expects.
 
-    RLDX-1 is a first-party policy (not a LeRobot policy), so ``"rldx1"`` routes
-    to :func:`get_rldx1_delta_timestamps`, which emits the VTC multi-frame video
-    window instead of a single frame.
-
     Args:
-        policy_name: Name of the policy (e.g., "act", "diffusion", "groot",
-            "rldx1").
+        policy_name: Name of the LeRobot policy (e.g., "act", "diffusion", "groot").
         fps: Frames per second of the dataset.
         obs_image_key: Key for image observations in the dataset.
         obs_state_key: Key for state observations in the dataset.

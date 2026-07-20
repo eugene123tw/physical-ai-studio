@@ -63,15 +63,6 @@ def smart_resize(
     return h_bar, w_bar
 
 
-def to_rgb(pil_image: Image.Image) -> Image.Image:
-    if pil_image.mode == "RGBA":
-        white_background = Image.new("RGB", pil_image.size, (255, 255, 255))
-        white_background.paste(pil_image, mask=pil_image.split()[3])  # Use alpha channel as mask
-        return white_background
-    else:
-        return pil_image.convert("RGB")
-
-
 def fetch_image(ele: Dict[str, Union[str, Image.Image]], image_patch_size: int = 14) -> Image.Image:
     image = ele["image"] if "image" in ele else ele["image_url"]
     if not isinstance(image, Image.Image):
@@ -80,7 +71,6 @@ def fetch_image(ele: Dict[str, Union[str, Image.Image]], image_patch_size: int =
             "File paths and URLs are not supported in this pipeline."
         )
     patch_factor = int(image_patch_size * SPATIAL_MERGE_SIZE)
-    image = to_rgb(image)
 
     ## resize
     if "resized_height" in ele and "resized_width" in ele:

@@ -86,7 +86,7 @@ cd physical-ai-studio
 cd application/backend && uv sync --extra xpu # or --extra cpu, --extra cuda
 
 # Start the backend
-./run.sh
+uv run physicalai-studio serve  # or: ./run.sh
 ```
 
 ```bash
@@ -166,7 +166,7 @@ policy.export("./policy", backend="openvino")
 ```python test="skip" reason="requires exported model and environment"
 from physicalai.inference import InferenceModel
 
-policy = InferenceModel.load("./policy")
+policy = InferenceModel("./policy")
 obs, info = env.reset()
 done = False
 

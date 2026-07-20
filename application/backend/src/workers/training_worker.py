@@ -5,43 +5,33 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
-from uuid import uuid4
-
-from lightning.pytorch.callbacks import ModelCheckpoint
-from lightning.pytorch.loggers import CSVLogger
-
-from core.logging.utils import job_logging_ctx
-from models.utils import load_policy, setup_policy
-from services.snapshot_service import SnapshotService
-from settings import get_settings
-
-if TYPE_CHECKING:
-    import multiprocessing as mp
-    from multiprocessing.synchronize import Event as EventClass
-
+from uuid import UUID, uuid4
 
 from loguru import logger
-from physicalai.data import LeRobotDataModule
-from physicalai.export import ExportablePolicyMixin
-from physicalai.train import Trainer
 
+from core.logging.utils import job_logging_ctx
 from schemas import Job, Model, Snapshot
 from schemas.base_job import JobStatus
 from schemas.job import TrainJobPayload
 from services import DatasetService, ModelService
 from services.event_processor import EventType
 from services.job_service import JobService
-from services.training_service import (
-    TrainingLogCallback,
-    TrainingService,
-    TrainingTrackingCallback,
-    TrainingTrackingDispatcher,
+from services.snapshot_service import SnapshotService
+from services.training_backends import (
+    TrainingCanceledError,
+    TrainingContext,
+    TrainingSuspendedError,
+    get_training_backend,
 )
-from utils.device import get_lightning_strategy, get_torch_device
+from services.training_service import TrainingService, TrainingTrackingDispatcher
+from settings import get_settings
 from workers.base import BaseProcessWorker
+
+if TYPE_CHECKING:
+    import multiprocessing as mp
+    from multiprocessing.synchronize import Event as EventClass
 
 SCHEDULE_INTERVAL_SEC = 5
 
@@ -65,15 +55,26 @@ class TrainingWorker(BaseProcessWorker):
                 with job_logging_ctx(job_id=str(job.id)):
                     payload = TrainJobPayload.model_validate(job.payload)
                     id = uuid4()
+                    # Reattach to persisted remote jobs after a studio restart.
+                    reattaching = settings.training_mode == "remote" and bool(payload.remote_job_id)
 
                     base_model = None
                     if payload.base_model_id is not None:
                         base_model = await ModelService.get_model_by_id(payload.base_model_id)
 
-                    dataset = await DatasetService.get_dataset_by_id(payload.dataset_id)
                     model_dir = Path(str(settings.models_dir / str(id)))
-                    snapshot_dir = settings.snapshot_dir / SnapshotService.generate_snapshot_folder_name()
-                    snapshot = await SnapshotService.create_snapshot_for_dataset(dataset, destination=snapshot_dir)
+
+                    if reattaching:
+                        # Reattached jobs already have their snapshot on the trainer.
+                        logger.info("Resuming in-flight remote training job (remote job {})", payload.remote_job_id)
+                        snapshot: Snapshot | None = None
+                        snapshot_id = payload.snapshot_id
+                    else:
+                        dataset = await DatasetService.get_dataset_by_id(payload.dataset_id)
+                        snapshot_dir = settings.snapshot_dir / SnapshotService.generate_snapshot_folder_name()
+                        snapshot = await SnapshotService.create_snapshot_for_dataset(dataset, destination=snapshot_dir)
+                        snapshot_id = snapshot.id
+                        payload.snapshot_id = snapshot_id
 
                     model = Model(
                         id=id,
@@ -81,7 +82,7 @@ class TrainingWorker(BaseProcessWorker):
                         dataset_id=payload.dataset_id,
                         path=str(model_dir),
                         name=payload.model_name,
-                        snapshot_id=snapshot.id,
+                        snapshot_id=snapshot_id,
                         policy=payload.policy,
                         properties={},
                         train_job_id=job.id,
@@ -105,8 +106,13 @@ class TrainingWorker(BaseProcessWorker):
             await TrainingService.abort_orphan_jobs()
 
     async def _train_model(
-        self, job: Job, model: Model, snapshot: Snapshot, payload: TrainJobPayload, base_model: Model | None = None
-    ):
+        self,
+        job: Job,
+        model: Model,
+        snapshot: Snapshot | None,
+        payload: TrainJobPayload,
+        base_model: Model | None = None,
+    ) -> None:
         settings = get_settings()
         await JobService.update_job(
             job=job,
@@ -121,118 +127,82 @@ class TrainingWorker(BaseProcessWorker):
             event_queue=self.queue,
             interrupt_event=self.interrupt_event,
         )
+        interrupted = False
+        suspended = False
+        error: Exception | None = None
+        dispatcher.start()
         try:
-            path = Path(model.path)
-            cache_path = settings.cache_dir / str(job.id)
-
-            # Resolve training device -- explicit from payload or auto-detected
-            device_type = payload.device.type if payload.device else None
-            device_index = payload.device.index if payload.device else None
-
-            accelerator = get_torch_device(device_type)
-
-            l_dm = LeRobotDataModule(
-                repo_id="snapshot",  # doesnt matter for loading the data.
-                root=snapshot.path,
-                train_batch_size=payload.batch_size,
-                num_workers=payload.num_workers,
-                val_split=payload.val_split,
+            context = TrainingContext(
+                job=job,
+                model=model,
+                snapshot=snapshot,
+                payload=payload,
+                base_model=base_model,
+                output_dir=Path(model.path),
+                cache_dir=settings.cache_dir / str(job.id),
+                progress=dispatcher.report,
+                should_stop=self._should_interrupt,
+                remote_job_id=payload.remote_job_id,
+                on_remote_job_id=lambda remote_job_id: self._persist_remote_job_id(job, payload, remote_job_id),
+                should_suspend=self.should_stop,
             )
 
-            if base_model is not None:
-                policy = load_policy(base_model, compile_model=payload.compile_model)
-            else:
-                policy = setup_policy(model, compile_model=payload.compile_model)
+            backend = get_training_backend()
+            await backend.train(context)
+            # The local backend stops cooperatively without raising; treat a
+            # completed-but-interrupted run as a cancellation, not a success.
+            interrupted = self._should_interrupt()
+        except TrainingSuspendedError:
+            # Leave the remote job running so a restart can reattach.
+            suspended = True
+            logger.info("Training suspended for restart; remote job left running")
+        except TrainingCanceledError:
+            interrupted = True
+        except Exception as e:  # surface any training failure as a FAILED job
+            error = e
+            logger.exception(f"Training failed: {e}")
+        finally:
+            # Stop the dispatcher and let it flush queued progress BEFORE writing
+            # the terminal status. Otherwise a late RUNNING progress update can
+            # land after the terminal write and revert the job (stuck at 95%).
+            self.interrupt_event.set()
+            if dispatcher.is_alive():
+                dispatcher.join(timeout=10)
 
-            precision = str(payload.precision)
-            strategy = get_lightning_strategy(device_type)
-            devices = [device_index] if device_index is not None else 1
-
-            checkpoint_callback = ModelCheckpoint(
-                dirpath=cache_path,
-                filename="model",  # filename without suffix
-                save_top_k=1,
-                monitor="val/loss",
-                mode="min",
+        if suspended:
+            # Requeue for reattachment after restart.
+            job = await JobService.update_job_status(
+                job_id=job.id,
+                status=JobStatus.PENDING,
+                message="Reconnecting to remote training job after restart",
             )
-            csv_logger = CSVLogger(cache_path.parent, name=cache_path.stem)
+            self.queue.put((EventType.JOB_UPDATE, job))
+            return
 
-            def _create_trainer() -> Trainer:
-                return Trainer(
-                    logger=csv_logger,
-                    callbacks=[
-                        checkpoint_callback,
-                        TrainingTrackingCallback(
-                            shutdown_event=self._stop_event,
-                            interrupt_event=self.interrupt_event,
-                            dispatcher=dispatcher,
-                        ),
-                        TrainingLogCallback(),
-                    ],
-                    accelerator=accelerator,
-                    strategy=strategy,
-                    devices=devices,
-                    max_steps=payload.max_steps,
-                    auto_scale_batch_size=payload.auto_scale_batch_size,
-                    precision=precision,
-                    check_val_every_n_epoch=1,
-                )
-
-            trainer = _create_trainer()
-
-            dispatcher.start()
-            trainer.fit(model=policy, datamodule=l_dm)
-
-            final_checkpoint = cache_path / "model.ckpt"
-            trainer.save_checkpoint(final_checkpoint)
-
-            path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(cache_path, path)
-
-            export_policy = policy
-            if payload.compile_model and model.policy in ["act", "smolvla"]:
-                try:
-                    logger.info("Reloading non-compiled policy for export")
-                    export_policy = load_policy(model, compile_model=False)
-                except Exception as e:
-                    logger.warning("Failed to reload non-compiled policy for export; falling back to trained policy")
-                    logger.exception(e)
-
-            await self._export_policy(policy=export_policy, path=path, job=job)
-
+        if error is not None:
+            job = await JobService.update_job_status(
+                job_id=job.id, status=JobStatus.FAILED, message=f"Training failed: {error}"
+            )
+        elif interrupted:
+            logger.info("Training canceled")
+            job = await JobService.update_job_status(
+                job_id=job.id, status=JobStatus.CANCELED, message="Training canceled"
+            )
+        else:
             job = await JobService.update_job_status(
                 job_id=job.id, status=JobStatus.COMPLETED, message="Training finished"
             )
             model = await ModelService.create_model(model)
             self.queue.put((EventType.MODEL_UPDATE, model))
-        except Exception as e:
-            logger.exception(f"Training failed: {e}")
-            job = await JobService.update_job_status(
-                job_id=job.id, status=JobStatus.FAILED, message=f"Training failed: {e}"
-            )
-        self.interrupt_event.set()
-        if dispatcher.is_alive():
-            dispatcher.join(timeout=10)
+
         self.queue.put((EventType.JOB_UPDATE, job))
 
-    async def _export_policy(self, policy: object, path: Path, job: Job) -> None:
-        if not isinstance(policy, ExportablePolicyMixin):
-            logger.info("Skipping export: policy does not support export backends")
-            return
+    async def _persist_remote_job_id(self, job: Job, payload: TrainJobPayload, remote_job_id: UUID) -> None:
+        """Persist the remote job id for restart recovery."""
+        payload.remote_job_id = remote_job_id
+        await JobService.update_job_payload(job.id, payload)
+        logger.info("Persisted remote job id {} for restart recovery", remote_job_id)
 
-        logger.info("Starting model export for trained policy")
-        for backend in policy.get_supported_export_backends():
-            backend_name = backend.value if hasattr(backend, "value") else str(backend)
-            try:
-                logger.info("Exporting model to {} format", backend_name)
-                await JobService.update_job_status(
-                    job_id=job.id,
-                    status=JobStatus.RUNNING,
-                    message=f"Exporting to {backend_name} format",
-                )
-                export_dir = path / "exports" / backend
-                policy.export(export_dir, backend=backend)
-                logger.info("Model export to {} completed", backend_name)
-            except Exception as e:
-                logger.error("Failed exporting model to {} format", backend_name)
-                logger.exception(e)
+    def _should_interrupt(self) -> bool:
+        """Stop training on global shutdown or an explicit interrupt request."""
+        return self.should_stop() or self.interrupt_event.is_set()

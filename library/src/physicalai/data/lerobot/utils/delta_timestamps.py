@@ -95,71 +95,6 @@ def _resolve_image_keys_and_fps(
     resolved_fps = fps if fps is not None else meta.fps
     return keys, resolved_fps
 
-
-def get_rldx1_delta_timestamps(
-    fps: float | None = None,
-    obs_image_key: str | list[str] | None = None,
-    obs_state_key: str = "observation.state",
-    *,
-    dataset: Any = None,  # noqa: ANN401
-    repo_id: str | None = None,
-    root: str | Path | None = None,
-    revision: str | None = None,
-    video_length: int = RLDX1_VIDEO_LENGTH,
-    video_stride: int = RLDX1_VIDEO_STRIDE,
-    action_horizon: int = RLDX1_ACTION_HORIZON,
-) -> dict[str, list[float]]:
-    """Build RLDX-1 delta timestamps with the VTC multi-frame video window.
-
-    RLDX-1 feeds the backbone ``video_length`` temporal frames per observation
-    step, sampled at ``video_stride`` action-steps. The frame offsets are
-    ``{(i - (video_length - 1)) * video_stride : i in [0, video_length)}`` --
-    e.g. ``[-6, -4, -2, 0]`` for ``video_length=4, video_stride=2`` -- so every
-    camera key returns 4 frames per step (matching ``FT-ROBOCASA``). State is
-    read at the current step only; actions span the prediction horizon.
-
-    Camera keys and fps are read from the dataset metadata by default (pass a
-    built ``dataset`` or a ``repo_id``), so callers do not need to know the
-    dataset's camera keys. Explicit ``obs_image_key`` / ``fps`` override the
-    metadata and skip the metadata load.
-
-    Args:
-        fps: Frames per second. ``None`` reads it from the dataset metadata.
-        obs_image_key: One camera key or a list of camera keys. ``None`` uses
-            every ``camera_keys`` entry from the dataset metadata. Each key gets
-            the full video window.
-        obs_state_key: Key for state observations.
-        dataset: A built dataset (``LeRobotDataset`` / Studio adapter) whose
-            ``.meta`` provides the camera keys and fps.
-        repo_id: Dataset repo id, used to load metadata when ``dataset`` is not
-            given and keys/fps are omitted.
-        root: Local dataset root for the ``repo_id`` lookup.
-        revision: Dataset git revision for the ``repo_id`` lookup.
-        video_length: Number of temporal frames per step.
-        video_stride: Action-step stride between frames.
-        action_horizon: Number of future action steps to predict.
-
-    Returns:
-        Delta timestamps for the camera key(s), state, and action.
-    """
-    image_keys, resolved_fps = _resolve_image_keys_and_fps(
-        obs_image_key,
-        fps,
-        dataset=dataset,
-        repo_id=repo_id,
-        root=root,
-        revision=revision,
-    )
-
-    video_offsets = [(i - (video_length - 1)) * video_stride for i in range(video_length)]
-    video_deltas = [i / resolved_fps for i in video_offsets]
-
-    delta_timestamps: dict[str, list[float]] = {key: list(video_deltas) for key in image_keys}
-    delta_timestamps[obs_state_key] = [0.0]
-    delta_timestamps["action"] = [i / resolved_fps for i in range(action_horizon)]
-    return delta_timestamps
-
-
 def get_delta_timestamps_from_policy(
     policy_name: str,
     fps: int = 10,
@@ -200,13 +135,6 @@ def get_delta_timestamps_from_policy(
         ...     delta_timestamps=delta_timestamps,
         ... )
     """
-    if policy_name == "rldx1":
-        return get_rldx1_delta_timestamps(
-            fps=fps,
-            obs_image_key=obs_image_key,
-            obs_state_key=obs_state_key,
-        )
-
     config = make_policy_config(policy_name)
 
     n_obs_steps: int = getattr(config, "n_obs_steps", 1)

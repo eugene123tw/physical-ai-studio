@@ -165,6 +165,8 @@ class Rldx1Model(Model):
         compile_model: Whether to ``torch.compile`` the model.
         gradient_checkpointing: Whether to enable activation checkpointing in
             the MSAT action model during training.
+        video_length: Number of VTC temporal frames per observation step.
+        video_stride: Action-step stride between VTC video frames.
     """
 
     def __init__(
@@ -182,11 +184,15 @@ class Rldx1Model(Model):
         use_bf16: bool = True,
         compile_model: bool = False,
         gradient_checkpointing: bool = False,
+        video_length: int = 4,
+        video_stride: int = 2,
     ) -> None:
         """Build the RLDX-1 model skeleton (weights loaded via from_pretrained)."""
         super().__init__()
         self._chunk_size = chunk_size
         self._n_action_steps = n_action_steps
+        self._video_length = video_length
+        self._video_stride = video_stride
         self.max_state_dim = max_state_dim
         self.max_action_dim = max_action_dim
         self.select_layer = select_layer
@@ -453,6 +459,8 @@ class Rldx1Model(Model):
             kwargs.pop("gradient_checkpointing", gradient_checkpointing)
         )
         use_bf16 = bool(kwargs.pop("use_bf16", use_bf16))
+        video_length = int(kwargs.pop("video_length", getattr(cfg, "video_length", 4)))
+        video_stride = int(kwargs.pop("video_stride", getattr(cfg, "video_stride", 2)))
 
         model = cls(
             chunk_size=chunk_size,
@@ -466,6 +474,8 @@ class Rldx1Model(Model):
             num_inference_timesteps=num_inference_timesteps,
             use_bf16=use_bf16,
             gradient_checkpointing=gradient_checkpointing,
+            video_length=video_length,
+            video_stride=video_stride,
             **kwargs,
         )
         model.net = net
@@ -590,6 +600,14 @@ class Rldx1Model(Model):
         return list(range(self._chunk_size))
 
     @property
-    def observation_delta_indices(self) -> None:
-        """Indices of observations relative to the current timestep."""
-        return None
+    def observation_delta_indices(self) -> list[int]:
+        """VTC video-window frame offsets relative to the current timestep.
+
+        Returns the integer frame offsets for the multi-frame video window used
+        by the RLDX-1 backbone, e.g. ``[-6, -4, -2, 0]`` for
+        ``video_length=4, video_stride=2``. These are applied to every
+        observation key (camera views and state) by
+        ``reformat_dataset_to_match_policy``; the RLDX-1 transform slices state
+        to the current (last) frame automatically.
+        """
+        return [(i - (self._video_length - 1)) * self._video_stride for i in range(self._video_length)]

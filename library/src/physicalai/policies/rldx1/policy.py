@@ -46,8 +46,9 @@ from collections import deque
 from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
+from physicalai.train.utils import reformat_dataset_to_match_policy
 import torch
-
+from physicalai.data import Dataset
 from physicalai.data import Observation
 from physicalai.policies.base import Policy
 from physicalai.train.schedulers import cosine_decay_with_warmup_scheduler
@@ -258,63 +259,6 @@ class Rldx1(Policy):
             color_jitter_params=config.color_jitter_params,
             clip_outliers=config.clip_outliers,
         )
-    def get_delta_timestamps(
-        self,
-        dataset: Any = None,
-        *,
-        repo_id: str | None = None,
-        root: str | Path | None = None,
-        revision: str | None = None,
-        fps: float | None = None,
-        image_keys: str | list[str] | None = None,
-        obs_state_key: str = "observation.state",
-    ) -> dict[str, list[float]]:
-        """Build ``LeRobotDataModule`` delta timestamps for the VTC video window.
-
-        Wires the config's ``video_length`` / ``video_stride`` / ``chunk_size``
-        into per-camera frame offsets so the datamodule returns ``video_length``
-        frames per step (offsets ``[-6, -4, -2, 0]`` for the defaults). Pass the
-        result to ``LeRobotDataModule(delta_timestamps=...)`` so training feeds
-        the backbone the same multi-frame stack the released FT checkpoints saw.
-
-        Camera keys and fps are read from the dataset metadata, so the caller
-        normally passes only the dataset (or its ``repo_id``) -- every camera in
-        the dataset gets the window automatically, no per-view key lists.
-
-        Args:
-            dataset: A built dataset (``LeRobotDataset`` / Studio adapter) whose
-                metadata provides the camera keys and fps.
-            repo_id: Dataset repo id, used to load metadata when ``dataset`` is
-                not given.
-            root: Local dataset root for the ``repo_id`` lookup.
-            revision: Dataset git revision for the ``repo_id`` lookup.
-            fps: Override the dataset fps (defaults to the metadata fps).
-            image_keys: Override the auto-detected camera keys (rarely needed).
-            obs_state_key: State observation key.
-
-        Returns:
-            A ``delta_timestamps`` dict mapping each camera key to the video
-            window, plus the state and action offsets.
-
-        Examples:
-            >>> policy = Rldx1()
-            >>> dt = policy.get_delta_timestamps(repo_id="<dataset>")  # keys auto-detected
-            >>> datamodule = LeRobotDataModule(repo_id="<dataset>", delta_timestamps=dt)
-        """
-        from physicalai.data.lerobot import get_rldx1_delta_timestamps  # noqa: PLC0415
-
-        return get_rldx1_delta_timestamps(
-            fps=fps,
-            obs_image_key=image_keys,
-            obs_state_key=obs_state_key,
-            dataset=dataset,
-            repo_id=repo_id,
-            root=root,
-            revision=revision,
-            video_length=self.config.video_length,
-            video_stride=self.config.video_stride,
-            action_horizon=self.config.chunk_size,
-        )
 
     def _initialize_model(
         self,
@@ -364,6 +308,8 @@ class Rldx1(Policy):
             action_lora_alpha=config.action_lora_alpha,
             action_lora_dropout=config.action_lora_dropout,
             action_lora_targets=config.action_lora_targets,
+            video_length=config.video_length,
+            video_stride=config.video_stride,
         )
         self._preprocessor, self._postprocessor = make_rldx1_transforms(
             stats=dataset_stats,  # type: ignore[arg-type]
@@ -396,10 +342,7 @@ class Rldx1(Policy):
         Raises:
             TypeError: If the train dataset is not a physicalai Dataset.
         """
-        if self._is_setup_complete or self.model is not None:
-            return
-
-        from physicalai.data import Dataset  # noqa: PLC0415
+        del stage 
 
         datamodule = self.trainer.datamodule  # type: ignore[attr-defined]
         train_dataset = datamodule.train_dataset
@@ -408,7 +351,7 @@ class Rldx1(Policy):
             msg = f"Expected physicalai.data.Dataset, got {type(train_dataset)}"
             raise TypeError(msg)
 
-        dataset_stats = train_dataset.stats
+        stats_dict = train_dataset.stats
         action_features = train_dataset.action_features
         env_action_dim = 0
         for feature in action_features.values():
@@ -417,8 +360,9 @@ class Rldx1(Policy):
                 break
 
         self.hparams["env_action_dim"] = env_action_dim
-        self.hparams["dataset_stats"] = dataset_stats
-        self._initialize_model(env_action_dim, dataset_stats)
+        self.hparams["dataset_stats"] = stats_dict
+        self._initialize_model(env_action_dim, stats_dict)
+        reformat_dataset_to_match_policy(self, datamodule)
 
     def forward(self, batch: Observation) -> torch.Tensor | tuple[torch.Tensor, dict[str, float]]:
         """Forward pass: training loss in train mode, action chunk in eval.

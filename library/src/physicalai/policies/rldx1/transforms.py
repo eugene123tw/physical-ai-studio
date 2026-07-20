@@ -368,7 +368,13 @@ class Rldx1Preprocessor(nn.Module):
         sa_device = _module_device(self._state_action_normalizer)
 
         state_raw = batch_dict.get(OBSERVATION_STATE, batch_dict.get(STATE))
-        sa_batch: dict[str, Any] = {STATE: self._as_float_tensor(state_raw).to(sa_device)}
+        state_tensor = self._as_float_tensor(state_raw)
+        # When observation_delta_indices returns the VTC video window, the dataset
+        # delivers state with shape (B, T, D). The RLDX backbone uses only the
+        # current-step state, so slice to the last frame.
+        if state_tensor.ndim == 3:
+            state_tensor = state_tensor[:, -1:, :]
+        sa_batch: dict[str, Any] = {STATE: state_tensor.to(sa_device)}
         if has_action:
             sa_batch[ACTION] = self._as_float_tensor(batch_dict[ACTION]).to(sa_device)
 

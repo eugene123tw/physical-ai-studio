@@ -211,3 +211,4 @@ tmp*
 lightning_logs
 .DS_Store
 .omo
+.opencode

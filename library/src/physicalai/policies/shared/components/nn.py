@@ -1,4 +1,4 @@
-# Copyright (C) 2026 Intel Corporation
+# Copyright (C) 2025-2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
 # Based on NVIDIA's GR00T implementation (Apache-2.0 licensed)
@@ -40,6 +40,11 @@ class SinusoidalPositionalEncoding(nn.Module):
 
     Args:
         embedding_dim: Dimension of the embedding output.
+    
+    Examples:
+        >>> encoder = SinusoidalPositionalEncoding(embedding_dim=256)
+        >>> timesteps = torch.tensor([[0, 1, 2], [3, 4, 5]])  # (B=2, T=3)
+        >>> encoding = encoder(timesteps)  # (2, 3, 256)
     """
 
     def __init__(self, embedding_dim: int) -> None:
@@ -62,18 +67,21 @@ class SinusoidalPositionalEncoding(nn.Module):
         """
         timesteps = timesteps.float()
 
-        _b, _t = timesteps.shape
         device = timesteps.device
 
         half_dim = self.embedding_dim // 2
+
+        # Log space frequencies for sinusoidal encoding
         exponent = -torch.arange(half_dim, dtype=torch.float, device=device) * (
             torch.log(torch.tensor(10000.0)) / half_dim
         )
-        freqs = timesteps.unsqueeze(-1) * exponent.exp()
+
+        # Expand timesteps to (B, T, 1) then multiply
+        freqs = timesteps.unsqueeze(-1) * exponent.exp() # (B, T, half_dim)
 
         sin = torch.sin(freqs)
         cos = torch.cos(freqs)
-        return torch.cat([sin, cos], dim=-1)
+        return torch.cat([sin, cos], dim=-1)  # (B, T, embedding_dim)
 
 
 class CategorySpecificLinear(nn.Module):
@@ -111,7 +119,6 @@ class CategorySpecificLinear(nn.Module):
         Returns:
             Output tensor of shape (B, T, hidden_dim).
         """
-        max_action_dim = x.shape[-1]
         selected_w = self.W[cat_ids]
         selected_b = self.b[cat_ids]
         return torch.bmm(x, selected_w) + selected_b.unsqueeze(1)
@@ -247,6 +254,7 @@ class MultiEmbodimentActionEncoder(nn.Module):
         self.hidden_size = hidden_size
         self.num_embodiments = num_embodiments
 
+        # W1: R^{d -> w}, W2: R^{2w -> w}, W3: R^{w -> w}
         self.W1 = CategorySpecificLinear(num_embodiments, action_dim, hidden_size)
         self.W2 = CategorySpecificLinear(num_embodiments, 2 * hidden_size, hidden_size)
         self.W3 = CategorySpecificLinear(num_embodiments, hidden_size, hidden_size)
@@ -274,6 +282,7 @@ class MultiEmbodimentActionEncoder(nn.Module):
         """
         b, t, _ = actions.shape
 
+        # Expand single scalar time across all T steps
         if timesteps.dim() == 1 and timesteps.shape[0] == b:
             timesteps = timesteps.unsqueeze(1).expand(-1, t)
         elif timesteps.dim() == 2 and timesteps.shape == (b, t):
@@ -285,7 +294,10 @@ class MultiEmbodimentActionEncoder(nn.Module):
             )
             raise ValueError(msg)
 
+        # Action embedding: (B, T, hidden_size)
         a_emb = self.W1(actions, cat_ids)
+
+        # Sinusoidal encoding: (B, T, hidden_size)
         tau_emb = self.pos_encoding(timesteps).to(dtype=a_emb.dtype)
 
         x = torch.cat([a_emb, tau_emb], dim=-1)

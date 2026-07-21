@@ -66,6 +66,8 @@ def _bridge_studio_config(  # noqa: PLR0913
     action_lora_alpha: int,
     action_lora_dropout: float,
     action_lora_targets: tuple[str, ...],
+    max_state_dim: int = 64,
+    max_action_dim: int = 64,
 ) -> None:
     """Map Studio ``Rldx1Config`` knobs onto a vendored ``RLDXNetworkConfig``.
 
@@ -142,6 +144,8 @@ def _bridge_studio_config(  # noqa: PLR0913
         cfg.action_model_use_lora = False
         cfg.tune_diffusion_model = tune_diffusion_model
 
+    cfg.max_state_dim = max_state_dim
+    cfg.max_action_dim = max_action_dim
 
 class Rldx1Model(Model):
     """RLDX-1 Vision-Language-Action model (MSAT + Qwen3-VL).
@@ -244,6 +248,8 @@ class Rldx1Model(Model):
             "linear1",
             "linear2",
         ),
+        max_state_dim: int = 64,
+        max_action_dim: int = 64,
         **kwargs: Any,  # noqa: ANN401
     ) -> Rldx1Model:
         """Load RLDX-1 weights from a HuggingFace repo or local path.
@@ -343,6 +349,8 @@ class Rldx1Model(Model):
             action_lora_alpha=action_lora_alpha,
             action_lora_dropout=action_lora_dropout,
             action_lora_targets=action_lora_targets,
+            max_state_dim=max_state_dim,
+            max_action_dim=max_action_dim,
         )
 
         # pop unused fields in cfg.diffusion_model_cfg that are not in the
@@ -392,6 +400,24 @@ class Rldx1Model(Model):
         net = net.to(dtype)
 
         state_dict = load_rldx_state_dict(base_model_path, revision=revision)
+        # Slice checkpoint tensors whose shape exceeds the model's (e.g. when
+        # max_state_dim / max_action_dim is smaller than the pretrained 64).
+        # Each mismatched dim is trimmed independently so the first-N weights
+        # from the pretrained model are reused rather than discarded.
+        model_params = dict(net.named_parameters())
+        for key, ckpt_tensor in list(state_dict.items()):
+            if key in model_params:
+                model_shape = model_params[key].shape
+                ckpt_shape = ckpt_tensor.shape
+                if model_shape != ckpt_shape and len(model_shape) == len(ckpt_shape):
+                    slices = tuple(slice(0, s) for s in model_shape)
+                    state_dict[key] = ckpt_tensor[slices].contiguous()
+                    logger.info(
+                        "Sliced checkpoint param %s from %s to %s.",
+                        key,
+                        list(ckpt_shape),
+                        list(model_shape),
+                    )
         missing, unexpected = net.load_state_dict(state_dict, strict=False)
         if unexpected:
             msg = (

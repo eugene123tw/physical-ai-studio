@@ -69,6 +69,8 @@ from .augmentations import build_image_transformations_albumentations
 if TYPE_CHECKING:
     from transformers import ProcessorMixin
 
+    from physicalai.data import Feature
+
 logger = logging.getLogger(__name__)
 
 
@@ -165,8 +167,8 @@ class Rldx1Preprocessor(nn.Module):
         use_percentiles: Use 1st/99th percentile bounds instead of min/max.
         clip_outliers: Clip normalized state/action to ``[-1, 1]`` (upstream
             ``clip_outliers``). ``True`` (default) matches upstream: the forward
-            pass clamps train targets and :meth:`denormalize_action` clamps before
-            the inverse. ``False`` (Pi05-style) skips both clamps, preserving
+            pass clamps train targets; the postprocessor clamps before the
+            inverse. ``False`` (Pi05-style) skips both clamps, preserving
             out-of-percentile action tails for wide-range tasks (e.g. PushT).
         image_max_area: Target max area (pixels) for aspect-preserving resize.
         image_min_area: Minimum pixel-area floor forwarded to the Qwen vision
@@ -256,22 +258,6 @@ class Rldx1Preprocessor(nn.Module):
             self._state_action_normalizer: nn.Module = FeatureNormalizeTransform(sa_features, norm_map)
         else:
             self._state_action_normalizer = nn.Identity()
-
-        # PAS-native action denormalizer (Stage 5). Inverse of the action half of
-        # the forward normalizer; the postprocessor uses it to decode predicted
-        # action chunks back to the environment space. `_action_dim` is the
-        # unpadded action width.
-        action_feature = sa_features.get(ACTION)
-        if action_feature is not None:
-            self._action_dim = int(action_feature.shape[0])
-            self._action_denormalizer: nn.Module = FeatureNormalizeTransform(
-                {ACTION: action_feature},
-                build_state_action_norm_map(use_percentiles=use_percentiles),
-                inverse=True,
-            )
-        else:
-            self._action_dim = 0
-            self._action_denormalizer = nn.Identity()
 
         # Lazily-loaded HF Qwen processor for the PAS-native VLM path (Stage 4).
         self._vlm_processor_cache: ProcessorMixin | None = None
@@ -457,9 +443,6 @@ class Rldx1Preprocessor(nn.Module):
             return [arr[t] for t in range(arr.shape[0])]
         return [arr]
 
-
-    # -- forward ----------------------------------------------------------- #
-
     def forward(self, batch: Observation | dict[str, Any]) -> dict[str, torch.Tensor]:
         """Preprocess an observation batch into RLDX ``inputs``.
 
@@ -524,44 +507,6 @@ class Rldx1Preprocessor(nn.Module):
         if isinstance(value, torch.Tensor):
             return value.to(torch.float32)
         return torch.as_tensor(np.asarray(value, dtype=np.float32))
-
-    # -- native denormalization (postprocessor) ---------------------------- #
-
-    def denormalize_action(self, action: torch.Tensor) -> torch.Tensor:
-        """Decode a normalized action chunk to the environment space (Stage 5).
-
-        PAS-native inverse of the forward action normalization: slices to the
-        unpadded action width and prediction horizon, optionally clamps to
-        ``[-1, 1]`` when ``clip_outliers`` is set (matching the vendored
-        ``unnormalize_values_minmax`` clip), then applies the inverse
-        :class:`FeatureNormalizeTransform`.
-
-        Args:
-            action: Predicted action ``(B, T, max_action_dim)``.
-
-        Returns:
-            Denormalized action ``(B, action_horizon, action_dim)`` in the
-            original environment space.
-
-        Raises:
-            RuntimeError: If no action statistics were provided.
-        """
-        if self._action_dim <= 0:
-            msg = "Cannot denormalize action: no action statistics were provided to the preprocessor."
-            raise RuntimeError(msg)
-
-        sliced = action[..., : self.action_horizon, : self._action_dim]
-        if self.clip_outliers:
-            sliced = sliced.clamp(-1.0, 1.0)
-
-        denorm_device = sliced.device
-        for buf in self._action_denormalizer.buffers():
-            denorm_device = buf.device
-            break
-
-        batch = {ACTION: sliced.to(denorm_device)}
-        batch = self._action_denormalizer(batch)
-        return batch[ACTION].to(action.device, action.dtype)
 
     @staticmethod
     def _index(value: Any, index: int) -> np.ndarray | None:  # noqa: ANN401
@@ -651,12 +596,17 @@ class Rldx1Postprocessor(nn.Module):
     """Postprocessor for RLDX-1 policy outputs.
 
     Decodes the RLDX ``action_pred`` ``(B, action_horizon, max_action_dim)``
-    back to the environment action space using the paired preprocessor's
-    PAS-native inverse normalization
-    (:meth:`Rldx1Preprocessor.denormalize_action`).
+    back to the environment action space using its own inverse
+    :class:`~physicalai.policies.utils.normalization.FeatureNormalizeTransform`.
 
     Args:
-        preprocessor: The paired preprocessor holding the normalization stats.
+        action_feature: Action :class:`~physicalai.data.Feature` carrying the
+            normalization statistics.  ``None`` skips denormalization.
+        use_percentiles: Use 1st/99th percentile bounds instead of min/max
+            (must match the paired preprocessor).
+        clip_outliers: Clamp normalized action to ``[-1, 1]`` before the
+            inverse transform (must match the paired preprocessor).
+        action_horizon: Number of action steps per chunk.
         env_action_dim: Original (unpadded) action dimension. ``0`` keeps the
             full decoded width.
 
@@ -669,15 +619,29 @@ class Rldx1Postprocessor(nn.Module):
     def __init__(
         self,
         *,
-        preprocessor: Rldx1Preprocessor,
+        action_feature: Feature | None = None,
+        use_percentiles: bool = True,
+        clip_outliers: bool = True,
+        action_horizon: int = ACTION_HORIZON,
         env_action_dim: int = 0,
     ) -> None:
-        """Initialize with the paired preprocessor and env action dimension."""
+        """Initialize the postprocessor."""
         super().__init__()
-        # Stored in a tuple so nn.Module does not register the preprocessor as a
-        # submodule (avoids duplicate state tracking under Lightning).
-        self._pre_ref = (preprocessor,)
+        self.action_horizon = action_horizon
+        self.clip_outliers = clip_outliers
         self.env_action_dim = env_action_dim
+
+        if action_feature is not None:
+            self._action_dim = int(action_feature.shape[0])
+            norm_map = build_state_action_norm_map(use_percentiles=use_percentiles)
+            self._action_denormalizer: nn.Module = FeatureNormalizeTransform(
+                {ACTION: action_feature},
+                norm_map,
+                inverse=True,
+            )
+        else:
+            self._action_dim = 0
+            self._action_denormalizer = nn.Identity()
 
     def forward(
         self,
@@ -694,13 +658,23 @@ class Rldx1Postprocessor(nn.Module):
             Action chunk ``(B, T, env_action_dim)`` (or ``(B, env_action_dim)``
             when the input was 2-D) in the original environment space.
         """
-        pre = self._pre_ref[0]
-
         squeeze = action.dim() == 2  # noqa: PLR2004
         if squeeze:
             action = action.unsqueeze(1)
 
-        out_t = pre.denormalize_action(action)
+        if self._action_dim > 0:
+            sliced = action[..., : self.action_horizon, : self._action_dim]
+            if self.clip_outliers:
+                sliced = sliced.clamp(-1.0, 1.0)
+            denorm_device = sliced.device
+            for buf in self._action_denormalizer.buffers():
+                denorm_device = buf.device
+                break
+            batch = {ACTION: sliced.to(denorm_device)}
+            batch = self._action_denormalizer(batch)
+            out_t = batch[ACTION].to(action.device, action.dtype)
+        else:
+            out_t = action
 
         if self.env_action_dim > 0 and out_t.shape[-1] >= self.env_action_dim:
             out_t = out_t[..., : self.env_action_dim]
@@ -786,8 +760,12 @@ def make_rldx1_transforms(
         embodiment_id=embodiment_id,
         stats=stats,
     )
+    action_feature = build_state_action_features(stats).get(ACTION)
     postprocessor = Rldx1Postprocessor(
-        preprocessor=preprocessor,
+        action_feature=action_feature,
+        use_percentiles=use_percentiles,
+        clip_outliers=clip_outliers,
+        action_horizon=action_horizon,
         env_action_dim=env_action_dim,
     )
     return preprocessor, postprocessor

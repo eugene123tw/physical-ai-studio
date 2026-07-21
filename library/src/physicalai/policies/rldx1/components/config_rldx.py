@@ -1,7 +1,7 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import MISSING, field
+from dataclasses import MISSING, field, Field
 from transformers import PretrainedConfig
 
 class RLDXNetworkConfig(PretrainedConfig):
@@ -266,12 +266,25 @@ class RLDXNetworkConfig(PretrainedConfig):
 
     def _fill_missing_defaults(self):
         """Set default values for any dataclass fields not yet on the instance."""
-        for f in self.__dataclass_fields__.values():
-            if not hasattr(self, f.name):
-                if f.default is not MISSING:
-                    setattr(self, f.name, f.default)
-                elif getattr(f, "default_factory", MISSING) is not MISSING:
-                    setattr(self, f.name, f.default_factory())
+        fields_dict = getattr(type(self), "__dataclass_fields__", None)
+        if fields_dict is not None:
+            # Class was decorated with @dataclass — use the standard fields map.
+            for f in fields_dict.values():
+                if not hasattr(self, f.name):
+                    if f.default is not MISSING:
+                        setattr(self, f.name, f.default)
+                    elif getattr(f, "default_factory", MISSING) is not MISSING:
+                        setattr(self, f.name, f.default_factory())
+        else:
+            # Class is NOT a @dataclass (inherits PretrainedConfig without the decorator).
+            # Scan the class dict for raw dataclasses.Field objects left behind by
+            # field(default_factory=...) calls and materialise their defaults.
+            for name, val in vars(type(self)).items():
+                if isinstance(val, Field) and name not in vars(self):
+                    if val.default is not MISSING:
+                        setattr(self, name, val.default)
+                    elif val.default_factory is not MISSING:  # type: ignore[misc]
+                        setattr(self, name, val.default_factory())
 
     def __getattr__(self, name: str):
         # Strict: no silent default fallback. Every declared dataclass

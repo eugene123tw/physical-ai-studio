@@ -58,8 +58,6 @@ from .vtc_buffer import VtcWindowBuffer
 from .preprocessor import make_rldx1_transforms  # noqa: PLC0415
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from .preprocessor import Rldx1Postprocessor, Rldx1Preprocessor
 
 logger = logging.getLogger(__name__)
@@ -104,6 +102,7 @@ class Rldx1(Policy):
         learning_rate: Learning rate for the optimizer.
         weight_decay: Weight decay for the optimizer.
         warmup_ratio: Warmup ratio (0.0-1.0) of total training steps.
+        scheduler_decay_lr: Final learning rate after cosine decay (default 1e-5).
         use_bf16: Whether to use bfloat16 precision.
         compile_model: Whether to torch.compile the model.
         gradient_checkpointing: Whether to enable activation checkpointing in
@@ -155,6 +154,7 @@ class Rldx1(Policy):
         learning_rate: float = 1e-4,
         weight_decay: float = 0.01,
         warmup_ratio: float = 0.05,
+        scheduler_decay_lr: float = 1e-5,
         # Precision / compilation
         use_bf16: bool = True,
         compile_model: bool = False,
@@ -199,6 +199,7 @@ class Rldx1(Policy):
             learning_rate=learning_rate,
             weight_decay=weight_decay,
             warmup_ratio=warmup_ratio,
+            scheduler_decay_lr=scheduler_decay_lr,
             use_bf16=use_bf16,
             compile_model=compile_model,
             gradient_checkpointing=gradient_checkpointing,
@@ -264,6 +265,7 @@ class Rldx1(Policy):
             learning_rate=config.learning_rate,
             weight_decay=config.weight_decay,
             warmup_ratio=config.warmup_ratio,
+            scheduler_decay_lr=config.scheduler_decay_lr,
             use_bf16=config.use_bf16,
             compile_model=config.compile_model,
             gradient_checkpointing=config.gradient_checkpointing,
@@ -427,6 +429,28 @@ class Rldx1(Policy):
             raise RuntimeError(msg)
         preprocessed = self._preprocessor(batch)
         return self.model.compute_val_loss(preprocessed)
+
+    def on_load_checkpoint(self, checkpoint: dict) -> None:
+        """Remap legacy state-dict keys before loading.
+
+        Checkpoints saved before the action denormalizer was moved from
+        ``_preprocessor`` to ``_postprocessor`` carry keys such as::
+
+            _preprocessor._action_denormalizer.buffer_action.q01
+
+        These are remapped to the current layout::
+
+            _postprocessor._action_denormalizer.buffer_action.q01
+        """
+        state_dict = checkpoint.get("state_dict", {})
+        old_prefix = "_preprocessor._action_denormalizer."
+        new_prefix = "_postprocessor._action_denormalizer."
+        remapped = {
+            (new_prefix + k[len(old_prefix):] if k.startswith(old_prefix) else k): v
+            for k, v in state_dict.items()
+        }
+        if remapped != state_dict:
+            checkpoint["state_dict"] = remapped
 
     def configure_optimizers(self) -> dict[str, Any]:
         """Create the configured optimizer and a cosine-decay-with-warmup scheduler.

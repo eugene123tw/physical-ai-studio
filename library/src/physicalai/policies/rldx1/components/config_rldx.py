@@ -19,7 +19,7 @@
 # This file has been modified from the original NVIDIA Isaac GR00T N1.7.
 # Original source: https://github.com/NVIDIA/Isaac-GR00T
 
-from dataclasses import MISSING, asdict, dataclass, field, is_dataclass
+from dataclasses import MISSING, asdict, field, is_dataclass
 from enum import Enum
 import json
 from pathlib import Path
@@ -29,7 +29,6 @@ from transformers import PretrainedConfig
 
 
 
-@dataclass
 class RLDXNetworkConfig(PretrainedConfig):
     """Unified configuration for RLDX model with backbone and action model."""
 

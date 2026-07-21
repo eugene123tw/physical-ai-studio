@@ -445,7 +445,7 @@ def tokenize_vlm_batch(
         processor.apply_chat_template(conv, tokenize=False, add_generation_prompt=False)
         for conv in conversations
     ]
-    image_inputs, _ = process_vision_info(conversations, image_patch_size=image_patch_size)
+    image_inputs = process_vision_info(conversations, image_patch_size=image_patch_size)
 
     processor_kwargs: dict[str, Any] = {
         "text": texts,

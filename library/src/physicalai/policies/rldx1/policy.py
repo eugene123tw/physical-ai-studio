@@ -55,10 +55,12 @@ from .config import Rldx1Config
 from .model import Rldx1Model
 from .vtc_buffer import VtcWindowBuffer
 
+from .preprocessor import make_rldx1_transforms  # noqa: PLC0415
+
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from .transforms import Rldx1Postprocessor, Rldx1Preprocessor
+    from .preprocessor import Rldx1Postprocessor, Rldx1Preprocessor
 
 logger = logging.getLogger(__name__)
 
@@ -280,7 +282,6 @@ class Rldx1(Policy):
             env_action_dim: Environment action dimension.
             dataset_stats: Dataset normalization statistics.
         """
-        from .transforms import make_rldx1_transforms  # noqa: PLC0415
 
         config = self.config
         self.model = Rldx1Model.from_pretrained(

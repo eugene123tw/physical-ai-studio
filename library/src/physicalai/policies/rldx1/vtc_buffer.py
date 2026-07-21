@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import torch
 
-from .transforms import Rldx1Preprocessor  # noqa: PLC0415
+from .preprocessor import Rldx1Preprocessor  # noqa: PLC0415
 from physicalai.data import Observation as Obs  # noqa: PLC0415
 
 if TYPE_CHECKING:

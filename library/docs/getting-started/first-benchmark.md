@@ -164,6 +164,56 @@ benchmark = PushTBenchmark(num_episodes=50)
 results = benchmark.evaluate(policy)
 ```
 
+## RoboCasa (Kitchen)
+
+Kitchen manipulation benchmark. RoboCasa requires a dedicated virtual environment because its dependencies conflict with the main library. Do not use `uv sync --extra all` or `uv sync --extra libero` for this environment.
+
+**Prerequisites:**
+
+```bash
+uv venv .venv-robocasa
+source .venv-robocasa/bin/activate
+uv sync --active --extra cu128          # or cpu / xpu
+
+bash library/scripts/benchmark/install_robocasa.sh
+
+# Download kitchen assets (~4.4 GB on disk; prompts interactively)
+yes y | python -m robocasa.scripts.download_kitchen_assets \
+    --type tex tex_generative fixtures_lw objs_lw
+
+# Headless servers
+export MUJOCO_GL=egl
+```
+
+**CLI:**
+
+```bash
+physicalai benchmark \
+    --benchmark physicalai.benchmark.gyms.RoboCasaBenchmark \
+    --benchmark.task atomic_seen \
+    --benchmark.num_episodes 20 \
+    --policy physicalai.policies.ACT \
+    --ckpt_path experiments/lightning_logs/version_0/checkpoints/last.ckpt
+```
+
+**Python API:**
+
+```python test="skip" reason="requires robocasa dedicated venv"
+from physicalai.benchmark.gyms import RoboCasaBenchmark
+from physicalai.policies import ACT
+
+policy = ACT.load_from_checkpoint(
+    "experiments/lightning_logs/version_0/checkpoints/last.ckpt"
+)
+policy.eval()
+
+benchmark = RoboCasaBenchmark(task="atomic_seen", num_episodes=20)
+results = benchmark.evaluate(policy)
+print(results.summary())
+```
+
+See [RoboCasa explanation](../explanation/gyms/robocasa.md) for details on the dedicated venv and dependency conflicts.
+
 ## Quick Test Run
 
 Test a single task before full evaluation:

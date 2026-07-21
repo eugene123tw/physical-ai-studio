@@ -11,6 +11,7 @@ import pytest
 import torch
 
 from physicalai.benchmark.gyms import Benchmark, BenchmarkResults, LiberoBenchmark, TaskResult
+from physicalai.benchmark.gyms.robocasa.robocasa import RoboCasaBenchmark, RoboCasaMaxSteps
 
 
 @pytest.fixture
@@ -104,6 +105,51 @@ class TestLiberoBenchmark:
     def test_repr(self):
         with patch("physicalai.gyms.create_libero_gyms", return_value=[MagicMock()]):
             assert "libero_10" in repr(LiberoBenchmark(task_suite="libero_10"))
+
+
+class TestRoboCasaBenchmark:
+    @pytest.fixture(autouse=True)
+    def _require_robocasa(self) -> None:
+        pytest.importorskip("robocasa")
+        pytest.importorskip("robosuite")
+
+    def test_robocasa_benchmark_default_construction(self):
+        b = RoboCasaBenchmark()
+        assert b.task == "atomic_seen"
+        assert b.num_episodes == 20
+        assert len(b.gyms) == 18
+        assert b.max_steps == 1000
+
+    def test_robocasa_benchmark_empty_task_raises(self):
+        with pytest.raises(ValueError, match="at least one RoboCasa task name"):
+            RoboCasaBenchmark(task="")
+
+    def test_robocasa_benchmark_max_steps_resolution(self):
+        for group in (
+            "atomic_seen",
+            "composite_seen",
+            "composite_unseen",
+            "pretrain50",
+            "pretrain100",
+            "pretrain200",
+            "pretrain300",
+        ):
+            assert RoboCasaMaxSteps[group].value == 1000, f"IntEnum group={group}"
+            b = RoboCasaBenchmark(task=group)
+            assert b.max_steps == 1000, f"group={group}"
+
+    def test_robocasa_benchmark_repr_includes_task(self):
+        b = RoboCasaBenchmark()
+        r = repr(b)
+        assert r.startswith("RoboCasaBenchmark(")
+        assert "task='atomic_seen'" in r
+        assert "max_steps=1000" in r
+
+    def test_robocasa_benchmark_sets_task_id_on_gyms(self):
+        b = RoboCasaBenchmark()
+        gym = b.gyms[0]
+        assert gym.task_id == gym.task
+        assert gym.task_suite_name == "atomic_seen"
 
 
 class TestWrapPolicy:

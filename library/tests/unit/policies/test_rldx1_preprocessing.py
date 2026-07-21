@@ -482,7 +482,7 @@ def _make_obs_batch(*, batch_size: int, with_action: bool, seed: int) -> dict[st
 @pytest.fixture(scope="module")
 def rldx1_preprocessor():  # noqa: ANN201
     """Build a preprocessor and trigger the VLM load, skipping if uncached."""
-    from physicalai.policies.rldx1.transforms import Rldx1Preprocessor
+    from physicalai.policies.rldx1.preprocessor import Rldx1Preprocessor
 
     stats = {
         OBSERVATION_STATE: _stat(STATE_DIM, seed=0),
@@ -549,7 +549,7 @@ def test_native_forward_contract(rldx1_preprocessor, with_action: bool) -> None:
 @pytest.mark.parametrize("use_percentiles", [True, False])
 def test_denormalize_action_matches_vendored(use_percentiles: bool) -> None:
     """Native action denormalization matches the vendored ``StateActionProcessor``."""
-    from physicalai.policies.rldx1.transforms import Rldx1Preprocessor
+    from physicalai.policies.rldx1.preprocessor import make_rldx1_transforms
 
     state_stat = _stat(STATE_DIM, seed=4)
     action_stat = _stat(ACTION_DIM, seed=5)
@@ -557,7 +557,7 @@ def test_denormalize_action_matches_vendored(use_percentiles: bool) -> None:
         OBSERVATION_STATE: state_stat,
         "action": action_stat,
     }
-    pre = Rldx1Preprocessor(
+    _, post = make_rldx1_transforms(
         stats=stats,
         max_state_dim=MAX_STATE_DIM,
         max_action_dim=MAX_ACTION_DIM,
@@ -570,7 +570,7 @@ def test_denormalize_action_matches_vendored(use_percentiles: bool) -> None:
     # out-of-range values to exercise the clip parity).
     pred = rng.uniform(-1.3, 1.3, size=(2, ACTION_HORIZON, MAX_ACTION_DIM)).astype(np.float32)
 
-    native = pre.denormalize_action(torch.from_numpy(pred))
+    native = post(torch.from_numpy(pred))
 
     # Vendored oracle: slice the padded prediction to the unpadded action width
     # (mirrors RLDXProcessor.decode_action), then invert via the numpy processor.
@@ -641,7 +641,7 @@ def test_rldx1_delta_timestamps_via_policy_router() -> None:
 )
 def test_split_frames_single_and_multi(shape: tuple[int, ...], expected_frames: int) -> None:
     """``_split_frames`` returns one array for 3-D and T arrays for 4-D inputs."""
-    from physicalai.policies.rldx1.transforms import Rldx1Preprocessor
+    from physicalai.policies.rldx1.preprocessor import Rldx1Preprocessor
 
     arr = np.zeros(shape, dtype=np.uint8)
     frames = Rldx1Preprocessor._split_frames(arr)  # noqa: SLF001 - unit under test
@@ -734,7 +734,7 @@ def test_multiframe_forward_matches_vendored() -> None:
     ordering and the reported frame count.
     """
     from physicalai.policies.rldx1.preprocessing import formalize_language as native_formalize
-    from physicalai.policies.rldx1.transforms import Rldx1Preprocessor
+    from physicalai.policies.rldx1.preprocessor import Rldx1Preprocessor
 
     try:
         processor = _vendored_vtc_processor(_VLM_MODEL_NAME)

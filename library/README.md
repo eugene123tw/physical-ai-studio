@@ -29,7 +29,7 @@ PhysicalAI Library is a Python SDK for training, evaluating, and deploying Visio
 - Simple and modular API and CLI for training, inference, and benchmarking.
 - Built on [Lightning](https://www.lightning.ai/) for reduced boilerplate and distributed training support.
 - Export models to [OpenVINO](https://docs.openvino.ai/), ONNX, or Torch formats for accelerated inference.
-- Benchmark policies on standardized environments like LIBERO and PushT.
+- Benchmark policies on standardized environments like LIBERO, PushT, and RoboCasa.
 - Unified inference API across all export backends.
 
 ## Supported Policies
@@ -135,6 +135,25 @@ policy.eval()
 
 # Run benchmark
 benchmark = LiberoBenchmark(task_suite="libero_10", num_episodes=20)
+results = benchmark.evaluate(policy)
+
+# View results
+print(results.summary())
+results.to_json("results.json")
+```
+
+RoboCasa requires a dedicated virtual environment. Install it with `bash library/scripts/benchmark/install_robocasa.sh`.
+
+```python test="skip" reason="requires robocasa dedicated venv"
+from physicalai.benchmark.gyms import RoboCasaBenchmark
+from physicalai.policies import ACT
+
+# Load trained policy
+policy = ACT.load_from_checkpoint("experiments/lightning_logs/version_0/checkpoints/last.ckpt")
+policy.eval()
+
+# Run benchmark
+benchmark = RoboCasaBenchmark(task="atomic_seen", num_episodes=20)
 results = benchmark.evaluate(policy)
 
 # View results

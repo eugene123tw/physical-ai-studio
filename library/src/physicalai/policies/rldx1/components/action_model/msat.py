@@ -525,15 +525,11 @@ class JointBase(ModelMixin, ConfigMixin):
 
         if len(self.single_blocks) > 0:
             vl_projected = self.vl_proj_to_sa(vl)
-            N_vl_for_single = vl.shape[
-                1
-            ]  # Track VL length for Single Stream Block RoPE calculation
+            # Track VL length for Single Stream Block RoPE calculation
+            N_vl_for_single = vl.shape[1]  
 
             # Re-concat with updated time_token: VL | (time_token) | S | A
-            if has_time_token:
-                x = torch.cat([vl_projected, time_token, sa], dim=1)
-            else:
-                x = torch.cat([vl_projected, sa], dim=1)
+            x = torch.cat([vl_projected, time_token, sa], dim=1) if has_time_token else torch.cat([vl_projected, sa], dim=1)
 
         # Single Stream Blocks
         if len(self.single_blocks) > 0:
@@ -547,9 +543,7 @@ class JointBase(ModelMixin, ConfigMixin):
                 action_start_idx_in_x = N_total - N_action_pure
 
                 # 2D RoPE
-                ids_single = torch.zeros(
-                    B_single, N_total, 2, dtype=torch.long, device=device_single
-                )
+                ids_single = torch.zeros(B_single, N_total, 2, dtype=torch.long, device=device_single)
 
                 if self.positional_embeddings == "rope_sa_only":
                     current_idx = N_vl_for_single

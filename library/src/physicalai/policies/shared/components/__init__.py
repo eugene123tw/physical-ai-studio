@@ -8,6 +8,7 @@ from physicalai.policies.shared.components.nn import (
     CategorySpecificMLP,
     MultiEmbodimentActionEncoder,
     SinusoidalPositionalEncoding,
+    TimestepEncoder,
     swish,
 )
 
@@ -17,4 +18,5 @@ __all__ = [
     "CategorySpecificLinear",
     "CategorySpecificMLP",
     "MultiEmbodimentActionEncoder",
+    "TimestepEncoder",
 ]

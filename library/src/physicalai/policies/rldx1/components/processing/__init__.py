@@ -1,7 +1,9 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
+# Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 
 # SPDX-License-Identifier: Apache-2.0
+# Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 #
 # Vendored RLDX-1 data-processing pipeline.
 #

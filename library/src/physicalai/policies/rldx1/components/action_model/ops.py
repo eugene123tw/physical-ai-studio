@@ -1,5 +1,6 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
+# Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 #
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0), itself modified from NVIDIA Isaac
 # GR00T N1.7. Upstream: https://github.com/rlwrld/RLDX-1
@@ -7,11 +8,10 @@
 # Original: https://github.com/NVIDIA/Isaac-GR00T
 # Studio modification: import paths rewritten to this vendored subpackage.
 
-"""MSAT utility ops: RoPE, TimestepEncoder, SwiGLUFFN, head utils (extracted from msat.py)."""
+"""MSAT utility ops: RoPE SwiGLUFFN, head utils (extracted from msat.py)."""
 
 from typing import Callable, Optional
 
-from diffusers.models.embeddings import TimestepEmbedding, Timesteps
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -127,19 +127,6 @@ class RoPEEmbedder1D(nn.Module):
 
         return torch.cat(freqs_list, dim=-1)
 
-
-# Encoders ================================================
-class TimestepEncoder(nn.Module):
-    def __init__(self, embedding_dim, compute_dtype=torch.float32):
-        super().__init__()
-        self.time_proj = Timesteps(num_channels=256, flip_sin_to_cos=True, downscale_freq_shift=1)
-        self.timestep_embedder = TimestepEmbedding(in_channels=256, time_embed_dim=embedding_dim)
-
-    def forward(self, timesteps):
-        dtype = next(self.parameters()).dtype
-        timesteps_proj = self.time_proj(timesteps).to(dtype)
-        timesteps_emb = self.timestep_embedder(timesteps_proj)  # (N, D)
-        return timesteps_emb
 
 
 # Normalization and FFN ================================================

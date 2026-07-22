@@ -1,11 +1,12 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
+# Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 
 """MSAT: Multi-Stream Action Transformer (top-level orchestrator).
 
 Submodules:
 - attention.py: BasicTransformerBlock, SelfAttentionTransformer
-- ops.py: RoPE, TimestepEncoder, SwiGLUFFN, head utilities
+- ops.py: RoPE, SwiGLUFFN, head utilities
 - blocks.py: Modulation and stream blocks used by MSAT
 """
 
@@ -25,11 +26,12 @@ from physicalai.policies.rldx1.components.action_model.blocks import (
     ModulationOut,
     SingleStreamBlock,
 )
-from physicalai.policies.rldx1.components.action_model.ops import RoPEEmbedder1D, TimestepEncoder
+from physicalai.policies.rldx1.components.action_model.ops import RoPEEmbedder1D
 
 # Re-export so callers can import ``_print`` from ``msat`` directly.
 from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 
+from physicalai.policies.shared.components.nn import TimestepEncoder
 
 __all__ = [
     "BasicTransformerBlock",
@@ -47,6 +49,17 @@ class JointBase(ModelMixin, ConfigMixin):
     """
 
     _supports_gradient_checkpointing = True
+
+    def _apply_checkpoint(self, func, *args):
+        """Apply gradient checkpointing if enabled, matching Pi05Model's convention."""
+        if self.gradient_checkpointing and self.training:
+            return torch.utils.checkpoint.checkpoint(
+                func,
+                *args,
+                use_reentrant=False,
+                preserve_rng_state=False,
+            )
+        return func(*args)
 
     def _build_double_blocks(
         self,
@@ -484,41 +497,24 @@ class JointBase(ModelMixin, ConfigMixin):
         # Track block index
         block_idx = 0
         for blk in self.double_blocks:
-            use_gc = (
-                torch.is_grad_enabled()
-                and self.gradient_checkpointing
-                and self._gradient_checkpointing_func is not None
-            )
-            if use_gc:
-                def _run_double(
-                    sa_tokens: torch.Tensor,
-                    vl_tokens: torch.Tensor,
-                    _blk=blk,
-                    _block_idx=block_idx,
-                ):
-                    return _blk(
-                        sa_tokens,
-                        vl_tokens,
-                        temb,
-                        pe=pe,
-                        shared_modulations=shared_modulations,
-                        has_time_token=has_time_token,
-                        block_idx=_block_idx,
-                        encoder_attention_mask=encoder_attention_mask,
-                    )
-
-                sa, vl = self._gradient_checkpointing_func(_run_double, sa, vl)
-            else:
-                sa, vl = blk(
-                    sa,
-                    vl,
+            def _run_double(
+                sa_tokens: torch.Tensor,
+                vl_tokens: torch.Tensor,
+                _blk=blk,
+                _block_idx=block_idx,
+            ):
+                return _blk(
+                    sa_tokens,
+                    vl_tokens,
                     temb,
                     pe=pe,
                     shared_modulations=shared_modulations,
                     has_time_token=has_time_token,
-                    block_idx=block_idx,
+                    block_idx=_block_idx,
                     encoder_attention_mask=encoder_attention_mask,
                 )
+
+            sa, vl = self._apply_checkpoint(_run_double, sa, vl)
             all_hidden.append(sa)
             block_idx += 1
 
@@ -619,38 +615,22 @@ class JointBase(ModelMixin, ConfigMixin):
 
             # block_idx already tracks the number of DoubleStreamBlocks processed
             for blk in self.single_blocks:
-                use_gc = (
-                    torch.is_grad_enabled()
-                    and self.gradient_checkpointing
-                    and self._gradient_checkpointing_func is not None
-                )
-                if use_gc:
-                    def _run_single(
-                        x_tokens: torch.Tensor,
-                        _blk=blk,
-                        _block_idx=block_idx,
-                    ):
-                        return _blk(
-                            x_tokens,
-                            temb,
-                            pe=pe_single if pe_single is not None else pe,
-                            shared_modulation=shared_single_modulation,
-                            time_token=time_token if has_time_token else None,
-                            block_idx=_block_idx,
-                            attn_mask=single_attn_mask,
-                        )
-
-                    x = self._gradient_checkpointing_func(_run_single, x)
-                else:
-                    x = blk(
-                        x,
+                def _run_single(
+                    x_tokens: torch.Tensor,
+                    _blk=blk,
+                    _block_idx=block_idx,
+                ):
+                    return _blk(
+                        x_tokens,
                         temb,
                         pe=pe_single if pe_single is not None else pe,
                         shared_modulation=shared_single_modulation,
                         time_token=time_token if has_time_token else None,
-                        block_idx=block_idx,
+                        block_idx=_block_idx,
                         attn_mask=single_attn_mask,
                     )
+
+                x = self._apply_checkpoint(_run_single, x)
                 block_idx += 1
 
             # Extract Action Part
@@ -767,46 +747,27 @@ class JointBase(ModelMixin, ConfigMixin):
         # ── Lower: Triple blocks [VL | SA | P] ───────────────────────────
         block_idx = 0
         for blk in self.double_blocks:
-            use_gc = (
-                torch.is_grad_enabled()
-                and self.gradient_checkpointing
-                and self._gradient_checkpointing_func is not None
-            )
-            if use_gc:
-                def _run_expanded_double(
-                    sa_tokens: torch.Tensor,
-                    vl_tokens: torch.Tensor,
-                    p_tokens: torch.Tensor,
-                    _blk=blk,
-                    _block_idx=block_idx,
-                ):
-                    return _blk(
-                        sa_tokens,
-                        vl_tokens,
-                        temb,
-                        pe=pe,
-                        shared_modulations=shared_modulations,
-                        has_time_token=has_time_token,
-                        block_idx=_block_idx,
-                        encoder_attention_mask=encoder_attention_mask,
-                        p_tokens=p_tokens,
-                        physics_attention_mask=physics_attention_mask,
-                    )
-
-                sa, vl, p = self._gradient_checkpointing_func(_run_expanded_double, sa, vl, p)
-            else:
-                sa, vl, p = blk(
-                    sa,
-                    vl,
+            def _run_expanded_double(
+                sa_tokens: torch.Tensor,
+                vl_tokens: torch.Tensor,
+                p_tokens: torch.Tensor,
+                _blk=blk,
+                _block_idx=block_idx,
+            ):
+                return _blk(
+                    sa_tokens,
+                    vl_tokens,
                     temb,
                     pe=pe,
                     shared_modulations=shared_modulations,
                     has_time_token=has_time_token,
-                    block_idx=block_idx,
+                    block_idx=_block_idx,
                     encoder_attention_mask=encoder_attention_mask,
-                    p_tokens=p,
+                    p_tokens=p_tokens,
                     physics_attention_mask=physics_attention_mask,
                 )
+
+            sa, vl, p = self._apply_checkpoint(_run_expanded_double, sa, vl, p)
             all_hidden.append(sa)
             block_idx += 1
 
@@ -899,41 +860,24 @@ class JointBase(ModelMixin, ConfigMixin):
                 )
 
             for blk in self.single_blocks:
-                use_gc = (
-                    torch.is_grad_enabled()
-                    and self.gradient_checkpointing
-                    and self._gradient_checkpointing_func is not None
-                )
-                if use_gc:
-                    def _run_expanded_single(
-                        x_tokens: torch.Tensor,
-                        p_tokens: torch.Tensor,
-                        _blk=blk,
-                        _block_idx=block_idx,
-                    ):
-                        return _blk(
-                            x_tokens,
-                            temb,
-                            pe=pe_single,
-                            shared_modulation=shared_single_modulation,
-                            time_token=time_token if has_time_token else None,
-                            block_idx=_block_idx,
-                            p_tokens=p_tokens,
-                            attn_mask=single_attn_mask,
-                        )
-
-                    x, p = self._gradient_checkpointing_func(_run_expanded_single, x, p)
-                else:
-                    x, p = blk(
-                        x,
+                def _run_expanded_single(
+                    x_tokens: torch.Tensor,
+                    p_tokens: torch.Tensor,
+                    _blk=blk,
+                    _block_idx=block_idx,
+                ):
+                    return _blk(
+                        x_tokens,
                         temb,
                         pe=pe_single,
                         shared_modulation=shared_single_modulation,
                         time_token=time_token if has_time_token else None,
-                        block_idx=block_idx,
-                        p_tokens=p,
+                        block_idx=_block_idx,
+                        p_tokens=p_tokens,
                         attn_mask=single_attn_mask,
                     )
+
+                x, p = self._apply_checkpoint(_run_expanded_single, x, p)
                 block_idx += 1
 
             sa = x[:, -sa.shape[1] :, :]

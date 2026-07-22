@@ -20,6 +20,24 @@ import torch.nn.functional as F  # noqa: N812
 from torch import nn
 
 
+def _import_diffusers() -> tuple:
+    """Lazy import of diffusers timestep embedding components.
+
+    Returns:
+        Tuple of (TimestepEmbedding, Timesteps) classes.
+
+    Raises:
+        ImportError: If diffusers is not installed.
+    """
+    try:
+        from diffusers.models.embeddings import TimestepEmbedding, Timesteps  # noqa: PLC0415
+    except ImportError as e:
+        msg = "TimestepEncoder requires diffusers.\n\nInstall with:\n    pip install diffusers"
+        raise ImportError(msg) from e
+    else:
+        return TimestepEmbedding, Timesteps
+
+
 def swish(x: torch.Tensor) -> torch.Tensor:
     """Swish activation function: x * sigmoid(x).
 
@@ -230,6 +248,43 @@ class CategorySpecificMLP(nn.Module):
         )
 
 
+class TimestepEncoder(nn.Module):
+    """Encode diffusion timesteps into embeddings via diffusers sinusoidal projection.
+
+    Requires ``diffusers`` to be installed; the import is deferred to
+    ``__init__`` so this module can be imported without diffusers.
+
+    Args:
+        embedding_dim: Output embedding dimension.
+        compute_dtype: Unused; kept for API compatibility with upstream.
+    """
+
+    def __init__(self, embedding_dim: int, compute_dtype: torch.dtype = torch.float32) -> None:  # noqa: ARG002
+        """Initialize timestep encoder.
+
+        Args:
+            embedding_dim: Output embedding dimension.
+            compute_dtype: Compute dtype (not used, for API compatibility).
+        """
+        super().__init__()
+        timestep_embedding_cls, timesteps_cls = _import_diffusers()
+        self.time_proj = timesteps_cls(num_channels=256, flip_sin_to_cos=True, downscale_freq_shift=1)
+        self.timestep_embedder = timestep_embedding_cls(in_channels=256, time_embed_dim=embedding_dim)
+
+    def forward(self, timesteps: torch.Tensor) -> torch.Tensor:
+        """Encode timesteps.
+
+        Args:
+            timesteps: Timestep indices.
+
+        Returns:
+            Timestep embeddings.
+        """
+        dtype = next(self.parameters()).dtype
+        timesteps_proj = self.time_proj(timesteps).to(dtype)
+        return self.timestep_embedder(timesteps_proj)
+
+
 class MultiEmbodimentActionEncoder(nn.Module):
     """Encodes actions and timesteps for multi-embodiment settings.
 
@@ -286,6 +341,7 @@ class MultiEmbodimentActionEncoder(nn.Module):
         if timesteps.dim() == 1 and timesteps.shape[0] == b:
             timesteps = timesteps.unsqueeze(1).expand(-1, t)
         elif timesteps.dim() == 2 and timesteps.shape == (b, t):
+            # RLDX-1 users per-token timesteps
             pass
         else:
             msg = (

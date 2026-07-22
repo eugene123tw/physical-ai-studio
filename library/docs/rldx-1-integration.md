@@ -107,10 +107,10 @@ single-frame, deterministic-geometry pipeline. Gaps to close for phase 1:
 
 | # | Missing behaviour | Upstream reference | Current PAS state |
 | - | ----------------- | ------------------ | ----------------- |
-| 1 | 4-frame temporal stacking at strides `[-6,-4,-2,0]` | [`extract_step_data`](../../RLDX-1/rldx/data/dataset/sharded_single_step_dataset.py#L31), [video.py](../../RLDX-1/rldx/experiment/features/video.py#L22-L40) | `NUM_FRAMES` hardcoded to `1` — [transforms.py#L363](../src/physicalai/policies/rldx1/transforms.py#L363); `video_length`/`video_stride` present but unused — [config_rldx.py#L253](../src/physicalai/policies/rldx1/components/config_rldx.py#L253) |
+| 1 | 4-frame temporal stacking at strides `[-6,-4,-2,0]` | [`extract_step_data`](../../RLDX-1/rldx/data/dataset/sharded_single_step_dataset.py#L31), [video.py](../../RLDX-1/rldx/experiment/features/video.py#L22-L40) | `NUM_FRAMES` hardcoded to `1` — [transforms.py#L363](../src/physicalai/policies/rldx1/preprocessor.py#L363); `video_length`/`video_stride` present but unused — [config_rldx.py#L253](../src/physicalai/policies/rldx1/components/config_rldx.py#L253) |
 | 2 | `AspectAreaResizeAndCrop` (area-budget resize → 32-aligned crop) | [augmentations.py#L137](../../RLDX-1/rldx/data/augmentations.py#L137) | `AspectAreaResizeAndCrop` (shared eval+train geometry) — [augmentations.py](../src/physicalai/policies/rldx1/augmentations.py) |
 | 3 | Replay-consistent augmentation (`apply_with_replay` + `ReplayCompose`: ColorJitter, random crop) — one sampled param set across all 4 frames | [augmentations.py#L84](../../RLDX-1/rldx/data/augmentations.py#L84) | dropped — [preprocessing.py#L30](../src/physicalai/policies/rldx1/preprocessing.py#L30) |
-| 4 | Multi-frame conversation assembly (`num_frames` image tokens per view into the Qwen chat template) | RLDXProcessor `_get_vlm_inputs` — [processing_rldx.py](../../RLDX-1/rldx/model/core/processing_rldx.py#L615) | single-frame conversation — `_build_conversations` in [transforms.py](../src/physicalai/policies/rldx1/transforms.py) |
+| 4 | Multi-frame conversation assembly (`num_frames` image tokens per view into the Qwen chat template) | RLDXProcessor `_get_vlm_inputs` — [processing_rldx.py](../../RLDX-1/rldx/model/core/processing_rldx.py#L615) | single-frame conversation — `_build_conversations` in [transforms.py](../src/physicalai/policies/rldx1/preprocessor.py) |
 | 5 | **Inference-time** frame stacking — assemble the `[-6,-4,-2,0]` window from a per-env-step history buffer at rollout | `MultiStepWrapper` — [multistep_wrapper.py](../../RLDX-1/rldx/eval/sim/wrapper/multistep_wrapper.py#L175-L270) (deque size `span+1`, reset-filled with the initial frame, sampled at the delta offsets) | not implemented — gyms feed a single frame per step |
 
 The backbone adapter already accepts `num_frames`
@@ -149,7 +149,7 @@ policy).
    keys + fps from the dataset metadata (no per-view key lists).
 2. ✅ **Preprocessor** — `NUM_FRAMES` now reports the real frame count and
    `_build_conversations` stacks frames **frame-major / view-inner** into
-   the Qwen conversation ([transforms.py](../src/physicalai/policies/rldx1/transforms.py)).
+   the Qwen conversation ([transforms.py](../src/physicalai/policies/rldx1/preprocessor.py)).
 3. ✅ **Image geometry** — eval and train share a single `AspectAreaResizeAndCrop`
    transform; eval runs it as a deterministic `A.Compose`, train wraps it with
    the stochastic stages in a `ReplayCompose`.

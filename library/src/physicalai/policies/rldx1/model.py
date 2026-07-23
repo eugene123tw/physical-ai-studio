@@ -23,6 +23,7 @@ contract.
 
 from __future__ import annotations
 
+import os
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -31,11 +32,13 @@ import torch.nn.functional as F
 
 from physicalai.policies.base import Model
 
+from physicalai.policies.rldx1.components.config_rldx import RLDXNetworkConfig
+from physicalai.policies.rldx1.components.core_rldx import RLDX
+from physicalai.policies.rldx1.pretrained_utils import load_rldx_state_dict
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from physicalai.policies.rldx1.components.config_rldx import RLDXNetworkConfig
-    from physicalai.policies.rldx1.components.core_rldx import RLDX
 
 logger = logging.getLogger(__name__)
 
@@ -309,20 +312,13 @@ class Rldx1Model(Model):
         # ``flash_attention_2`` requires CUDA + the flash-attn package). Map the
         # requested ``attn_implementation`` onto it *before* importing the
         # vendored stack so CPU / XPU loads default to ``sdpa``.
-        import os  # noqa: PLC0415
-
+        
         backbone_attn = (
             attn_implementation
             if attn_implementation in {"sdpa", "eager", "flash_attention_2"}
             else "sdpa"
         )
         os.environ.setdefault("RLDX_ATTN_IMPL", backbone_attn)
-
-        from physicalai.policies.rldx1.components.config_rldx import RLDXNetworkConfig  # noqa: PLC0415
-        from physicalai.policies.rldx1.components.core_rldx import RLDX  # noqa: PLC0415
-        from physicalai.policies.rldx1.pretrained_utils import (  # noqa: PLC0415
-            load_rldx_state_dict,
-        )
 
         cfg: RLDXNetworkConfig = RLDXNetworkConfig.from_pretrained(base_model_path, revision=revision)
         cfg.diffusion_model_cfg["gradient_checkpointing"] = gradient_checkpointing

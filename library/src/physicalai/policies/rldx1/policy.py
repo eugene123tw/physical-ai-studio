@@ -140,10 +140,10 @@ class Rldx1(Policy):
         n_cog_tokens: int = 64,
         # Fine-tuning control
         *,
-        tune_top_llm_layers: int = 4,
+        tune_top_llm_layers: int = 6,
         tune_llm: bool = False,
         backbone_trainable_params_fp32: bool = True,
-        tune_visual: bool = False,
+        tune_visual: bool = True,
         tune_projector: bool = True,
         tune_diffusion_model: bool = True,
         tune_vlln: bool = True,
@@ -218,7 +218,6 @@ class Rldx1(Policy):
         self.model: Rldx1Model | None = None
         self._preprocessor: Rldx1Preprocessor | None = None
         self._postprocessor: Rldx1Postprocessor | None = None
-        self._is_setup_complete: bool = False
 
         # Per-view VTC frame buffer for rollout. Populated every env-step via
         # ``select_action``; ``prepare`` assembles the temporal window for
@@ -342,7 +341,6 @@ class Rldx1(Policy):
             color_jitter_params=config.color_jitter_params,
             embodiment_id=config.embodiment_id,
         )
-        self._is_setup_complete = True ## ??? is it neceesary???
 
     def setup(self, stage: str) -> None:  # noqa: ARG002
         """Lazy-init the model from the datamodule before fit/validate/test.

@@ -13,10 +13,10 @@ from physicalai.policies.shared.components.nn import (
 )
 
 __all__ = [
-    "swish",
-    "SinusoidalPositionalEncoding",
     "CategorySpecificLinear",
     "CategorySpecificMLP",
     "MultiEmbodimentActionEncoder",
+    "SinusoidalPositionalEncoding",
     "TimestepEncoder",
+    "swish",
 ]

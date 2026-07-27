@@ -62,7 +62,6 @@ from physicalai.data import Feature, FeatureType, NormalizationParameters
 from physicalai.data.observation import ACTION, STATE
 from physicalai.policies.utils.normalization import NormalizationType
 
-
 from .components.processing.qwen_vision_process import process_vision_info
 
 if TYPE_CHECKING:
@@ -441,11 +440,7 @@ def tokenize_vlm_batch(
         The processor output (``input_ids``, ``attention_mask``,
         ``pixel_values``, ``image_grid_thw``, ...).
     """
-
-    texts = [
-        processor.apply_chat_template(conv, tokenize=False, add_generation_prompt=False)
-        for conv in conversations
-    ]
+    texts = [processor.apply_chat_template(conv, tokenize=False, add_generation_prompt=False) for conv in conversations]
     image_inputs = process_vision_info(conversations, image_patch_size=image_patch_size)
 
     processor_kwargs: dict[str, Any] = {

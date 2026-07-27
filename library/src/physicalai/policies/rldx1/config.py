@@ -41,7 +41,6 @@ from typing import Literal
 
 from physicalai.config import Config
 
-
 # Size of the per-embodiment projector bank in RLDX-1-PT (``W.shape[0]`` of each
 # CategorySpecificLinear). Valid ``embodiment_id`` slots are ``[0, 36)``.
 MAX_NUM_EMBODIMENTS = 36
@@ -301,7 +300,6 @@ class Rldx1Config(Config):
                 raise NotImplementedError(msg)
 
         self.embodiment_id = self._resolve_embodiment_id(self.embodiment_id)
-
 
     @staticmethod
     def _resolve_embodiment_id(value: int | str) -> int:

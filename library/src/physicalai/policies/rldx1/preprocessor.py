@@ -42,18 +42,16 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-
-from PIL import Image  # noqa: PLC0415
-
 import numpy as np
 import torch
+from PIL import Image
 from torch import nn
+from transformers import AutoProcessor
 
 from physicalai.data.observation import ACTION, IMAGES, STATE, TASK, Observation
 from physicalai.policies.utils.normalization import FeatureNormalizeTransform
 
-from transformers import AutoProcessor
-
+from .augmentations import apply_with_replay, build_image_transformations_albumentations
 from .preprocessing import (
     build_qwen_conversation,
     build_state_action_features,
@@ -63,9 +61,6 @@ from .preprocessing import (
     pad_state_action,
     tokenize_vlm_batch,
 )
-
-from .augmentations import apply_with_replay
-from .augmentations import build_image_transformations_albumentations
 
 if TYPE_CHECKING:
     from transformers import ProcessorMixin
@@ -330,7 +325,6 @@ class Rldx1Preprocessor(nn.Module):
         Returns:
             ``(pil_frames, replay)``.
         """
-
         train_transform, eval_transform = self._image_transforms
         transform = train_transform if (self.training and self._augment) else eval_transform
         tensors, replay = apply_with_replay(transform, frames, replay)

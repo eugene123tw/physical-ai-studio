@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 
-from dataclasses import MISSING, field, Field
+from dataclasses import MISSING, Field, field
+
 from transformers import PretrainedConfig
+
 
 class RLDXNetworkConfig(PretrainedConfig):
     """Unified configuration for RLDX model with backbone and action model."""
@@ -33,7 +35,7 @@ class RLDXNetworkConfig(PretrainedConfig):
     backbone_trainable_params_fp32: bool = False
     freeze_cog_tokens: bool = False  # Freeze cog_emb to prevent VLM backprop
 
-    ### Image pipeline parameters
+    # Image pipeline parameters
     # Step 1 — aspect-ratio-preserving resize + m-aligned crop
     image_max_area: int = 65536  # 256 * 256 by default
     image_resize_m: int = 32
@@ -43,9 +45,7 @@ class RLDXNetworkConfig(PretrainedConfig):
     random_rotation_angle: int | None = None
     color_jitter_params: dict[str, float] | None = None
     formalize_language: bool = True
-    apply_sincos_state_encoding: bool = (
-        False  # Global flag to enable per-embodiment sin/cos encoding
-    )
+    apply_sincos_state_encoding: bool = False  # Global flag to enable per-embodiment sin/cos encoding
     use_percentiles: bool = True
     conversation_image_first: bool = False
 
@@ -80,7 +80,7 @@ class RLDXNetworkConfig(PretrainedConfig):
             "action_model_max_seq_len": 512,
             "pre_norm": "layer_norm",
             "qk_norm": "rms_norm",
-        }
+        },
     )
 
     # Flow matching parameters
@@ -118,7 +118,7 @@ class RLDXNetworkConfig(PretrainedConfig):
             "p_proj",
             "linear1",
             "linear2",
-        ]
+        ],
     )
 
     # Backbone (Qwen3 LLM) LoRA. Mirror of the action-model surface:
@@ -144,7 +144,7 @@ class RLDXNetworkConfig(PretrainedConfig):
             "gate_proj",
             "up_proj",
             "down_proj",
-        ]
+        ],
     )
 
     # State Augmentation parameters
@@ -157,15 +157,9 @@ class RLDXNetworkConfig(PretrainedConfig):
     memory_n_cog_tokens: int | None = (
         None  # Number of cognition tokens routed through memory (defaults to n_cog_tokens)
     )
-    concat_memory: bool = (
-        False  # If True, concat MQ_augmented after MQ_original instead of replacing
-    )
-    memory_dropout_prob: float = (
-        0.0  # Dropout ratio for augmented cognition tokens (concat_memory=True only, mask-out)
-    )
-    memory_stride: int = (
-        16  # Action-step stride between memory snapshots (should match execution_horizon)
-    )
+    concat_memory: bool = False  # If True, concat MQ_augmented after MQ_original instead of replacing
+    memory_dropout_prob: float = 0.0  # Dropout ratio for augmented cognition tokens (concat_memory=True only, mask-out)
+    memory_stride: int = 16  # Action-step stride between memory snapshots (should match execution_horizon)
     memory_cfg: dict = field(
         default_factory=lambda: {
             "hidden_size": 4096,
@@ -177,7 +171,7 @@ class RLDXNetworkConfig(PretrainedConfig):
             "rms_norm_eps": 1e-5,
             "use_causal_attn": True,
             "use_rope": True,
-        }
+        },
     )
 
     # motion module configuration
@@ -197,9 +191,7 @@ class RLDXNetworkConfig(PretrainedConfig):
     motion_pool_type: str = "avg"  # "avg" or "conv" (spatial pooling for vl_input)
     motion_drop: bool = True  # drop motion module tokens at internal_projection layer
     motion_gradient_check: bool = False  # log motion module gradient norms during training
-    motion_int_mode: str = (
-        "lite"  # "lite" (1x1 Conv3d L-fuse, default) or "full" (3-layer 3x3 conv stack)
-    )
+    motion_int_mode: str = "lite"  # "lite" (1x1 Conv3d L-fuse, default) or "full" (3-layer 3x3 conv stack)
 
     # Video input configuration
     # ``use_video`` is an architectural invariant: every supported
@@ -215,15 +207,11 @@ class RLDXNetworkConfig(PretrainedConfig):
     use_physics: bool = False
     physics_keys: list[str] = field(default_factory=list)  # e.g., ["tactile", "torque"]
     physics_dims: list[int] = field(
-        default_factory=list
+        default_factory=list,
     )  # Per-key dimensions, aligned with `physics_keys` (e.g., [30, 7])
     physics_loss_weight: float = 0.1
-    allow_missing_physics: bool = (
-        False  # If True, samples without physics data are zero-filled and attention-masked
-    )
-    physics_delta_indices: list[int] | None = (
-        None  # Injected from modality_configs in setup.py; d<=0 = hist, d>0 = fut
-    )
+    allow_missing_physics: bool = False  # If True, samples without physics data are zero-filled and attention-masked
+    physics_delta_indices: list[int] | None = None  # Injected from modality_configs in setup.py; d<=0 = hist, d>0 = fut
     physics_use_flow_matching: bool = True  # False switches to the all-conditioning + MSE loss path
     physics_dropout_prob: float = 0.0
     """Per-sample dropout on physics conditioning tokens during training.

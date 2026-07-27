@@ -3,7 +3,7 @@
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 
 import math
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 from PIL import Image
 
@@ -32,11 +32,10 @@ def smart_resize(
     height: int,
     width: int,
     factor: int,
-    min_pixels: Optional[int] = None,
-    max_pixels: Optional[int] = None,
-) -> Tuple[int, int]:
-    """
-    Rescales the image so that the following conditions are met:
+    min_pixels: int | None = None,
+    max_pixels: int | None = None,
+) -> tuple[int, int]:
+    """Rescales the image so that the following conditions are met:
 
     1. Both dimensions (height and width) are divisible by 'factor'.
     2. The total number of pixels is within the range ['min_pixels', 'max_pixels'].
@@ -44,12 +43,10 @@ def smart_resize(
     """
     max_pixels = max_pixels if max_pixels is not None else (IMAGE_MAX_TOKEN_NUM * factor**2)
     min_pixels = min_pixels if min_pixels is not None else (IMAGE_MIN_TOKEN_NUM * factor**2)
-    assert max_pixels >= min_pixels, (
-        "The max_pixels of image must be greater than or equal to min_pixels."
-    )
+    assert max_pixels >= min_pixels, "The max_pixels of image must be greater than or equal to min_pixels."
     if max(height, width) / min(height, width) > MAX_RATIO:
         raise ValueError(
-            f"absolute aspect ratio must be smaller than {MAX_RATIO}, got {max(height, width) / min(height, width)}"
+            f"absolute aspect ratio must be smaller than {MAX_RATIO}, got {max(height, width) / min(height, width)}",
         )
     h_bar = max(factor, round_by_factor(height, factor))
     w_bar = max(factor, round_by_factor(width, factor))
@@ -64,16 +61,16 @@ def smart_resize(
     return h_bar, w_bar
 
 
-def fetch_image(ele: Dict[str, Union[str, Image.Image]], image_patch_size: int = 14) -> Image.Image:
+def fetch_image(ele: dict[str, str | Image.Image], image_patch_size: int = 14) -> Image.Image:
     image = ele["image"] if "image" in ele else ele["image_url"]
     if not isinstance(image, Image.Image):
         raise TypeError(
             f"Expected a PIL.Image for 'image'/'image_url', got {type(image)!r}. "
-            "File paths and URLs are not supported in this pipeline."
+            "File paths and URLs are not supported in this pipeline.",
         )
     patch_factor = int(image_patch_size * SPATIAL_MERGE_SIZE)
 
-    ## resize
+    # resize
     if "resized_height" in ele and "resized_width" in ele:
         resized_height, resized_width = smart_resize(
             ele["resized_height"],
@@ -96,8 +93,8 @@ def fetch_image(ele: Dict[str, Union[str, Image.Image]], image_patch_size: int =
 
 
 def extract_vision_info(
-    conversations: Union[List[Dict[str, Any]], List[List[Dict[str, Any]]]],
-) -> List[Dict[str, Any]]:
+    conversations: list[dict[str, Any]] | list[list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
     vision_infos = []
     if isinstance(conversations[0], dict):
         conversations = [conversations]
@@ -105,22 +102,17 @@ def extract_vision_info(
         for message in conversation:
             if isinstance(message["content"], list):
                 for ele in message["content"]:
-                    if (
-                        "image" in ele
-                        or "image_url" in ele
-                        or ele.get("type", "text") in ("image", "image_url")
-                    ):
+                    if "image" in ele or "image_url" in ele or ele.get("type", "text") in ("image", "image_url"):
                         vision_infos.append(ele)
     return vision_infos
 
 
 def process_vision_info(
-    conversations: Union[List[Dict[str, Any]], List[List[Dict[str, Any]]]],
+    conversations: list[dict[str, Any]] | list[list[dict[str, Any]]],
     image_patch_size: int = 14,
-) -> Optional[List[Image.Image]]:
-
+) -> list[Image.Image] | None:
     vision_infos = extract_vision_info(conversations)
-    ## Read images or videos
+    # Read images or videos
     image_inputs = []
     for vision_info in vision_infos:
         if "image" in vision_info or "image_url" in vision_info:

@@ -4,11 +4,11 @@
 
 """MSAT stream blocks: Single/Double/Expanded/Triple (extracted from msat.py)."""
 
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
 from physicalai.policies.rldx1.components.action_model.ops import (
     SwiGLUFFN,
@@ -26,8 +26,7 @@ class ModulationOut(NamedTuple):
 
 
 class Modulation(nn.Module):
-    """
-    Flux-style modulation for AdaLN.
+    """Flux-style modulation for AdaLN.
     - double=True: generates 6 parameters (shift1, scale1, gate1, shift2, scale2, gate2)
     - double=False: generates 3 parameters (shift, scale, gate)
     """
@@ -38,7 +37,7 @@ class Modulation(nn.Module):
         self.multiplier = 6 if double else 3
         self.lin = nn.Linear(dim, self.multiplier * dim, bias=not remove_bias)
 
-    def forward(self, vec: torch.Tensor) -> tuple[ModulationOut, Optional[ModulationOut]]:
+    def forward(self, vec: torch.Tensor) -> tuple[ModulationOut, ModulationOut | None]:
         out = self.lin(F.silu(vec))[:, None, :].chunk(self.multiplier, dim=-1)
         return (
             ModulationOut(*out[:3]),
@@ -48,8 +47,7 @@ class Modulation(nn.Module):
 
 # Models ================================================
 class SingleStreamBlock(nn.Module):
-    """
-    Flux-style SingleStreamBlock with parallel linear layers.
+    """Flux-style SingleStreamBlock with parallel linear layers.
     Processes concatenated VL+SA stream as a single stream.
     """
 
@@ -65,8 +63,8 @@ class SingleStreamBlock(nn.Module):
         norm_eps: float = 1e-6,
         qk_norm: str = "none",
         use_swiglu: bool = False,
-        positional_embeddings: Optional[str] = None,
-        max_seq_length: Optional[int] = None,
+        positional_embeddings: str | None = None,
+        max_seq_length: int | None = None,
         temb_type: str = "layerwise_mod",
         remove_bias: bool = False,
         pre_norm: str = "layer_norm",
@@ -75,8 +73,7 @@ class SingleStreamBlock(nn.Module):
         super().__init__()
         if positional_embeddings == "sinusoidal":
             raise NotImplementedError(
-                "positional_embeddings='sinusoidal' is not supported; "
-                "use 'rope_sa_only', 'rope_vl_sa', or None."
+                "positional_embeddings='sinusoidal' is not supported; use 'rope_sa_only', 'rope_vl_sa', or None.",
             )
         self.hidden_size = hidden_size
         self.num_heads = num_attention_heads
@@ -100,7 +97,9 @@ class SingleStreamBlock(nn.Module):
         self.linear1 = nn.Linear(hidden_size, self.inner_dim * 3 + mlp_in_dim, bias=attention_bias)
         # proj (inner_dim) and mlp_out together -> hidden_size
         self.linear2 = nn.Linear(
-            self.inner_dim + self.mlp_hidden_dim, hidden_size, bias=attention_bias
+            self.inner_dim + self.mlp_hidden_dim,
+            hidden_size,
+            bias=attention_bias,
         )
 
         # QK normalization
@@ -132,14 +131,13 @@ class SingleStreamBlock(nn.Module):
         self,
         x: torch.Tensor,
         temb: torch.Tensor,
-        pe: Optional[torch.Tensor] = None,
-        shared_modulation: Optional[ModulationOut] = None,
-        time_token: Optional[torch.Tensor] = None,
+        pe: torch.Tensor | None = None,
+        shared_modulation: ModulationOut | None = None,
+        time_token: torch.Tensor | None = None,
         block_idx: int = 0,
-        attn_mask: Optional[torch.Tensor] = None,
+        attn_mask: torch.Tensor | None = None,
     ):
-        """
-        Forward pass following Flux SingleStreamBlock pattern.
+        """Forward pass following Flux SingleStreamBlock pattern.
         x: (B, N, hidden_size) - concatenated VL+SA tokens (may include time_token if time_token is None here)
         temb: (B, hidden_size)
         pe: RoPE complex frequencies, shape (B, N, head_dim//2) as complex64 if use_rope else None
@@ -161,7 +159,7 @@ class SingleStreamBlock(nn.Module):
         else:
             if not hasattr(self, "modulation"):
                 raise AttributeError(
-                    f"modulation not found. temb_type={self.temb_type} may not create modulation modules."
+                    f"modulation not found. temb_type={self.temb_type} may not create modulation modules.",
                 )
             mod, _ = self.modulation(temb)
         # Pre-norm (shared for parallel computation)
@@ -211,8 +209,7 @@ class SingleStreamBlock(nn.Module):
 
 
 class DoubleStreamBlock(nn.Module):
-    """
-    Flux-style DoubleStreamBlock.
+    """Flux-style DoubleStreamBlock.
     Processes SA and VL streams separately but with joint attention.
     Each stream has independent modulation, norm, attention, and MLP.
     """
@@ -224,13 +221,13 @@ class DoubleStreamBlock(nn.Module):
         num_attention_heads: int,
         attention_head_dim: int,
         mlp_ratio: float = 4.0,
-        vl_mlp_ratio: Optional[float] = None,  # If None, use mlp_ratio
+        vl_mlp_ratio: float | None = None,  # If None, use mlp_ratio
         dropout: float = 0.0,
         attention_bias: bool = True,
         norm_eps: float = 1e-6,
         qk_norm: str = "none",
-        positional_embeddings: Optional[str] = None,
-        max_seq_length: Optional[int] = None,
+        positional_embeddings: str | None = None,
+        max_seq_length: int | None = None,
         temb_type: str = "layerwise_mod",
         remove_bias: bool = False,
         pre_norm: str = "layer_norm",
@@ -239,8 +236,7 @@ class DoubleStreamBlock(nn.Module):
         super().__init__()
         if positional_embeddings == "sinusoidal":
             raise NotImplementedError(
-                "positional_embeddings='sinusoidal' is not supported; "
-                "use 'rope_sa_only', 'rope_vl_sa', or None."
+                "positional_embeddings='sinusoidal' is not supported; use 'rope_sa_only', 'rope_vl_sa', or None.",
             )
         self.sa_dim = sa_dim
         self.vl_dim = vl_dim
@@ -323,14 +319,13 @@ class DoubleStreamBlock(nn.Module):
         sa_tokens: torch.Tensor,
         vl_tokens: torch.Tensor,
         temb: torch.Tensor,
-        pe: Optional[torch.Tensor] = None,
-        shared_modulations: Optional[dict] = None,
+        pe: torch.Tensor | None = None,
+        shared_modulations: dict | None = None,
         has_time_token: bool = False,
         block_idx: int = 0,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
+        encoder_attention_mask: torch.Tensor | None = None,
     ):
-        """
-        Forward pass following Flux DoubleStreamBlock pattern.
+        """Forward pass following Flux DoubleStreamBlock pattern.
         sa_tokens: (B, N_sa, sa_dim) - N_sa includes time_token if has_time_token=True
         vl_tokens: (B, N_vl, vl_dim)
         temb: (B, inner_dim)
@@ -350,37 +345,69 @@ class DoubleStreamBlock(nn.Module):
             # Use identity modulation when time_token is present
             sa_mod1 = ModulationOut(
                 shift=torch.zeros(
-                    B, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype
+                    B,
+                    1,
+                    self.sa_dim,
+                    device=sa_tokens.device,
+                    dtype=sa_tokens.dtype,
                 ),
                 scale=torch.zeros(
-                    B, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype
+                    B,
+                    1,
+                    self.sa_dim,
+                    device=sa_tokens.device,
+                    dtype=sa_tokens.dtype,
                 ),
                 gate=torch.ones(B, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype),
             )
             sa_mod2 = ModulationOut(
                 shift=torch.zeros(
-                    B, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype
+                    B,
+                    1,
+                    self.sa_dim,
+                    device=sa_tokens.device,
+                    dtype=sa_tokens.dtype,
                 ),
                 scale=torch.zeros(
-                    B, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype
+                    B,
+                    1,
+                    self.sa_dim,
+                    device=sa_tokens.device,
+                    dtype=sa_tokens.dtype,
                 ),
                 gate=torch.ones(B, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype),
             )
             vl_mod1 = ModulationOut(
                 shift=torch.zeros(
-                    B, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype
+                    B,
+                    1,
+                    self.vl_dim,
+                    device=vl_tokens.device,
+                    dtype=vl_tokens.dtype,
                 ),
                 scale=torch.zeros(
-                    B, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype
+                    B,
+                    1,
+                    self.vl_dim,
+                    device=vl_tokens.device,
+                    dtype=vl_tokens.dtype,
                 ),
                 gate=torch.ones(B, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype),
             )
             vl_mod2 = ModulationOut(
                 shift=torch.zeros(
-                    B, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype
+                    B,
+                    1,
+                    self.vl_dim,
+                    device=vl_tokens.device,
+                    dtype=vl_tokens.dtype,
                 ),
                 scale=torch.zeros(
-                    B, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype
+                    B,
+                    1,
+                    self.vl_dim,
+                    device=vl_tokens.device,
+                    dtype=vl_tokens.dtype,
                 ),
                 gate=torch.ones(B, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype),
             )
@@ -415,7 +442,7 @@ class DoubleStreamBlock(nn.Module):
             # Layerwise modulation (temb_type="layerwise_mod")
             if not hasattr(self, "sa_mod") or not hasattr(self, "vl_mod"):
                 raise AttributeError(
-                    f"sa_mod or vl_mod not found. temb_type={self.temb_type} may not create modulation modules."
+                    f"sa_mod or vl_mod not found. temb_type={self.temb_type} may not create modulation modules.",
                 )
             sa_mod1_raw, sa_mod2_raw = self.sa_mod(temb)
             vl_mod1_raw, vl_mod2_raw = self.vl_mod(temb)
@@ -513,7 +540,10 @@ class DoubleStreamBlock(nn.Module):
 
         # Joint attention computation
         attn_out = F.scaled_dot_product_attention(
-            q, k, v, attn_mask=joint_attn_mask
+            q,
+            k,
+            v,
+            attn_mask=joint_attn_mask,
         )  # (B, H, N_vl + N_sa, Dh)
 
         # Split attention outputs
@@ -565,14 +595,14 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
         num_attention_heads: int,
         attention_head_dim: int,
         mlp_ratio: float = 4.0,
-        vl_mlp_ratio: Optional[float] = None,
-        p_mlp_ratio: Optional[float] = None,
+        vl_mlp_ratio: float | None = None,
+        p_mlp_ratio: float | None = None,
         dropout: float = 0.0,
         attention_bias: bool = True,
         norm_eps: float = 1e-6,
         qk_norm: str = "none",
-        positional_embeddings: Optional[str] = None,
-        max_seq_length: Optional[int] = None,
+        positional_embeddings: str | None = None,
+        max_seq_length: int | None = None,
         temb_type: str = "layerwise_mod",
         remove_bias: bool = False,
         pre_norm: str = "layer_norm",
@@ -603,11 +633,7 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
         if temb_type != "shared_mod" and temb_type != "input_token":
             self.p_mod = Modulation(self.inner_dim, double=True, remove_bias=remove_bias)
         if temb_type != "input_token":
-            self.p_mod_proj = (
-                nn.Linear(self.inner_dim, p_dim, bias=True)
-                if self.inner_dim != p_dim
-                else nn.Identity()
-            )
+            self.p_mod_proj = nn.Linear(self.inner_dim, p_dim, bias=True) if self.inner_dim != p_dim else nn.Identity()
         else:
             self.p_mod_proj = None
 
@@ -630,13 +656,13 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
         sa_tokens: torch.Tensor,
         vl_tokens: torch.Tensor,
         temb: torch.Tensor,
-        pe: Optional[torch.Tensor] = None,
-        shared_modulations: Optional[dict] = None,
+        pe: torch.Tensor | None = None,
+        shared_modulations: dict | None = None,
         has_time_token: bool = False,
         block_idx: int = 0,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        p_tokens: Optional[torch.Tensor] = None,
-        physics_attention_mask: Optional[torch.Tensor] = None,
+        encoder_attention_mask: torch.Tensor | None = None,
+        p_tokens: torch.Tensor | None = None,
+        physics_attention_mask: torch.Tensor | None = None,
     ):
         if p_tokens is None:
             return super().forward(
@@ -660,19 +686,35 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
         if use_identity_mod:
             sa_mod1 = sa_mod2 = ModulationOut(
                 shift=torch.zeros(
-                    B, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype
+                    B,
+                    1,
+                    self.sa_dim,
+                    device=sa_tokens.device,
+                    dtype=sa_tokens.dtype,
                 ),
                 scale=torch.zeros(
-                    B, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype
+                    B,
+                    1,
+                    self.sa_dim,
+                    device=sa_tokens.device,
+                    dtype=sa_tokens.dtype,
                 ),
                 gate=torch.ones(B, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype),
             )
             vl_mod1 = vl_mod2 = ModulationOut(
                 shift=torch.zeros(
-                    B, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype
+                    B,
+                    1,
+                    self.vl_dim,
+                    device=vl_tokens.device,
+                    dtype=vl_tokens.dtype,
                 ),
                 scale=torch.zeros(
-                    B, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype
+                    B,
+                    1,
+                    self.vl_dim,
+                    device=vl_tokens.device,
+                    dtype=vl_tokens.dtype,
                 ),
                 gate=torch.ones(B, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype),
             )
@@ -685,7 +727,9 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
 
             def _proj(proj, raw):
                 return ModulationOut(
-                    shift=proj(raw.shift), scale=proj(raw.scale), gate=proj(raw.gate)
+                    shift=proj(raw.shift),
+                    scale=proj(raw.scale),
+                    gate=proj(raw.gate),
                 )
 
             sa_mod1 = _proj(self.sa_mod_proj, shared_modulations["sa_mod1_raw"])
@@ -699,10 +743,18 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
             else:
                 p_mod1 = p_mod2 = ModulationOut(
                     shift=torch.zeros(
-                        B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype
+                        B,
+                        1,
+                        self.p_dim,
+                        device=p_tokens.device,
+                        dtype=p_tokens.dtype,
                     ),
                     scale=torch.zeros(
-                        B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype
+                        B,
+                        1,
+                        self.p_dim,
+                        device=p_tokens.device,
+                        dtype=p_tokens.dtype,
                     ),
                     gate=torch.ones(B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
                 )
@@ -710,7 +762,9 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
 
             def _proj(proj, raw):
                 return ModulationOut(
-                    shift=proj(raw.shift), scale=proj(raw.scale), gate=proj(raw.gate)
+                    shift=proj(raw.shift),
+                    scale=proj(raw.scale),
+                    gate=proj(raw.gate),
                 )
 
             sa_mod1, sa_mod2 = self.sa_mod(temb)
@@ -727,23 +781,17 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
         sa_mod_out = (1 + sa_mod1.scale) * self.sa_norm1(sa_tokens) + sa_mod1.shift
         if self.pos_embed_sa is not None:
             sa_mod_out = self.pos_embed_sa(sa_mod_out)
-        sa_q, sa_k, sa_v = [
-            _split_heads(t, self.num_heads) for t in self.sa_qkv(sa_mod_out).chunk(3, dim=-1)
-        ]
+        sa_q, sa_k, sa_v = [_split_heads(t, self.num_heads) for t in self.sa_qkv(sa_mod_out).chunk(3, dim=-1)]
 
         vl_mod_out = (1 + vl_mod1.scale) * self.vl_norm1(vl_tokens) + vl_mod1.shift
         if self.pos_embed_vl is not None:
             vl_mod_out = self.pos_embed_vl(vl_mod_out)
-        vl_q, vl_k, vl_v = [
-            _split_heads(t, self.num_heads) for t in self.vl_qkv(vl_mod_out).chunk(3, dim=-1)
-        ]
+        vl_q, vl_k, vl_v = [_split_heads(t, self.num_heads) for t in self.vl_qkv(vl_mod_out).chunk(3, dim=-1)]
 
         p_mod_out = (1 + p_mod1.scale) * self.p_norm1(p_tokens) + p_mod1.shift
         if self.pos_embed_p is not None:
             p_mod_out = self.pos_embed_p(p_mod_out)
-        p_q, p_k, p_v = [
-            _split_heads(t, self.num_heads) for t in self.p_qkv(p_mod_out).chunk(3, dim=-1)
-        ]
+        p_q, p_k, p_v = [_split_heads(t, self.num_heads) for t in self.p_qkv(p_mod_out).chunk(3, dim=-1)]
 
         # QK norm — direct reassignment so the norm modules stay on the
         # autograd graph. The previous `q_t.data = ...` loop swapped storage
@@ -793,22 +841,22 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
 
         # Residual + post-attn norm
         sa_tokens = sa_tokens + sa_mod1.gate * self.sa_norm2_attn(
-            self.sa_proj(self.dropout(sa_attn))
+            self.sa_proj(self.dropout(sa_attn)),
         )
         vl_tokens = vl_tokens + vl_mod1.gate * self.vl_norm2_attn(
-            self.vl_proj(self.dropout(vl_attn))
+            self.vl_proj(self.dropout(vl_attn)),
         )
         p_tokens = p_tokens + p_mod1.gate * self.p_norm2_attn(self.p_proj(self.dropout(p_attn)))
 
         # MLP
         sa_tokens = sa_tokens + sa_mod2.gate * self.sa_norm3_mlp(
-            self.sa_mlp((1 + sa_mod2.scale) * self.sa_norm2_mlp(sa_tokens) + sa_mod2.shift)
+            self.sa_mlp((1 + sa_mod2.scale) * self.sa_norm2_mlp(sa_tokens) + sa_mod2.shift),
         )
         vl_tokens = vl_tokens + vl_mod2.gate * self.vl_norm3_mlp(
-            self.vl_mlp((1 + vl_mod2.scale) * self.vl_norm2_mlp(vl_tokens) + vl_mod2.shift)
+            self.vl_mlp((1 + vl_mod2.scale) * self.vl_norm2_mlp(vl_tokens) + vl_mod2.shift),
         )
         p_tokens = p_tokens + p_mod2.gate * self.p_norm3_mlp(
-            self.p_mlp((1 + p_mod2.scale) * self.p_norm2_mlp(p_tokens) + p_mod2.shift)
+            self.p_mlp((1 + p_mod2.scale) * self.p_norm2_mlp(p_tokens) + p_mod2.shift),
         )
 
         return sa_tokens, vl_tokens, p_tokens
@@ -837,8 +885,8 @@ class ExpandedSingleStreamBlock(SingleStreamBlock):
         norm_eps: float = 1e-6,
         qk_norm: str = "none",
         use_swiglu: bool = False,
-        positional_embeddings: Optional[str] = None,
-        max_seq_length: Optional[int] = None,
+        positional_embeddings: str | None = None,
+        max_seq_length: int | None = None,
         temb_type: str = "layerwise_mod",
         remove_bias: bool = False,
         pre_norm: str = "layer_norm",
@@ -871,7 +919,9 @@ class ExpandedSingleStreamBlock(SingleStreamBlock):
 
         self.p_linear1 = nn.Linear(p_dim, self.inner_dim * 3 + p_mlp_in_dim, bias=attention_bias)
         self.p_linear2 = nn.Linear(
-            self.inner_dim + self.p_mlp_hidden_dim, p_dim, bias=attention_bias
+            self.inner_dim + self.p_mlp_hidden_dim,
+            p_dim,
+            bias=attention_bias,
         )
         self.p_q_norm, self.p_k_norm = create_qk_norm_layers(qk_norm, self.head_dim, norm_eps)
         self.p_pre_norm = create_norm_layer(pre_norm, p_dim, eps=norm_eps)
@@ -881,12 +931,12 @@ class ExpandedSingleStreamBlock(SingleStreamBlock):
         self,
         x: torch.Tensor,
         temb: torch.Tensor,
-        pe: Optional[torch.Tensor] = None,
-        shared_modulation: Optional[ModulationOut] = None,
-        time_token: Optional[torch.Tensor] = None,
+        pe: torch.Tensor | None = None,
+        shared_modulation: ModulationOut | None = None,
+        time_token: torch.Tensor | None = None,
         block_idx: int = 0,
-        attn_mask: Optional[torch.Tensor] = None,
-        p_tokens: Optional[torch.Tensor] = None,
+        attn_mask: torch.Tensor | None = None,
+        p_tokens: torch.Tensor | None = None,
     ):
         if p_tokens is None:
             return super().forward(
@@ -951,7 +1001,9 @@ class ExpandedSingleStreamBlock(SingleStreamBlock):
         p_mod_out = (1 + p_mod.scale) * self.p_pre_norm(p_tokens) + p_mod.shift
         p_mlp_in_dim = 2 * int(self.p_dim * self.mlp_ratio)
         p_qkv, p_mlp = torch.split(
-            self.p_linear1(p_mod_out), [3 * self.inner_dim, p_mlp_in_dim], dim=-1
+            self.p_linear1(p_mod_out),
+            [3 * self.inner_dim, p_mlp_in_dim],
+            dim=-1,
         )
         p_q, p_k, p_v = [_split_heads(t, self.num_heads) for t in p_qkv.chunk(3, dim=-1)]
 

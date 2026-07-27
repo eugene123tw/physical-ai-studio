@@ -4,11 +4,9 @@
 
 """Self-attention transformer blocks (extracted from msat.py)."""
 
-from typing import Optional
-
+import torch
 from diffusers.models.attention import Attention, FeedForward
 from diffusers.models.embeddings import SinusoidalPositionalEmbedding
-import torch
 from torch import nn
 
 
@@ -25,7 +23,7 @@ class BasicTransformerBlock(nn.Module):
         num_attention_heads: int,
         attention_head_dim: int,
         dropout=0.0,
-        cross_attention_dim: Optional[int] = None,
+        cross_attention_dim: int | None = None,
         activation_fn: str = "geglu",
         attention_bias: bool = False,
         upcast_attention: bool = False,
@@ -34,9 +32,9 @@ class BasicTransformerBlock(nn.Module):
         norm_eps: float = 1e-5,
         final_dropout: bool = False,
         attention_type: str = "default",
-        positional_embeddings: Optional[str] = None,
-        max_seq_length: Optional[int] = None,
-        ff_inner_dim: Optional[int] = None,
+        positional_embeddings: str | None = None,
+        max_seq_length: int | None = None,
+        ff_inner_dim: int | None = None,
         ff_bias: bool = True,
         attention_out_bias: bool = True,
     ):
@@ -80,7 +78,7 @@ class BasicTransformerBlock(nn.Module):
 
         if positional_embeddings and (max_seq_length is None):
             raise ValueError(
-                "If `positional_embedding` type is defined, `max_seq_length` must also be defined."
+                "If `positional_embedding` type is defined, `max_seq_length` must also be defined.",
             )
 
         if positional_embeddings == "sinusoidal":
@@ -89,7 +87,7 @@ class BasicTransformerBlock(nn.Module):
             self.pos_embed = None
         else:
             raise ValueError(
-                "Invalid positional embedding type: `positional_embeddings` must be 'sinusoidal' or None."
+                "Invalid positional embedding type: `positional_embeddings` must be 'sinusoidal' or None.",
             )
 
         # 1. Self-Attn
@@ -124,9 +122,9 @@ class BasicTransformerBlock(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        temb: Optional[torch.LongTensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        temb: torch.LongTensor | None = None,
     ) -> torch.Tensor:
         """Run one transformer block pass.
 
@@ -141,7 +139,6 @@ class BasicTransformerBlock(nn.Module):
             Updated hidden states with the same semantic shape as input,
             typically ``(B, T, D)``.
         """
-
         # 0. Self-Attention
         norm_hidden_states = self.norm1(hidden_states)
 

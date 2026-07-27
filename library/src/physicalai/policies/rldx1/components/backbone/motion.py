@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 
+import torch
+import torch.nn.functional as F
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from torch import nn
 
 
 class STSSTransformation(nn.Module):
@@ -243,7 +243,10 @@ class STSSEncoder(nn.Module):
         self.in_proj = nn.Linear(d_in, d_hid)
         self.stss_transformation = STSSTransformation(window=window, corr_func=corr_func)
         self.stss_extraction = STSSExtraction(
-            window=window, chnls=ext_chnls, use_layernorm=use_layernorm, use_syncbn=use_syncbn
+            window=window,
+            chnls=ext_chnls,
+            use_layernorm=use_layernorm,
+            use_syncbn=use_syncbn,
         )
         self.stss_integration = STSSIntegration(
             ext_chnls[-1],
@@ -303,7 +306,7 @@ class MotionModule(nn.Module):
                     int_mode=int_mode,
                 )
                 for i in range(n_encoders)
-            ]
+            ],
         )
 
         if self.use_layerscale:
@@ -328,14 +331,13 @@ class MotionModule(nn.Module):
                 f"norm={grad.norm().item():.6f}, "
                 f"mean={grad.mean().item():.8f}, "
                 f"std={grad.std().item():.6f}, "
-                f"max={grad.abs().max().item():.6f}"
+                f"max={grad.abs().max().item():.6f}",
             )
             # Check key parameter values
             if not self.use_layerscale:
                 w = self.out_proj.weight
                 print(
-                    f"  out_proj.weight: norm={w.norm().item():.6f}, "
-                    f"is_zero={torch.allclose(w, torch.zeros_like(w))}"
+                    f"  out_proj.weight: norm={w.norm().item():.6f}, is_zero={torch.allclose(w, torch.zeros_like(w))}",
                 )
         else:
             print(f"[motion module Grad Check] step={step}: grad is None!")
@@ -352,10 +354,7 @@ class MotionModule(nn.Module):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0.0)
-            elif isinstance(m, (nn.BatchNorm2d, nn.BatchNorm3d)):
-                nn.init.constant_(m.weight, 1.0)
-                nn.init.constant_(m.bias, 0.0)
-            elif isinstance(m, nn.LayerNorm):
+            elif isinstance(m, (nn.BatchNorm2d, nn.BatchNorm3d)) or isinstance(m, nn.LayerNorm):
                 nn.init.constant_(m.weight, 1.0)
                 nn.init.constant_(m.bias, 0.0)
 
@@ -383,7 +382,7 @@ class MotionModule(nn.Module):
             x_splits = x.split(num_tokens_per_video, dim=0)
 
             processed_videos = []
-            for x_video, grid_size in zip(x_splits, grid_sizes):
+            for x_video, grid_size in zip(x_splits, grid_sizes, strict=False):
                 video_out = x_video
                 encoder_outputs = []
                 for stss_encoder in self.stss_encoders:

@@ -4,16 +4,16 @@
 
 """MSAT utility ops: RoPE SwiGLUFFN, head utils (extracted from msat.py)."""
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
-    """
-    Precompute RoPE frequencies in complex form (Llama style).
+    """Precompute RoPE frequencies in complex form (Llama style).
+
     Args:
         dim: Head dimension (must be even)
         end: Maximum sequence length
@@ -29,8 +29,8 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
 
 
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
-    """
-    Reshape freqs_cis for broadcasting with x (Llama style, adapted for our use case).
+    """Reshape freqs_cis for broadcasting with x (Llama style, adapted for our use case).
+
     Args:
         freqs_cis: Complex frequencies, shape (B, N, D//2) as complex64
         x: Tensor to broadcast with, shape (B, H, N, D//2) as complex
@@ -53,8 +53,8 @@ def apply_rotary_emb(
     xk: torch.Tensor,
     freqs_cis: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Apply RoPE rotation to Q and K tensors using complex multiplication (Llama style).
+    """Apply RoPE rotation to Q and K tensors using complex multiplication (Llama style).
+
     Args:
         xq: Query tensor, shape (B, H, N, D) where D=head_dim
         xk: Key tensor, shape (B, H, N, D) where D=head_dim
@@ -71,8 +71,7 @@ def apply_rotary_emb(
 
 
 class RoPEEmbedder1D(nn.Module):
-    """
-    Generate RoPE embeddings for 1D sequences with multiple axes (Llama style).
+    """Generate RoPE embeddings for 1D sequences with multiple axes (Llama style).
     For joint_attn_v2:
     - rope_sa_only: Axis 0 (dim=16) = 0 (unused), Axis 1 (dim=48) = SA sequence position (includes time tokens and action tokens)
       * Time tokens: axis 1 = 0..num_temb_tokens-1
@@ -88,9 +87,7 @@ class RoPEEmbedder1D(nn.Module):
         max_seq_len: int = 2048,
     ):
         super().__init__()
-        assert sum(axes_dim) == head_dim, (
-            f"sum(axes_dim)={sum(axes_dim)} must equal head_dim={head_dim}"
-        )
+        assert sum(axes_dim) == head_dim, f"sum(axes_dim)={sum(axes_dim)} must equal head_dim={head_dim}"
         self.head_dim = head_dim
         self.axes_dim = axes_dim
         self.theta = theta
@@ -105,9 +102,8 @@ class RoPEEmbedder1D(nn.Module):
             self.register_buffer(f"freqs_cis_{i}", freqs_cis, persistent=False)
 
     def forward(self, ids: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            ids: Position IDs (B, N, n_axes)
+        """Args:
+        ids: Position IDs (B, N, n_axes)
         """
         n_axes = ids.shape[-1]
         assert n_axes == self.n_axes, f"ids last dim {n_axes} must equal n_axes {self.n_axes}"
@@ -122,19 +118,16 @@ class RoPEEmbedder1D(nn.Module):
         return torch.cat(freqs_list, dim=-1)
 
 
-
 # Normalization and FFN ================================================
 class SwiGLUFFN(nn.Module):
-    """
-    SwiGLU feed-forward block from LightningDiT.
-    """
+    """SwiGLU feed-forward block from LightningDiT."""
 
     def __init__(
         self,
         in_features: int,
-        hidden_features: Optional[int] = None,
-        out_features: Optional[int] = None,
-        act_layer: Optional[Callable[..., nn.Module]] = None,
+        hidden_features: int | None = None,
+        out_features: int | None = None,
+        act_layer: Callable[..., nn.Module] | None = None,
         drop: float = 0.0,
         bias: bool = True,
     ) -> None:

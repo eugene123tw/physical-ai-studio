@@ -5,7 +5,7 @@
 """Shared primitive layers used across multiple modules (msat, memory, etc.)."""
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 
 class RMSNorm(nn.Module):
@@ -36,12 +36,11 @@ def create_norm_layer(norm_type: str, dim: int, eps: float = 1e-6) -> nn.Module:
     """
     if norm_type == "none":
         return nn.Identity()
-    elif norm_type == "layer_norm":
+    if norm_type == "layer_norm":
         return nn.LayerNorm(dim, elementwise_affine=False, eps=eps)
-    elif norm_type == "rms_norm":
+    if norm_type == "rms_norm":
         return RMSNorm(dim, eps=eps)
-    else:
-        raise ValueError(f"Unknown norm_type: {norm_type}")
+    raise ValueError(f"Unknown norm_type: {norm_type}")
 
 
 def create_qk_norm_layers(qk_norm: str, head_dim: int, eps: float = 1e-6):
@@ -56,12 +55,11 @@ def create_qk_norm_layers(qk_norm: str, head_dim: int, eps: float = 1e-6):
     """
     if qk_norm == "none":
         return nn.Identity(), nn.Identity()
-    elif qk_norm == "layer_norm":
+    if qk_norm == "layer_norm":
         return (
             nn.LayerNorm(head_dim, elementwise_affine=False, eps=eps),
             nn.LayerNorm(head_dim, elementwise_affine=False, eps=eps),
         )
-    elif qk_norm == "rms_norm":
+    if qk_norm == "rms_norm":
         return RMSNorm(head_dim, eps=eps), RMSNorm(head_dim, eps=eps)
-    else:
-        raise ValueError(f"Unknown qk_norm: {qk_norm}")
+    raise ValueError(f"Unknown qk_norm: {qk_norm}")

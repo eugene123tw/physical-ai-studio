@@ -4,4 +4,4 @@
 
 """Backbone modules for RLDX."""
 
-from physicalai.policies.rldx1.components.backbone.adapter import VTCQwen3VLBackbone
+from physicalai.policies.rldx1.components.backbone.adapter import VTCQwen3VLBackbone as VTCQwen3VLBackbone

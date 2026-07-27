@@ -22,8 +22,9 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import torch
 
-from .preprocessor import Rldx1Preprocessor  # noqa: PLC0415
-from physicalai.data import Observation as Obs  # noqa: PLC0415
+from physicalai.data import Observation as Obs
+
+from .preprocessor import Rldx1Preprocessor
 
 if TYPE_CHECKING:
     from physicalai.data import Observation
@@ -173,7 +174,6 @@ class VtcWindowBuffer:
 
 def _to_flat_dict(batch: Observation | dict[str, Any]) -> dict[str, Any]:
     """Return a flat observation dict for both ``Observation`` and dict inputs."""
-
     if isinstance(batch, Obs):
         return batch.to_dict(flatten=True)
     return dict(batch)

@@ -126,7 +126,11 @@ class AspectAreaResizeAndCrop(A.DualTransform):
         """Compute the resize target and centered crop box from the input shape."""
         h, w = params["shape"][:2]
         (h_r, w_r), (h_c, w_c) = compute_aspect_area_resize_crop(
-            h, w, max_area=self.max_area, m=self.m, min_area=self.min_area
+            h,
+            w,
+            max_area=self.max_area,
+            m=self.m,
+            min_area=self.min_area,
         )
         y_min = (h_r - h_c) // 2
         x_min = (w_r - w_c) // 2
@@ -162,7 +166,7 @@ class _FractionalCropAndResizeBase(A.DualTransform):
         self.crop_fraction = crop_fraction
         self.interpolation = interpolation
 
-    def apply(self, img, crop_coords=(0, 0, 0, 0), out_hw=(0, 0), **params):  # noqa: ANN001, ANN201, ARG002
+    def apply(self, img, crop_coords=(0, 0, 0, 0), out_hw=(0, 0), **params):  # noqa: ANN001, ARG002
         """Slice ``crop_coords`` then resize the crop back to ``out_hw``."""
         x_min, y_min, x_max, y_max = crop_coords
         cropped = img[y_min:y_max, x_min:x_max]
@@ -173,7 +177,7 @@ class _FractionalCropAndResizeBase(A.DualTransform):
         """Return the (y, x) crop origin. Implemented by subclasses."""
         raise NotImplementedError
 
-    def get_params_dependent_on_data(self, params, data):  # noqa: ANN001, ANN201, ARG002
+    def get_params_dependent_on_data(self, params, data):  # noqa: ANN001, ARG002
         """Compute the crop box (from the chosen origin) and the resize-back size."""
         h, w = params["shape"][:2]
         ch = max(1, int(h * self.crop_fraction))
@@ -243,12 +247,18 @@ def build_image_transformations_albumentations(
     """
     train_list: list = [
         AspectAreaResizeAndCrop(
-            max_area=image_max_area, m=image_resize_m, interpolation=cv2.INTER_AREA, min_area=image_min_area
+            max_area=image_max_area,
+            m=image_resize_m,
+            interpolation=cv2.INTER_AREA,
+            min_area=image_min_area,
         ),
     ]
     eval_list: list = [
         AspectAreaResizeAndCrop(
-            max_area=image_max_area, m=image_resize_m, interpolation=cv2.INTER_AREA, min_area=image_min_area
+            max_area=image_max_area,
+            m=image_resize_m,
+            interpolation=cv2.INTER_AREA,
+            min_area=image_min_area,
         ),
     ]
 

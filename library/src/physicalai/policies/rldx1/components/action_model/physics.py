@@ -3,13 +3,16 @@
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
-from physicalai.policies.shared.components.nn import SinusoidalPositionalEncoding
 from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
+from physicalai.policies.rldx1.components.action_model.blocks import (
+    ExpandedDoubleStreamBlock,
+    ExpandedSingleStreamBlock,
+)
+from physicalai.policies.shared.components.nn import SinusoidalPositionalEncoding
 
-from physicalai.policies.rldx1.components.action_model.blocks import ExpandedDoubleStreamBlock, ExpandedSingleStreamBlock
 
 class PhysicalSignalEncoder(nn.Module):
     """Encode physics history tokens: (B, T_hist, input_dim) -> (B, T_hist, output_dim)."""
@@ -47,7 +50,8 @@ class PhysicalSignalDecoder(nn.Module):
 
 class PhysicsNoiseEncoder(nn.Module):
     """Future tokens: (B, T_fut, input_dim) -> (B, T_fut, output_dim)
-    Positional encoding uses diffusion timestep instead of sequential index."""
+    Positional encoding uses diffusion timestep instead of sequential index.
+    """
 
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
         super().__init__()
@@ -57,10 +61,10 @@ class PhysicsNoiseEncoder(nn.Module):
         self.pos_encoding = SinusoidalPositionalEncoding(hidden_dim)
 
     def forward(self, x: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
+        """Args:
             x: (B, T_fut, input_dim) - noisy future physics
             timesteps: (B,) - diffusion timestep (scalar per sample)
+
         Returns:
             (B, T_fut, output_dim)
         """
@@ -112,7 +116,6 @@ def init_physics_params_near_zero(action_model: nn.Module) -> None:
     so that the physics stream outputs ~0 at Day-0 and does not disturb the
     pretrained action stream.
     """
-
     msat = action_model.model
 
     # Support both old layout (action_model.physics_cond_encoder)
@@ -179,7 +182,7 @@ def init_physics_params_near_zero(action_model: nn.Module) -> None:
     if n_double > 0:
         _print(
             f"   [Physics init] {n_double} ExpandedDoubleStreamBlocks: "
-            f"p_qkv=Xavier, p_proj=near-zero, p_mlp exit=near-zero"
+            f"p_qkv=Xavier, p_proj=near-zero, p_mlp exit=near-zero",
         )
 
     # ── (C) ExpandedSingleStreamBlock — P stream ──
@@ -213,8 +216,7 @@ def init_physics_params_near_zero(action_model: nn.Module) -> None:
 
     if n_single > 0:
         _print(
-            f"   [Physics init] {n_single} ExpandedSingleStreamBlocks: "
-            f"p_linear1=Xavier, p_linear2=near-zero"
+            f"   [Physics init] {n_single} ExpandedSingleStreamBlocks: p_linear1=Xavier, p_linear2=near-zero",
         )
 
     # ── (D) MSAT physics output projection ──

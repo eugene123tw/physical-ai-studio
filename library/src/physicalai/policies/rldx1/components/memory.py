@@ -2,24 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 
-"""
-Memory module for cognition tokens with temporal context aggregation.
+"""Memory module for cognition tokens with temporal context aggregation.
 
 This module implements a Transformer-based memory that fuses cognition token embeddings
 from multiple timesteps to provide temporal context for action prediction.
 """
 
-from typing import Optional
-
-from diffusers.models.embeddings import SinusoidalPositionalEmbedding
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from diffusers.models.embeddings import SinusoidalPositionalEmbedding
+from torch import nn
 from transformers import LlamaConfig
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from physicalai.policies.rldx1.components.norms import RMSNorm
 from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
+from physicalai.policies.rldx1.components.norms import RMSNorm
 
 
 class RotaryEmbedding(nn.Module):
@@ -35,9 +32,7 @@ class RotaryEmbedding(nn.Module):
 
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
         # x: [batch_size, num_heads, seq_len, head_dim]
-        inv_freq_expanded = (
-            self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
-        )
+        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         position_ids_expanded = position_ids[:, None, :].float()
         freqs = (inv_freq_expanded @ position_ids_expanded).transpose(1, 2)
         emb = torch.cat((freqs, freqs), dim=-1)
@@ -77,10 +72,14 @@ class MultiHeadAttention(nn.Module):
 
         self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
         self.k_proj = nn.Linear(
-            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False
+            self.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=False,
         )
         self.v_proj = nn.Linear(
-            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False
+            self.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=False,
         )
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
 
@@ -92,8 +91,8 @@ class MultiHeadAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
         use_rope: bool = True,
     ) -> torch.Tensor:
         bsz, q_len, _ = hidden_states.size()
@@ -104,10 +103,14 @@ class MultiHeadAttention(nn.Module):
 
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(
-            1, 2
+            1,
+            2,
         )
         value_states = value_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
+            bsz,
+            q_len,
+            self.num_key_value_heads,
+            self.head_dim,
         ).transpose(1, 2)
 
         if use_rope:
@@ -165,8 +168,8 @@ class TransformerDecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
         use_rope: bool = True,
     ) -> torch.Tensor:
         residual = hidden_states
@@ -195,8 +198,7 @@ def _make_causal_mask(
     block_attn_size: int = 1,
     use_causal_attn: bool = True,
 ) -> torch.Tensor:
-    """
-    Create causal attention mask.
+    """Create causal attention mask.
 
     Args:
         input_shape: (batch_size, seq_length)
@@ -233,8 +235,7 @@ def _make_causal_mask(
 
 
 class TransformerMemory(nn.Module):
-    """
-    Transformer-based memory module for temporal aggregation of cognition token embeddings.
+    """Transformer-based memory module for temporal aggregation of cognition token embeddings.
 
     This module processes a sequence of cognition token embeddings from multiple timesteps
     and produces a memory-augmented representation using causal self-attention.
@@ -277,17 +278,15 @@ class TransformerMemory(nn.Module):
 
         # Transformer layers
         self.layers = nn.ModuleList(
-            [
-                TransformerDecoderLayer(self.config, layer_idx)
-                for layer_idx in range(num_hidden_layers)
-            ]
+            [TransformerDecoderLayer(self.config, layer_idx) for layer_idx in range(num_hidden_layers)],
         )
         self.norm = RMSNorm(hidden_size, eps=rms_norm_eps)
 
         # Optional sinusoidal positional embedding (if not using RoPE)
         if not use_rope:
             self.pos_emb = SinusoidalPositionalEmbedding(
-                hidden_size, max_seq_length=max_position_embeddings
+                hidden_size,
+                max_seq_length=max_position_embeddings,
             )
 
         # Initialize weights
@@ -296,7 +295,7 @@ class TransformerMemory(nn.Module):
         _print(
             f"\n[i] Transformer-based memory module initialized: "
             f"(layers={num_hidden_layers}, heads={num_attention_heads}, "
-            f"hidden_size={hidden_size}, causal={use_causal_attn}, rope={use_rope})"
+            f"hidden_size={hidden_size}, causal={use_causal_attn}, rope={use_rope})",
         )
 
     def _init_weights(self, module):
@@ -311,11 +310,10 @@ class TransformerMemory(nn.Module):
     def forward(
         self,
         inputs_embeds: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
     ) -> BaseModelOutputWithPast:
-        """
-        Forward pass through the transformer memory.
+        """Forward pass through the transformer memory.
 
         Args:
             inputs_embeds: Input embeddings of shape (batch_size, seq_length, hidden_size)
@@ -333,9 +331,7 @@ class TransformerMemory(nn.Module):
         if position_ids is None:
             position_ids = torch.arange(seq_length, dtype=torch.long, device=device)
             # Divide by block_attn_size for block-wise position encoding
-            position_ids = (
-                (position_ids // self.block_attn_size).unsqueeze(0).expand(batch_size, -1)
-            )
+            position_ids = (position_ids // self.block_attn_size).unsqueeze(0).expand(batch_size, -1)
 
         # Create causal/block attention mask
         if seq_length > 1:

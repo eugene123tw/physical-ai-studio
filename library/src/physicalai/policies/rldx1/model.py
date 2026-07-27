@@ -23,15 +23,14 @@ contract.
 
 from __future__ import annotations
 
-import os
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn.functional as F
 
 from physicalai.policies.base import Model
-
 from physicalai.policies.rldx1.components.config_rldx import RLDXNetworkConfig
 from physicalai.policies.rldx1.components.core_rldx import RLDX
 from physicalai.policies.rldx1.pretrained_utils import load_rldx_state_dict
@@ -115,8 +114,7 @@ def _bridge_studio_config(  # noqa: PLR0913
     cfg.tune_vlln = tune_vlln
     if not cfg.use_vlln and cfg.tune_vlln:
         logger.warning(
-            "Ignoring tune_vlln=True because use_vlln=False; "
-            "VLLN is not constructed in this architecture."
+            "Ignoring tune_vlln=True because use_vlln=False; VLLN is not constructed in this architecture.",
         )
         cfg.tune_vlln = False
 
@@ -150,6 +148,7 @@ def _bridge_studio_config(  # noqa: PLR0913
 
     cfg.max_state_dim = max_state_dim
     cfg.max_action_dim = max_action_dim
+
 
 class Rldx1Model(Model):
     """RLDX-1 Vision-Language-Action model (MSAT + Qwen3-VL).
@@ -312,12 +311,8 @@ class Rldx1Model(Model):
         # ``flash_attention_2`` requires CUDA + the flash-attn package). Map the
         # requested ``attn_implementation`` onto it *before* importing the
         # vendored stack so CPU / XPU loads default to ``sdpa``.
-        
-        backbone_attn = (
-            attn_implementation
-            if attn_implementation in {"sdpa", "eager", "flash_attention_2"}
-            else "sdpa"
-        )
+
+        backbone_attn = attn_implementation if attn_implementation in {"sdpa", "eager", "flash_attention_2"} else "sdpa"
         os.environ.setdefault("RLDX_ATTN_IMPL", backbone_attn)
 
         cfg: RLDXNetworkConfig = RLDXNetworkConfig.from_pretrained(base_model_path, revision=revision)
@@ -377,8 +372,7 @@ class Rldx1Model(Model):
         want_action_lora = bool(getattr(cfg, "action_model_use_lora", False))
         if want_backbone_lora or want_action_lora:
             logger.info(
-                "Deferring LoRA injection until after base checkpoint weights load "
-                "(backbone_lora=%s, action_lora=%s).",
+                "Deferring LoRA injection until after base checkpoint weights load (backbone_lora=%s, action_lora=%s).",
                 want_backbone_lora,
                 want_action_lora,
             )
@@ -415,7 +409,7 @@ class Rldx1Model(Model):
                         list(model_shape),
                     )
 
-        # --- Load state dict to net --- 
+        # --- Load state dict to net ---
         missing, unexpected = net.load_state_dict(state_dict, strict=False)
         if unexpected:
             msg = (
@@ -427,8 +421,7 @@ class Rldx1Model(Model):
 
         if missing:
             logger.warning(
-                "%d parameter(s) not found in checkpoint (expected to be "
-                "non-persistent buffers): %s",
+                "%d parameter(s) not found in checkpoint (expected to be non-persistent buffers): %s",
                 len(missing),
                 missing[:5],
             )
@@ -441,12 +434,13 @@ class Rldx1Model(Model):
         if want_action_lora:
             cfg.action_model_use_lora = True
             net.action_model.set_trainable_parameters(
-                cfg.tune_projector, cfg.tune_diffusion_model, cfg.tune_vlln
+                cfg.tune_projector,
+                cfg.tune_diffusion_model,
+                cfg.tune_vlln,
             )
         if want_backbone_lora or want_action_lora:
             logger.info(
-                "LoRA injection complete after checkpoint load "
-                "(backbone_lora=%s, action_lora=%s).",
+                "LoRA injection complete after checkpoint load (backbone_lora=%s, action_lora=%s).",
                 want_backbone_lora,
                 want_action_lora,
             )
@@ -466,20 +460,20 @@ class Rldx1Model(Model):
         # when values are provided in ``kwargs`` (e.g. from policy config).
         chunk_size = int(kwargs.pop("chunk_size", cfg.action_horizon))
         n_action_steps = int(
-            kwargs.pop("n_action_steps", getattr(cfg, "n_action_steps", cfg.action_horizon))
+            kwargs.pop("n_action_steps", getattr(cfg, "n_action_steps", cfg.action_horizon)),
         )
         max_state_dim = int(kwargs.pop("max_state_dim", cfg.max_state_dim))
         max_action_dim = int(kwargs.pop("max_action_dim", cfg.max_action_dim))
         select_layer = int(kwargs.pop("select_layer", cfg.select_layer))
         backbone_embedding_dim = int(
-            kwargs.pop("backbone_embedding_dim", cfg.backbone_embedding_dim)
+            kwargs.pop("backbone_embedding_dim", cfg.backbone_embedding_dim),
         )
         n_cog_tokens = int(kwargs.pop("n_cog_tokens", getattr(cfg, "n_cog_tokens", 64)))
         num_inference_timesteps = int(
-            kwargs.pop("num_inference_timesteps", cfg.num_inference_timesteps)
+            kwargs.pop("num_inference_timesteps", cfg.num_inference_timesteps),
         )
         gradient_checkpointing = bool(
-            kwargs.pop("gradient_checkpointing", gradient_checkpointing)
+            kwargs.pop("gradient_checkpointing", gradient_checkpointing),
         )
         use_bf16 = bool(kwargs.pop("use_bf16", use_bf16))
         video_length = int(kwargs.pop("video_length", getattr(cfg, "video_length", 4)))

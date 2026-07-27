@@ -58,7 +58,7 @@ class SinusoidalPositionalEncoding(nn.Module):
 
     Args:
         embedding_dim: Dimension of the embedding output.
-    
+
     Examples:
         >>> encoder = SinusoidalPositionalEncoding(embedding_dim=256)
         >>> timesteps = torch.tensor([[0, 1, 2], [3, 4, 5]])  # (B=2, T=3)
@@ -95,7 +95,7 @@ class SinusoidalPositionalEncoding(nn.Module):
         )
 
         # Expand timesteps to (B, T, 1) then multiply
-        freqs = timesteps.unsqueeze(-1) * exponent.exp() # (B, T, half_dim)
+        freqs = timesteps.unsqueeze(-1) * exponent.exp()  # (B, T, half_dim)
 
         sin = torch.sin(freqs)
         cos = torch.cos(freqs)
@@ -161,7 +161,7 @@ class CategorySpecificLinear(nn.Module):
         """
         if new_action_dim <= old_action_dim:
             raise ValueError(
-                f"New action dim {new_action_dim} must be larger than old action dim {old_action_dim}"
+                f"New action dim {new_action_dim} must be larger than old action dim {old_action_dim}",
             )
 
         if expand_input and self.W.shape[1] == old_action_dim:
@@ -234,7 +234,7 @@ class CategorySpecificMLP(nn.Module):
         """
         hidden = F.relu(self.layer1(x, cat_ids))
         return self.layer2(hidden, cat_ids)
-    
+
     def expand_action_dimension(self, old_action_dim, new_action_dim):
         """Expand output action dimension of the category-specific MLP.
 
@@ -244,7 +244,10 @@ class CategorySpecificMLP(nn.Module):
         """
         # self.layer1 does not take action_dim as input, so no expansion needed
         self.layer2.expand_action_dimension(
-            old_action_dim, new_action_dim, expand_input=False, expand_output=True
+            old_action_dim,
+            new_action_dim,
+            expand_input=False,
+            expand_output=True,
         )
 
 
@@ -344,10 +347,7 @@ class MultiEmbodimentActionEncoder(nn.Module):
             # RLDX-1 users per-token timesteps
             pass
         else:
-            msg = (
-                f"Expected `timesteps` to have shape ({b},) or ({b}, {t}); "
-                f"got {tuple(timesteps.shape)}."
-            )
+            msg = f"Expected `timesteps` to have shape ({b},) or ({b}, {t}); got {tuple(timesteps.shape)}."
             raise ValueError(msg)
 
         # Action embedding: (B, T, hidden_size)
@@ -369,5 +369,8 @@ class MultiEmbodimentActionEncoder(nn.Module):
         """
         # Only W1 takes action_dim as input, so only expand its input dimension
         self.W1.expand_action_dimension(
-            old_action_dim, new_action_dim, expand_input=True, expand_output=False
+            old_action_dim,
+            new_action_dim,
+            expand_input=True,
+            expand_output=False,
         )

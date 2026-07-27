@@ -46,17 +46,16 @@ import logging
 from typing import TYPE_CHECKING, Any, Literal
 
 import torch
-from physicalai.train.utils import reformat_dataset_to_match_policy
-from physicalai.data import Dataset
-from physicalai.data import Observation
+
+from physicalai.data import Dataset, Observation
 from physicalai.policies.base import Policy
 from physicalai.train.schedulers import cosine_decay_with_warmup_scheduler
+from physicalai.train.utils import reformat_dataset_to_match_policy
 
 from .config import Rldx1Config
 from .model import Rldx1Model
+from .preprocessor import make_rldx1_transforms
 from .vtc_buffer import VtcWindowBuffer
-
-from .preprocessor import make_rldx1_transforms  # noqa: PLC0415
 
 if TYPE_CHECKING:
     from .preprocessor import Rldx1Postprocessor, Rldx1Preprocessor
@@ -290,7 +289,6 @@ class Rldx1(Policy):
             env_action_dim: Environment action dimension.
             dataset_stats: Dataset normalization statistics.
         """
-
         config = self.config
         self.model = Rldx1Model.from_pretrained(
             config.base_model_path,
@@ -348,7 +346,7 @@ class Rldx1(Policy):
             embodiment_id=config.embodiment_id,
         )
 
-    def setup(self, stage: str) -> None:  # noqa: ARG002
+    def setup(self, stage: str) -> None:
         """Lazy-init the model from the datamodule before fit/validate/test.
 
         Skips if already initialized via the eager path.
@@ -359,7 +357,7 @@ class Rldx1(Policy):
         Raises:
             TypeError: If the train dataset is not a physicalai Dataset.
         """
-        del stage 
+        del stage
 
         datamodule = self.trainer.datamodule  # type: ignore[attr-defined]
         train_dataset = datamodule.train_dataset
@@ -451,8 +449,7 @@ class Rldx1(Policy):
         old_prefix = "_preprocessor._action_denormalizer."
         new_prefix = "_postprocessor._action_denormalizer."
         remapped = {
-            (new_prefix + k[len(old_prefix):] if k.startswith(old_prefix) else k): v
-            for k, v in state_dict.items()
+            (new_prefix + k[len(old_prefix) :] if k.startswith(old_prefix) else k): v for k, v in state_dict.items()
         }
         if remapped != state_dict:
             checkpoint["state_dict"] = remapped
@@ -531,7 +528,8 @@ class Rldx1(Policy):
         return offload_device in ("cpu", "nvme")
 
     def _build_optimizer(
-        self, params: list[torch.nn.Parameter]
+        self,
+        params: list[torch.nn.Parameter],
     ) -> torch.optim.Optimizer:
         """Build the optimizer selected by ``config.optim``.
 
@@ -626,10 +624,7 @@ class Rldx1(Policy):
         self.model.eval()
         model_input = self._vtc_buffer.prepare(batch)
         preprocessed = self._preprocessor(model_input)
-        preprocessed = {
-            k: v.to(self.device) if isinstance(v, torch.Tensor) else v
-            for k, v in preprocessed.items()
-        }
+        preprocessed = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in preprocessed.items()}
         actions = self.model.get_action(preprocessed)
         return self._postprocessor(actions)
 

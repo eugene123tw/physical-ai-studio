@@ -2,24 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 
-from typing import Tuple
 
-from physicalai.policies.rldx1.components.config_rldx import RLDXNetworkConfig
+import torch
+import torch.nn.functional as F
+import tree
+from peft import LoraConfig, inject_adapter_in_model
+from torch import nn
+from torch.distributions import Beta
+from transformers import AutoConfig, AutoModel, PreTrainedModel
+from transformers.feature_extraction_utils import BatchFeature
+
+from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 from physicalai.policies.rldx1.components.action_model.msat import MSAT
 from physicalai.policies.rldx1.components.action_model.physics import init_physics_params_near_zero
 from physicalai.policies.rldx1.components.action_model.physics_head import NoOpPhysicsHead, PhysicsHead
 from physicalai.policies.rldx1.components.backbone.adapter import VTCQwen3VLBackbone
-from physicalai.policies.shared.components.nn import CategorySpecificMLP, MultiEmbodimentActionEncoder
+from physicalai.policies.rldx1.components.config_rldx import RLDXNetworkConfig
 from physicalai.policies.rldx1.components.memory import TransformerMemory
-from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
-import torch
-from torch import nn
-from torch.distributions import Beta
-import torch.nn.functional as F
-from transformers import AutoConfig, AutoModel, PreTrainedModel
-from transformers.feature_extraction_utils import BatchFeature
-import tree
-from peft import LoraConfig, inject_adapter_in_model
+from physicalai.policies.shared.components.nn import CategorySpecificMLP, MultiEmbodimentActionEncoder
+
 
 class RLDXActionModel(nn.Module):
     """Action head component for flow matching diffusion policy."""
@@ -86,9 +87,7 @@ class RLDXActionModel(nn.Module):
             output_dim=self.action_dim,
         )
 
-        self.vlln = (
-            nn.LayerNorm(config.backbone_embedding_dim) if config.use_vlln else nn.Identity()
-        )
+        self.vlln = nn.LayerNorm(config.backbone_embedding_dim) if config.use_vlln else nn.Identity()
 
         if config.add_pos_embed:
             self.position_embedding = nn.Embedding(config.max_seq_len, self.input_embedding_dim)
@@ -97,17 +96,15 @@ class RLDXActionModel(nn.Module):
         # State dropout parameters
         self.state_dropout_prob = config.state_dropout_prob
         self.mask_token = (
-            nn.Parameter(0.02 * torch.randn(1, 1, self.input_embedding_dim))
-            if self.state_dropout_prob > 0
-            else None
+            nn.Parameter(0.02 * torch.randn(1, 1, self.input_embedding_dim)) if self.state_dropout_prob > 0 else None
         )
 
         # State noise parameters
         self.state_additive_noise_scale = config.state_additive_noise_scale
         self.beta_dist = Beta(
-            config.noise_beta_alpha, 
+            config.noise_beta_alpha,
             config.noise_beta_beta,
-            validate_args=False
+            validate_args=False,
         )
         self.num_timestep_buckets = config.num_timestep_buckets
 
@@ -120,9 +117,7 @@ class RLDXActionModel(nn.Module):
             msat_output_dim = config.diffusion_model_cfg.get("output_dim", 1024)
             config_flow_matching = getattr(config, "physics_use_flow_matching", True)
             physics_delta = getattr(config, "physics_delta_indices", None) or []
-            effective_flow_matching = (
-                config_flow_matching and sum(1 for d in physics_delta if d > 0) > 0
-            )
+            effective_flow_matching = config_flow_matching and sum(1 for d in physics_delta if d > 0) > 0
 
             self.physics = PhysicsHead(
                 physics_dim=physics_dim,
@@ -140,15 +135,15 @@ class RLDXActionModel(nn.Module):
             self.physics = NoOpPhysicsHead()
 
         self.set_trainable_parameters(
-            config.tune_projector, 
-            config.tune_diffusion_model, 
+            config.tune_projector,
+            config.tune_diffusion_model,
             config.tune_vlln,
         )
 
     def set_trainable_parameters(
-        self, 
-        tune_projector: bool, 
-        tune_diffusion_model: bool, 
+        self,
+        tune_projector: bool,
+        tune_diffusion_model: bool,
         tune_vlln: bool,
     ):
         # When LoRA is on, the diffusion model is no longer full-tuned —
@@ -215,13 +210,12 @@ class RLDXActionModel(nn.Module):
         ``use_physics=False``) are filtered before the PEFT call so PEFT
         doesn't raise on a missing target.
         """
-
         target_modules = list(
             getattr(
                 self.config,
                 "action_model_lora_target_modules",
                 ["vl_qkv", "vl_proj", "sa_qkv", "sa_proj", "p_qkv", "p_proj", "linear1", "linear2"],
-            )
+            ),
         )
 
         # Keep only target names that actually appear in the MSAT. PEFT
@@ -240,8 +234,7 @@ class RLDXActionModel(nn.Module):
             _print(f"[ActionModel LoRA] Skipping absent target modules: {skipped}")
         if not filtered:
             raise ValueError(
-                f"[ActionModel LoRA] None of the requested target modules "
-                f"{target_modules} exist in the MSAT."
+                f"[ActionModel LoRA] None of the requested target modules {target_modules} exist in the MSAT.",
             )
 
         # Freeze the entire MSAT; LoRA weights will be marked trainable by PEFT.
@@ -262,13 +255,12 @@ class RLDXActionModel(nn.Module):
         _print(
             f"[ActionModel LoRA] target_modules={filtered}, "
             f"r={lora_config.r}, alpha={lora_config.lora_alpha}, "
-            f"dropout={lora_config.lora_dropout}"
+            f"dropout={lora_config.lora_dropout}",
         )
         _print(f"[ActionModel LoRA] trainable params: {trainable} / {total} ({ratio:.2f}%)")
 
     def set_frozen_modules_to_eval_mode(self):
-        """
-        Huggingface will call model.train() at each training_step. To ensure
+        """Huggingface will call model.train() at each training_step. To ensure
         the expected behaviors for modules like dropout, batchnorm, etc., we
         need to call model.eval() for the frozen modules.
         """
@@ -295,8 +287,7 @@ class RLDXActionModel(nn.Module):
         return backbone_output
 
     def forward(self, backbone_output: BatchFeature, action_input: BatchFeature) -> BatchFeature:
-        """
-        Forward pass through the action model.
+        """Forward pass through the action model.
 
         Args:
             backbone_output: Output from the backbone model containing:
@@ -335,17 +326,14 @@ class RLDXActionModel(nn.Module):
 
         # Dropout state features.
         if self.state_dropout_prob > 0:
-            do_dropout = (
-                torch.rand(state_features.shape[0], device=state_features.device)
-                < self.state_dropout_prob
-            )
+            do_dropout = torch.rand(state_features.shape[0], device=state_features.device) < self.state_dropout_prob
             do_dropout = do_dropout[:, None, None].to(dtype=state_features.dtype)
             state_features = state_features * (1 - do_dropout) + self.mask_token * do_dropout
 
         # Add Gaussian noise to state features.
         if self.training and self.state_additive_noise_scale > 0:
             _print(
-                f"Adding Gaussian noise to state features with scale {self.state_additive_noise_scale}"
+                f"Adding Gaussian noise to state features with scale {self.state_additive_noise_scale}",
             )
             noise = torch.randn_like(state_features) * self.state_additive_noise_scale
             state_features = state_features + noise
@@ -380,7 +368,8 @@ class RLDXActionModel(nn.Module):
 
         # Encode physics signal
         physics_embs, physics_attn_mask, physics_velocity = self.physics.prepare_train(
-            action_input, t_raw
+            action_input,
+            t_raw,
         )
 
         # MSAT global temb uses the scalar postfix τ per sample. Per-token
@@ -424,7 +413,10 @@ class RLDXActionModel(nn.Module):
 
         # Physics prediction loss (flow matching only; conditioning-only mode has no physics loss)
         physics_loss = self.physics.compute_loss(
-            physics_model_output, physics_velocity, action_mask, physics_attn_mask
+            physics_model_output,
+            physics_velocity,
+            action_mask,
+            physics_attn_mask,
         )
         if physics_loss is not None:
             loss = loss + self.physics.physics_loss_weight * physics_loss
@@ -434,10 +426,11 @@ class RLDXActionModel(nn.Module):
         return results
 
     def _encode_features(
-        self, backbone_output: BatchFeature, action_input: BatchFeature
+        self,
+        backbone_output: BatchFeature,
+        action_input: BatchFeature,
     ) -> BatchFeature:
-        """
-        Encode features for the action model.
+        """Encode features for the action model.
 
         Args:
             backbone_output: Output from the backbone model containing:
@@ -473,8 +466,7 @@ class RLDXActionModel(nn.Module):
         backbone_output: BatchFeature,
         action_input: BatchFeature = None,
     ) -> BatchFeature:
-        """
-        Generate actions using the flow matching diffusion process.
+        """Generate actions using the flow matching diffusion process.
 
         Args:
             backbone_features: [B, seq_len, backbone_embedding_dim]
@@ -556,13 +548,12 @@ class RLDXActionModel(nn.Module):
                 "action_pred": actions,
                 "backbone_features": vl_embeds,
                 "state_features": state_features,
-            }
+            },
         )
 
     @torch.no_grad()
     def get_action(self, backbone_output: BatchFeature, action_input: BatchFeature) -> BatchFeature:
-        """
-        Generate actions using the flow matching diffusion process.
+        """Generate actions using the flow matching diffusion process.
 
         Args:
             backbone_output: Output from the backbone model containing:
@@ -636,8 +627,7 @@ class RLDX(PreTrainedModel):
         config: RLDXNetworkConfig,
         transformers_loading_kwargs: dict = {"trust_remote_code": True},
     ):
-        """
-        Initialize RLDX model.
+        """Initialize RLDX model.
 
         Args:
             config: Model configuration
@@ -668,7 +658,7 @@ class RLDX(PreTrainedModel):
                 "motion_window": tuple(getattr(self.config, "motion_window", (5, 9, 9))),
                 "motion_ext_chnls": tuple(getattr(self.config, "motion_ext_chnls", (256,))),
                 "motion_int_chnls": tuple(
-                    getattr(self.config, "motion_int_chnls", (256, 256, 512))
+                    getattr(self.config, "motion_int_chnls", (256, 256, 512)),
                 ),
                 "motion_corr_func": getattr(self.config, "motion_corr_func", "cosine"),
                 "motion_n_encoders": getattr(self.config, "motion_n_encoders", 1),
@@ -677,7 +667,9 @@ class RLDX(PreTrainedModel):
                 "motion_use_layernorm": getattr(self.config, "motion_use_layernorm", False),
                 "motion_use_syncbn": getattr(self.config, "motion_use_syncbn", False),
                 "motion_injection_point": getattr(
-                    self.config, "motion_injection_point", "vision_encoder"
+                    self.config,
+                    "motion_injection_point",
+                    "vision_encoder",
                 ),
                 "motion_pool_type": getattr(self.config, "motion_pool_type", "avg"),
                 "motion_drop": getattr(self.config, "motion_drop", True),
@@ -687,8 +679,7 @@ class RLDX(PreTrainedModel):
 
         if config.backbone_model_type != "vtc_qwen3_vl":
             raise ValueError(
-                f"Unsupported backbone_model_type={config.backbone_model_type!r}; "
-                "only 'vtc_qwen3_vl' is supported."
+                f"Unsupported backbone_model_type={config.backbone_model_type!r}; only 'vtc_qwen3_vl' is supported.",
             )
         self.backbone = VTCQwen3VLBackbone(
             model_name=config.model_name,
@@ -702,7 +693,8 @@ class RLDX(PreTrainedModel):
             trainable_params_fp32=config.backbone_trainable_params_fp32,
             transformers_loading_kwargs=transformers_loading_kwargs,
             skip_pretrained_weights=transformers_loading_kwargs.pop(
-                "skip_pretrained_weights", False
+                "skip_pretrained_weights",
+                False,
             ),
             **kwargs,
         )
@@ -739,8 +731,7 @@ class RLDX(PreTrainedModel):
         self._memory_n_cog_tokens = raw_mem_nq if raw_mem_nq is not None else self._n_cog_tokens
 
         assert self._memory_n_cog_tokens <= self._n_cog_tokens, (
-            f"memory_n_cog_tokens ({self._memory_n_cog_tokens}) must be "
-            f"<= n_cog_tokens ({self._n_cog_tokens})"
+            f"memory_n_cog_tokens ({self._memory_n_cog_tokens}) must be <= n_cog_tokens ({self._n_cog_tokens})"
         )
 
         self._concat_memory = getattr(config, "concat_memory", False)
@@ -754,7 +745,7 @@ class RLDX(PreTrainedModel):
         backbone_hidden_size = self._get_backbone_hidden_size()
         if memory_cfg.get("hidden_size") != backbone_hidden_size:
             _print(
-                f"[i] Updating memory hidden_size from {memory_cfg.get('hidden_size')} to {backbone_hidden_size}"
+                f"[i] Updating memory hidden_size from {memory_cfg.get('hidden_size')} to {backbone_hidden_size}",
             )
             memory_cfg["hidden_size"] = backbone_hidden_size
             memory_cfg["intermediate_size"] = backbone_hidden_size * 4
@@ -769,7 +760,7 @@ class RLDX(PreTrainedModel):
         _print(
             f"\n[i] Memory enabled: length={self._memory_length}, "
             f"n_mq_mem={n_mq_mem}, concat={self._concat_memory}, "
-            f"dropout={self._memory_dropout_ratio}, output_tokens={n_out}"
+            f"dropout={self._memory_dropout_ratio}, output_tokens={n_out}",
         )
 
         # Memory trainable by default
@@ -796,7 +787,6 @@ class RLDX(PreTrainedModel):
         cast bf16 → fp32 to avoid NaN losses on the first optimizer step
         (mirrors VTC's ``trainable_params_fp32`` policy).
         """
-
         config = self.config
         num = int(getattr(config, "backbone_lora_num_layers", -1))
         layers = self.backbone.qwen_model.model.language_model.layers
@@ -816,7 +806,7 @@ class RLDX(PreTrainedModel):
                 config,
                 "backbone_lora_target_modules",
                 ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-            )
+            ),
         )
 
         self.backbone.requires_grad_(False)
@@ -853,7 +843,7 @@ class RLDX(PreTrainedModel):
         _print(
             f"[Backbone LoRA] layers_to_transform={layers_to_transform} (total={total}), "
             f"r={lora_cfg.r}, alpha={lora_cfg.lora_alpha}, "
-            f"dropout={lora_cfg.lora_dropout}, target_modules={target_modules}"
+            f"dropout={lora_cfg.lora_dropout}, target_modules={target_modules}",
         )
         _print(f"[Backbone LoRA] trainable params: {trainable} / {total_p} ({ratio:.3f}%)")
 
@@ -869,7 +859,7 @@ class RLDX(PreTrainedModel):
         """Reset recurrent memory state (call at start of new episode)."""
         self._cached_mq = None
 
-    def prepare_input(self, inputs: dict) -> Tuple[BatchFeature, BatchFeature]:
+    def prepare_input(self, inputs: dict) -> tuple[BatchFeature, BatchFeature]:
         """Prepare inputs for backbone and action model.
 
         Studio feeds pre-collated tensors via :class:`Rldx1Preprocessor`. Raw
@@ -893,8 +883,7 @@ class RLDX(PreTrainedModel):
                 return x
             if torch.is_floating_point(x):
                 return x.to(self.device, dtype=self.dtype)
-            else:
-                return x.to(self.device)
+            return x.to(self.device)
 
         backbone_inputs = tree.map_structure(to_device_with_dtype, backbone_inputs)
         action_inputs = tree.map_structure(to_device_with_dtype, action_inputs)
@@ -945,12 +934,11 @@ class RLDX(PreTrainedModel):
 
         if self._concat_memory:
             backbone_outputs["backbone_features"] = torch.cat([mq_original, mq_augmented], dim=1)
+        elif n_mq_pass > 0:
+            mq_pass = mq_original[:, :n_mq_pass, :]
+            backbone_outputs["backbone_features"] = torch.cat([mq_pass, mq_augmented], dim=1)
         else:
-            if n_mq_pass > 0:
-                mq_pass = mq_original[:, :n_mq_pass, :]
-                backbone_outputs["backbone_features"] = torch.cat([mq_pass, mq_augmented], dim=1)
-            else:
-                backbone_outputs["backbone_features"] = mq_augmented
+            backbone_outputs["backbone_features"] = mq_augmented
 
         # Rebuild attention mask
         if "backbone_attention_mask" in backbone_outputs:
@@ -976,7 +964,9 @@ class RLDX(PreTrainedModel):
         return backbone_outputs
 
     def _apply_memory_inference(
-        self, backbone_outputs: BatchFeature, reset_memory=None
+        self,
+        backbone_outputs: BatchFeature,
+        reset_memory=None,
     ) -> BatchFeature:
         """Process backbone features through memory for inference (single timestep)."""
         backbone_features = backbone_outputs["backbone_features"]
@@ -991,28 +981,28 @@ class RLDX(PreTrainedModel):
         # Manage recurrent cache
         if self._cached_mq is None or self._cached_mq.shape[0] != B:
             self._cached_mq = mq_current.repeat(1, self._memory_length, 1)
+        elif reset_memory is not None and reset_memory.any():
+            reset_defaults = mq_current.repeat(1, self._memory_length, 1)
+            shifted_cache = torch.cat([self._cached_mq[:, n_mq_mem:, :], mq_current], dim=1)
+            reset_expanded = reset_memory.view(B, 1, 1).expand(
+                B,
+                self._memory_length * n_mq_mem,
+                d,
+            )
+            self._cached_mq = torch.where(reset_expanded, reset_defaults, shifted_cache)
         else:
-            if reset_memory is not None and reset_memory.any():
-                reset_defaults = mq_current.repeat(1, self._memory_length, 1)
-                shifted_cache = torch.cat([self._cached_mq[:, n_mq_mem:, :], mq_current], dim=1)
-                reset_expanded = reset_memory.view(B, 1, 1).expand(
-                    B, self._memory_length * n_mq_mem, d
-                )
-                self._cached_mq = torch.where(reset_expanded, reset_defaults, shifted_cache)
-            else:
-                self._cached_mq = torch.cat([self._cached_mq[:, n_mq_mem:, :], mq_current], dim=1)
+            self._cached_mq = torch.cat([self._cached_mq[:, n_mq_mem:, :], mq_current], dim=1)
 
         mq_memory_out = self.memory(inputs_embeds=self._cached_mq).last_hidden_state
         mq_augmented = mq_memory_out[:, -n_mq_mem:, :]
 
         if self._concat_memory:
             backbone_outputs["backbone_features"] = torch.cat([mq_all, mq_augmented], dim=1)
+        elif n_mq_pass > 0:
+            mq_pass = mq_all[:, :n_mq_pass, :]
+            backbone_outputs["backbone_features"] = torch.cat([mq_pass, mq_augmented], dim=1)
         else:
-            if n_mq_pass > 0:
-                mq_pass = mq_all[:, :n_mq_pass, :]
-                backbone_outputs["backbone_features"] = torch.cat([mq_pass, mq_augmented], dim=1)
-            else:
-                backbone_outputs["backbone_features"] = mq_augmented
+            backbone_outputs["backbone_features"] = mq_augmented
 
         # Rebuild attention mask
         if "backbone_attention_mask" in backbone_outputs:

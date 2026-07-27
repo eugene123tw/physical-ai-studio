@@ -10,14 +10,14 @@ Submodules:
 - blocks.py: Modulation and stream blocks used by MSAT
 """
 
-from typing import Optional
-
+import torch
+import torch.nn.functional as F
 from diffusers import ConfigMixin, ModelMixin
 from diffusers.configuration_utils import register_to_config
-import torch
 from torch import nn
-import torch.nn.functional as F
 
+# Re-export so callers can import ``_print`` from ``msat`` directly.
+from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 from physicalai.policies.rldx1.components.action_model.blocks import (
     DoubleStreamBlock,
     ExpandedDoubleStreamBlock,
@@ -27,17 +27,13 @@ from physicalai.policies.rldx1.components.action_model.blocks import (
     SingleStreamBlock,
 )
 from physicalai.policies.rldx1.components.action_model.ops import RoPEEmbedder1D
-
-# Re-export so callers can import ``_print`` from ``msat`` directly.
-from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
-
 from physicalai.policies.shared.components.nn import TimestepEncoder
 
 __all__ = [
-    "BasicTransformerBlock",
-    "SelfAttentionTransformer",
-    "JointBase",
     "MSAT",
+    "BasicTransformerBlock",
+    "JointBase",
+    "SelfAttentionTransformer",
 ]
 
 
@@ -73,9 +69,9 @@ class JointBase(ModelMixin, ConfigMixin):
         norm_eps,
         qk_norm: str = "none",
         mlp_ratio: float = 4.0,
-        vl_mlp_ratio: Optional[float] = None,
-        positional_embeddings: Optional[str] = None,
-        max_seq_length: Optional[int] = None,
+        vl_mlp_ratio: float | None = None,
+        positional_embeddings: str | None = None,
+        max_seq_length: int | None = None,
         temb_type: str = "layerwise_mod",
         remove_bias: bool = False,
         pre_norm: str = "layer_norm",
@@ -126,7 +122,7 @@ class JointBase(ModelMixin, ConfigMixin):
                     post_norm=post_norm,
                 )
                 for _ in range(depth)
-            ]
+            ],
         )
 
     def _build_single_blocks(
@@ -142,8 +138,8 @@ class JointBase(ModelMixin, ConfigMixin):
         qk_norm: str = "none",
         use_swiglu: bool = False,
         mlp_ratio: float = 4.0,
-        positional_embeddings: Optional[str] = None,
-        max_seq_length: Optional[int] = None,
+        positional_embeddings: str | None = None,
+        max_seq_length: int | None = None,
         temb_type: str = "layerwise_mod",
         remove_bias: bool = False,
         pre_norm: str = "layer_norm",
@@ -194,7 +190,7 @@ class JointBase(ModelMixin, ConfigMixin):
                     post_norm=post_norm,
                 )
                 for _ in range(depth)
-            ]
+            ],
         )
 
     def _build_expanded_double_blocks(
@@ -274,7 +270,7 @@ class JointBase(ModelMixin, ConfigMixin):
                     post_norm=post_norm,
                 )
                 for _ in range(depth)
-            ]
+            ],
         )
 
     def _build_expanded_single_blocks(
@@ -345,7 +341,7 @@ class JointBase(ModelMixin, ConfigMixin):
                     post_norm=post_norm,
                 )
                 for _ in range(depth)
-            ]
+            ],
         )
 
     def _forward_inner(
@@ -469,9 +465,7 @@ class JointBase(ModelMixin, ConfigMixin):
                 sa_len = N_sa_total - (self.num_temb_tokens if has_time_token else 0)
                 start_pos = self.num_temb_tokens if has_time_token else 0
                 ids[:, current_idx:, 1] = (
-                    torch.arange(start_pos, start_pos + sa_len, device=device)
-                    .unsqueeze(0)
-                    .expand(B, -1)
+                    torch.arange(start_pos, start_pos + sa_len, device=device).unsqueeze(0).expand(B, -1)
                 )
             elif self.positional_embeddings == "rope_vl_sa":
                 ids[:, :N_vl, 0] = torch.arange(N_vl, device=device).unsqueeze(0).expand(B, -1)
@@ -487,9 +481,7 @@ class JointBase(ModelMixin, ConfigMixin):
                 sa_len = N_sa_total - (self.num_temb_tokens if has_time_token else 0)
                 start_pos = (self.num_temb_tokens if has_time_token else 0) + 1
                 ids[:, current_idx:, 1] = (
-                    torch.arange(start_pos, start_pos + sa_len, device=device)
-                    .unsqueeze(0)
-                    .expand(B, -1)
+                    torch.arange(start_pos, start_pos + sa_len, device=device).unsqueeze(0).expand(B, -1)
                 )
 
             pe = self.rope_embedder(ids)
@@ -497,6 +489,7 @@ class JointBase(ModelMixin, ConfigMixin):
         # Track block index
         block_idx = 0
         for blk in self.double_blocks:
+
             def _run_double(
                 sa_tokens: torch.Tensor,
                 vl_tokens: torch.Tensor,
@@ -526,10 +519,14 @@ class JointBase(ModelMixin, ConfigMixin):
         if len(self.single_blocks) > 0:
             vl_projected = self.vl_proj_to_sa(vl)
             # Track VL length for Single Stream Block RoPE calculation
-            N_vl_for_single = vl.shape[1]  
+            N_vl_for_single = vl.shape[1]
 
             # Re-concat with updated time_token: VL | (time_token) | S | A
-            x = torch.cat([vl_projected, time_token, sa], dim=1) if has_time_token else torch.cat([vl_projected, sa], dim=1)
+            x = (
+                torch.cat([vl_projected, time_token, sa], dim=1)
+                if has_time_token
+                else torch.cat([vl_projected, sa], dim=1)
+            )
 
         # Single Stream Blocks
         if len(self.single_blocks) > 0:
@@ -550,9 +547,7 @@ class JointBase(ModelMixin, ConfigMixin):
                     if has_time_token:
                         # Time token: axis 1 = 0..num_temb_tokens-1
                         ids_single[:, current_idx : current_idx + self.num_temb_tokens, 1] = (
-                            torch.arange(self.num_temb_tokens, device=device_single)
-                            .unsqueeze(0)
-                            .expand(B_single, -1)
+                            torch.arange(self.num_temb_tokens, device=device_single).unsqueeze(0).expand(B_single, -1)
                         )
                         current_idx += self.num_temb_tokens
                     # Action positions: axis 1 = sequence position starting from (num_temb_tokens)
@@ -565,18 +560,14 @@ class JointBase(ModelMixin, ConfigMixin):
                 elif self.positional_embeddings == "rope_vl_sa":
                     # VL positions: axis 0 = sequence position
                     ids_single[:, :N_vl_for_single, 0] = (
-                        torch.arange(N_vl_for_single, device=device_single)
-                        .unsqueeze(0)
-                        .expand(B_single, -1)
+                        torch.arange(N_vl_for_single, device=device_single).unsqueeze(0).expand(B_single, -1)
                     )
                     # Context tokens: (time_token) | S | A
                     current_idx = N_vl_for_single
                     if has_time_token:
                         # Time token: axis 1 = 0..num_temb_tokens-1
                         ids_single[:, current_idx : current_idx + self.num_temb_tokens, 1] = (
-                            torch.arange(self.num_temb_tokens, device=device_single)
-                            .unsqueeze(0)
-                            .expand(B_single, -1)
+                            torch.arange(self.num_temb_tokens, device=device_single).unsqueeze(0).expand(B_single, -1)
                         )
                         current_idx += self.num_temb_tokens
                     # Action positions: axis 1 = sequence position starting from (num_temb_tokens)
@@ -597,7 +588,10 @@ class JointBase(ModelMixin, ConfigMixin):
                 N_vl_mask = N_vl_for_single
                 N_rest = N_x - N_vl_mask
                 rest_mask = torch.ones(
-                    B_mask, N_rest, device=x.device, dtype=encoder_attention_mask.dtype
+                    B_mask,
+                    N_rest,
+                    device=x.device,
+                    dtype=encoder_attention_mask.dtype,
                 )
                 kv_mask = torch.cat([encoder_attention_mask, rest_mask], dim=1)  # [B, N_x]
                 single_attn_mask = kv_mask[:, None, None, :]  # [B, 1, 1, N_x]
@@ -609,6 +603,7 @@ class JointBase(ModelMixin, ConfigMixin):
 
             # block_idx already tracks the number of DoubleStreamBlocks processed
             for blk in self.single_blocks:
+
                 def _run_single(
                     x_tokens: torch.Tensor,
                     _blk=blk,
@@ -709,9 +704,7 @@ class JointBase(ModelMixin, ConfigMixin):
                 sa_len = N_sa - (self.num_temb_tokens if has_time_token else 0)
                 start_pos = self.num_temb_tokens if has_time_token else 0
                 ids[:, current_idx : current_idx + sa_len, 1] = (
-                    torch.arange(start_pos, start_pos + sa_len, device=device)
-                    .unsqueeze(0)
-                    .expand(B, -1)
+                    torch.arange(start_pos, start_pos + sa_len, device=device).unsqueeze(0).expand(B, -1)
                 )
                 # P positions: axis0=1 (distinguish from SA), axis1=sequential
                 ids[:, p_start:, 0] = 1
@@ -728,9 +721,7 @@ class JointBase(ModelMixin, ConfigMixin):
                 sa_len = N_sa - (self.num_temb_tokens if has_time_token else 0)
                 start_pos = (self.num_temb_tokens if has_time_token else 0) + 1
                 ids[:, current_idx : current_idx + sa_len, 1] = (
-                    torch.arange(start_pos, start_pos + sa_len, device=device)
-                    .unsqueeze(0)
-                    .expand(B, -1)
+                    torch.arange(start_pos, start_pos + sa_len, device=device).unsqueeze(0).expand(B, -1)
                 )
                 # P positions: axis0=1 (distinguish from SA/VL), axis1=sequential
                 ids[:, p_start:, 0] = 1
@@ -741,6 +732,7 @@ class JointBase(ModelMixin, ConfigMixin):
         # ── Lower: Triple blocks [VL | SA | P] ───────────────────────────
         block_idx = 0
         for blk in self.double_blocks:
+
             def _run_expanded_double(
                 sa_tokens: torch.Tensor,
                 vl_tokens: torch.Tensor,
@@ -791,32 +783,24 @@ class JointBase(ModelMixin, ConfigMixin):
                     # SA+VL stream positions (same as standard SingleStreamBlock RoPE)
                     if self.positional_embeddings == "rope_vl_sa":
                         ids_s[:, :N_vl_for_single, 0] = (
-                            torch.arange(N_vl_for_single, device=x.device)
-                            .unsqueeze(0)
-                            .expand(B_s, -1)
+                            torch.arange(N_vl_for_single, device=x.device).unsqueeze(0).expand(B_s, -1)
                         )
                     current_idx = N_vl_for_single
                     if has_time_token:
                         ids_s[:, current_idx : current_idx + self.num_temb_tokens, 1] = (
-                            torch.arange(self.num_temb_tokens, device=x.device)
-                            .unsqueeze(0)
-                            .expand(B_s, -1)
+                            torch.arange(self.num_temb_tokens, device=x.device).unsqueeze(0).expand(B_s, -1)
                         )
                         current_idx += self.num_temb_tokens
                     sa_pure_len = sa.shape[1]
                     start_pos = (self.num_temb_tokens if has_time_token else 0) + 1
                     ids_s[:, current_idx : current_idx + sa_pure_len, 1] = (
-                        torch.arange(start_pos, start_pos + sa_pure_len, device=x.device)
-                        .unsqueeze(0)
-                        .expand(B_s, -1)
+                        torch.arange(start_pos, start_pos + sa_pure_len, device=x.device).unsqueeze(0).expand(B_s, -1)
                     )
 
                     # P stream positions: axis0=1 (distinguish from SA+VL), axis1=sequential
                     p_section_start = N_x
                     ids_s[:, p_section_start:, 0] = 1
-                    ids_s[:, p_section_start:, 1] = (
-                        torch.arange(N_p, device=x.device).unsqueeze(0).expand(B_s, -1)
-                    )
+                    ids_s[:, p_section_start:, 1] = torch.arange(N_p, device=x.device).unsqueeze(0).expand(B_s, -1)
 
                 pe_single = self.rope_embedder(ids_s)
 
@@ -840,9 +824,7 @@ class JointBase(ModelMixin, ConfigMixin):
                     x_mask = torch.ones(B_mask, N_x_mask, device=x.device, dtype=x.dtype)
                 # P part
                 if physics_attention_mask is not None:
-                    p_mask = (
-                        physics_attention_mask[:, None].expand(-1, N_p_mask).to(dtype=x_mask.dtype)
-                    )
+                    p_mask = physics_attention_mask[:, None].expand(-1, N_p_mask).to(dtype=x_mask.dtype)
                 else:
                     p_mask = torch.ones(B_mask, N_p_mask, device=x.device, dtype=x_mask.dtype)
                 kv_mask = torch.cat([x_mask, p_mask], dim=1)
@@ -854,6 +836,7 @@ class JointBase(ModelMixin, ConfigMixin):
                 )
 
             for blk in self.single_blocks:
+
                 def _run_expanded_single(
                     x_tokens: torch.Tensor,
                     p_tokens: torch.Tensor,
@@ -930,18 +913,16 @@ class MSAT(JointBase):
         depth_multi_stream: int = 12,  # Number of lower multi-stream blocks
         depth_single_stream: int = 0,  # Number of SingleStreamBlocks (Flux style)
         dropout: float = 0.1,
-        attention_bias: Optional[bool] = None,  # If None, defaults to True
+        attention_bias: bool | None = None,  # If None, defaults to True
         norm_eps: float = 1e-6,
         compute_dtype=torch.float32,
-        positional_embeddings: Optional[str] = "rope_sa_only",
+        positional_embeddings: str | None = "rope_sa_only",
         action_model_max_seq_len: int = 512,
         sa_dim: int = 1536,
         vl_dim: int = 1536,
         qk_norm: str = "none",
         mlp_ratio: float = 4.0,
-        vl_mlp_ratio: Optional[
-            float
-        ] = None,  # If None, use mlp_ratio. Set lower to reduce VL stream params.
+        vl_mlp_ratio: float | None = None,  # If None, use mlp_ratio. Set lower to reduce VL stream params.
         temb_type: str = "layerwise_mod",  # "layerwise_mod", "shared_mod", or "input_token"
         remove_bias: bool = False,  # If True, remove bias from Modulation and projection layers
         pre_norm: str = "layer_norm",  # Pre-normalization type: "none", "layer_norm", or "rms_norm"
@@ -991,14 +972,14 @@ class MSAT(JointBase):
         super().__init__()
         if positional_embeddings not in {"rope_sa_only", "rope_vl_sa", None}:
             raise NotImplementedError(
-                "Unsupported positional_embeddings. "
-                "Use 'rope_sa_only', 'rope_vl_sa', or None."
+                "Unsupported positional_embeddings. Use 'rope_sa_only', 'rope_vl_sa', or None.",
             )
         self.use_physics = use_physics
         self.physics_dim = physics_dim
         self.inner_dim = num_attention_heads * attention_head_dim
         self.timestep_encoder = TimestepEncoder(
-            embedding_dim=self.inner_dim, compute_dtype=compute_dtype
+            embedding_dim=self.inner_dim,
+            compute_dtype=compute_dtype,
         )
         self.positional_embeddings = positional_embeddings
         self.attention_head_dim = attention_head_dim
@@ -1014,7 +995,7 @@ class MSAT(JointBase):
         if remove_bias:
             attention_bias = False
             _print(
-                "[MSAT] remove_bias=True: overriding attention_bias to False for all attention layers"
+                "[MSAT] remove_bias=True: overriding attention_bias to False for all attention layers",
             )
 
         # Create time token projection if temb_type is "input_token"
@@ -1043,11 +1024,15 @@ class MSAT(JointBase):
 
             # For SingleStreamBlocks: use inner_dim as input (same as temb), then project output
             self.shared_single_mod = Modulation(
-                self.inner_dim, double=False, remove_bias=remove_bias
+                self.inner_dim,
+                double=False,
+                remove_bias=remove_bias,
             )
             if self.inner_dim != sa_dim:
                 self.shared_single_mod_proj = nn.Linear(
-                    self.inner_dim, sa_dim, bias=not remove_bias
+                    self.inner_dim,
+                    sa_dim,
+                    bias=not remove_bias,
                 )
             else:
                 self.shared_single_mod_proj = nn.Identity()
@@ -1085,7 +1070,7 @@ class MSAT(JointBase):
         use_pos_emb = self.use_rope
         _print(
             f"[MSAT] 'positional_embeddings' of MSAT: {positional_embeddings}, "
-            f"action_model_max_seq_len: {action_model_max_seq_len}, enabled: {use_pos_emb}"
+            f"action_model_max_seq_len: {action_model_max_seq_len}, enabled: {use_pos_emb}",
         )
 
         self.sa_dim = sa_dim
@@ -1210,7 +1195,7 @@ class MSAT(JointBase):
         self.proj_out_1 = nn.Linear(self.inner_dim, 2 * sa_hidden_dim, bias=not remove_bias)
         self.proj_out_2 = nn.Linear(sa_hidden_dim, output_dim, bias=not remove_bias)
         _print(
-            f"[MSAT] Output projection: sa_hidden_dim={sa_hidden_dim} -> output_dim={output_dim}"
+            f"[MSAT] Output projection: sa_hidden_dim={sa_hidden_dim} -> output_dim={output_dim}",
         )
 
         self._remove_bias = remove_bias
@@ -1224,17 +1209,11 @@ class MSAT(JointBase):
         self,
         hidden_states: torch.Tensor,  # SA tokens
         encoder_hidden_states: torch.Tensor,  # VL tokens
-        timestep: Optional[torch.LongTensor] = None,
+        timestep: torch.LongTensor | None = None,
         return_all_hidden_states: bool = False,
-        encoder_attention_mask: Optional[
-            torch.Tensor
-        ] = None,  # [B, N_vl] VL attention mask (1=visible, 0=masked)
-        physics_embs: Optional[
-            torch.Tensor
-        ] = None,  # [B, N_p, sa_dim] Physics tokens (when use_physics=True)
-        physics_attention_mask: Optional[
-            torch.Tensor
-        ] = None,  # [B] per-sample physics mask (1=visible, 0=masked)
+        encoder_attention_mask: torch.Tensor | None = None,  # [B, N_vl] VL attention mask (1=visible, 0=masked)
+        physics_embs: torch.Tensor | None = None,  # [B, N_p, sa_dim] Physics tokens (when use_physics=True)
+        physics_attention_mask: torch.Tensor | None = None,  # [B] per-sample physics mask (1=visible, 0=masked)
     ):
         """Run a forward pass through MSAT.
 

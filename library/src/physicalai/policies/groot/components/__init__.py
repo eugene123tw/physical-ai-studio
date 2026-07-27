@@ -26,19 +26,19 @@ from physicalai.policies.groot.components.action_head import (
     FlowMatchingActionHeadConfig,
 )
 from physicalai.policies.groot.components.backbone import EagleBackbone, EagleProcessor
-from physicalai.policies.shared.components.nn import (
-    CategorySpecificLinear,
-    CategorySpecificMLP,
-    MultiEmbodimentActionEncoder,
-    SinusoidalPositionalEncoding,
-    swish,
-)
 from physicalai.policies.groot.components.transformer import (
     AdaLayerNorm,
     BasicTransformerBlock,
     TimestepEncoder,
     get_dit_class,
     get_self_attention_transformer_class,
+)
+from physicalai.policies.shared.components.nn import (
+    CategorySpecificLinear,
+    CategorySpecificMLP,
+    MultiEmbodimentActionEncoder,
+    SinusoidalPositionalEncoding,
+    swish,
 )
 
 __all__ = [

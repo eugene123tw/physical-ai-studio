@@ -7,7 +7,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 
 class LayerWrapper(nn.Module):
@@ -69,22 +69,21 @@ class LayerWrapper(nn.Module):
         pattern_tensor = torch.tensor(self.img_pattern, device=hidden_states.device).view(1, 1, -1)
         matches = (windows == pattern_tensor).all(dim=-1)
 
-        match_lists = [
-            torch.nonzero(matches[b], as_tuple=False).squeeze(-1)
-            for b in range(hidden_states.shape[0])
-        ]
+        match_lists = [torch.nonzero(matches[b], as_tuple=False).squeeze(-1) for b in range(hidden_states.shape[0])]
         begin_idx = torch.tensor(
-            [m[0] for m in match_lists], device=hidden_states.device
+            [m[0] for m in match_lists],
+            device=hidden_states.device,
         ).unsqueeze(1)
 
         if num_views is not None:
             end_idx = torch.tensor(
-                [m[-1 * num_view] for m, num_view in zip(match_lists, num_views)],
+                [m[-1 * num_view] for m, num_view in zip(match_lists, num_views, strict=False)],
                 device=hidden_states.device,
             ).unsqueeze(1)
         else:
             end_idx = torch.tensor(
-                [m[-1] for m in match_lists], device=hidden_states.device
+                [m[-1] for m in match_lists],
+                device=hidden_states.device,
             ).unsqueeze(1)
 
         return begin_idx, end_idx
@@ -128,28 +127,29 @@ class LayerWrapper(nn.Module):
         if input_ids is None and "input_ids" in kwargs:
             input_ids = kwargs.pop("input_ids")
         if "image_wise_encoding" in kwargs and isinstance(
-            kwargs["image_wise_encoding"], torch.Tensor
+            kwargs["image_wise_encoding"],
+            torch.Tensor,
         ):
             if kwargs["image_wise_encoding"].shape[0] > 1:
                 kwargs["image_wise_encoding"] = bool(kwargs["image_wise_encoding"][0])
             else:
                 kwargs["image_wise_encoding"] = kwargs["image_wise_encoding"].bool().item()
-        if "image_wise_encoding" in kwargs and kwargs["image_wise_encoding"]:
+        if kwargs.get("image_wise_encoding"):
             num_views = kwargs["num_views"]
         else:
             num_views = None
 
         bsz, seq_len, _dim = hidden_states.shape
 
-        is_incremental = (
-            "cache_position" in kwargs and kwargs["cache_position"] is not None and seq_len == 1
-        )
+        is_incremental = "cache_position" in kwargs and kwargs["cache_position"] is not None and seq_len == 1
         if self.layer_idx == self.internal_projection and not is_incremental:
             device = hidden_states.device
 
             token_indices = torch.arange(seq_len, device=device).view(1, -1).expand(bsz, -1)
             begin_idx, end_idx = self.get_removing_indices(
-                hidden_states, input_ids, num_views=num_views
+                hidden_states,
+                input_ids,
+                num_views=num_views,
             )
 
             compress_mask = (end_idx > begin_idx).reshape(-1)
@@ -158,7 +158,7 @@ class LayerWrapper(nn.Module):
             keep_mask_back = token_indices >= end_idx
 
             # Drop motion module tokens (inserted before image tokens) at internal_projection
-            motion_drop_info = kwargs.get("motion_drop_info", None)
+            motion_drop_info = kwargs.get("motion_drop_info")
             motion_drop_mask = torch.zeros_like(keep_mask_front)  # (bsz, seq_len)
             if motion_drop_info is not None and motion_drop_info["count"] > 0:
                 ms = motion_drop_info["start"]
@@ -171,8 +171,7 @@ class LayerWrapper(nn.Module):
             drop_mask = ~(keep_mask_front | keep_mask_back) & ~motion_drop_mask
 
             motion_token = (
-                (hidden_states * drop_mask.unsqueeze(-1)).sum(dim=1)
-                / drop_mask.sum(dim=1, keepdim=True).clamp(min=1)
+                (hidden_states * drop_mask.unsqueeze(-1)).sum(dim=1) / drop_mask.sum(dim=1, keepdim=True).clamp(min=1)
             ).reshape(bsz, self.motion_token, -1)
 
             hidden_states = [
@@ -182,7 +181,9 @@ class LayerWrapper(nn.Module):
                         motion_token[b]
                         if compress_mask[b]
                         else torch.tensor(
-                            [], device=hidden_states.device, dtype=hidden_states.dtype
+                            [],
+                            device=hidden_states.device,
+                            dtype=hidden_states.dtype,
                         ),
                         hidden_states[b][keep_mask_back[b]],
                     ],
@@ -210,7 +211,7 @@ class LayerWrapper(nn.Module):
                                 dtype=kwargs["attention_mask"].dtype,
                             ),
                             kwargs["attention_mask"][b][keep_mask_back[b]],
-                        ]
+                        ],
                     )
                     for b in range(bsz)
                 ]
@@ -232,13 +233,13 @@ class LayerWrapper(nn.Module):
                                 dtype=kwargs["attention_mask_2"].dtype,
                             ),
                             kwargs["attention_mask_2"][b][keep_mask_back[b]],
-                        ]
+                        ],
                     )
                     for b in range(bsz)
                 ]
                 kwargs["attention_mask_2"] = self.left_pad_emb_list(att_list_2)
 
-            if "position_ids" in kwargs.keys() and kwargs["position_ids"] is not None:
+            if "position_ids" in kwargs and kwargs["position_ids"] is not None:
                 position_ids = kwargs["position_ids"]
                 if position_ids.dim() == 2:
                     pos_list = [
@@ -249,7 +250,7 @@ class LayerWrapper(nn.Module):
                                 if compress_mask[b]
                                 else position_ids[b][:0],
                                 position_ids[b][keep_mask_back[b]],
-                            ]
+                            ],
                         )
                         for b in range(bsz)
                     ]
@@ -275,7 +276,7 @@ class LayerWrapper(nn.Module):
                 else:
                     raise ValueError(f"Unsupported position_ids shape: {position_ids.shape}")
 
-            if "position_embeddings" in kwargs.keys() and kwargs["position_embeddings"] is not None:
+            if "position_embeddings" in kwargs and kwargs["position_embeddings"] is not None:
                 emb_x_list = [
                     torch.cat(
                         [

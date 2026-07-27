@@ -5,14 +5,12 @@
 import glob
 import json
 import os
-from typing import Optional
+import pathlib
 
 # from transformers.trainer_utils import load_sharded_checkpoint
 from accelerate import load_checkpoint_in_model
 from huggingface_hub import snapshot_download
-from transformers import AutoConfig, AutoProcessor
-
-from transformers import Qwen3VLForConditionalGeneration
+from transformers import AutoConfig, AutoProcessor, Qwen3VLForConditionalGeneration
 
 from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 
@@ -21,8 +19,9 @@ from .text_model_forward import install_vtc_text_forward
 
 
 def _checkpoint_has_motion_weights(
-    path_or_name: str, revision: Optional[str] = None
-) -> Optional[bool]:
+    path_or_name: str,
+    revision: str | None = None,
+) -> bool | None:
     """Detect whether a checkpoint carries `motion_block.*` parameter tensors.
 
     Returns:
@@ -38,7 +37,7 @@ def _checkpoint_has_motion_weights(
     """
     from safetensors import safe_open
 
-    if os.path.isdir(path_or_name):
+    if pathlib.Path(path_or_name).is_dir():
         shards = sorted(glob.glob(os.path.join(path_or_name, "*.safetensors")))
         if not shards:
             _print(f"[w] motion module probe: no *.safetensors under {path_or_name}")
@@ -65,7 +64,9 @@ def _checkpoint_has_motion_weights(
 
     try:
         index_path = hf_hub_download(
-            path_or_name, "model.safetensors.index.json", revision=revision
+            path_or_name,
+            "model.safetensors.index.json",
+            revision=revision,
         )
     except EntryNotFoundError:
         index_path = None
@@ -88,7 +89,7 @@ def _checkpoint_has_motion_weights(
     _print(
         f"[w] motion module probe: {path_or_name} has no sharded index.json. Not "
         f"downloading full model.safetensors for key scan; preserving "
-        f"loaded motion module weights (skipping re-init)."
+        f"loaded motion module weights (skipping re-init).",
     )
     return None
 
@@ -103,14 +104,12 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
         # ``_from_config`` (which takes model-init kwargs, not download
         # kwargs) on the VTC branch. Pinning ``revision`` here keeps the
         # weight blobs aligned with ``--model-revision``.
-        download_kwargs = {
-            k: kwargs.pop(k) for k in ("revision", "cache_dir", "token") if k in kwargs
-        }
+        download_kwargs = {k: kwargs.pop(k) for k in ("revision", "cache_dir", "token") if k in kwargs}
         revision = download_kwargs.get("revision")
 
         if "vtc" in pretrained_model_name_or_path.lower():
             _print(
-                f"[i] VTC loading pretrained VTC + Qwe3nVL weights from {pretrained_model_name_or_path}"
+                f"[i] VTC loading pretrained VTC + Qwe3nVL weights from {pretrained_model_name_or_path}",
             )
             # Reference architecture config — always the upstream Qwen3-VL.
             # revision pins the RLDX repo, not this reference, so don't thread
@@ -119,7 +118,8 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
         else:
             _print(f"[i] VTC loading Qwen3-VL weights from {pretrained_model_name_or_path}")
             base_config = AutoConfig.from_pretrained(
-                pretrained_model_name_or_path, **download_kwargs
+                pretrained_model_name_or_path,
+                **download_kwargs,
             )
 
         # Inject motion module config into vision_config before model construction
@@ -134,7 +134,10 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
             # Only pass explicit config when motion module modifies it; otherwise use default loading
             extra = {"config": base_config} if motion_config is not None else {}
             model = Qwen3VLForConditionalGeneration.from_pretrained(
-                pretrained_model_name_or_path, **extra, **download_kwargs, **kwargs
+                pretrained_model_name_or_path,
+                **extra,
+                **download_kwargs,
+                **kwargs,
             )
 
         # Re-apply motion module init only when motion module is newly added (not in checkpoint).
@@ -144,7 +147,7 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
             probe = _checkpoint_has_motion_weights(pretrained_model_name_or_path, revision=revision)
             if probe is True:
                 _print(
-                    "[i] motion module weights loaded from checkpoint, skipping re-initialization"
+                    "[i] motion module weights loaded from checkpoint, skipping re-initialization",
                 )
             elif probe is False:
                 model.model.visual.motion_block.initialize_weights()
@@ -158,7 +161,7 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
                 _print(
                     "[w] motion module ckpt probe indeterminate — skipping re-init to "
                     "avoid overwriting loaded weights. If fresh motion module init is "
-                    "intended, verify the checkpoint layout."
+                    "intended, verify the checkpoint layout.",
                 )
 
         for layer_idx in range(len(model.model.language_model.layers)):
@@ -173,7 +176,7 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
         # expects a bare-tensor layer return; the wrapped stack needs both.
         install_vtc_text_forward(model.model.language_model)
         if "vtc" in pretrained_model_name_or_path.lower():
-            if os.path.isdir(pretrained_model_name_or_path):
+            if pathlib.Path(pretrained_model_name_or_path).is_dir():
                 local_dir = pretrained_model_name_or_path
             else:
                 # Thread revision/cache_dir/token so the weight blobs we
@@ -181,7 +184,8 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
                 local_dir = snapshot_download(pretrained_model_name_or_path, **download_kwargs)
 
             processor = AutoProcessor.from_pretrained(
-                pretrained_model_name_or_path, **download_kwargs
+                pretrained_model_name_or_path,
+                **download_kwargs,
             )
 
             model.resize_token_embeddings(len(processor.tokenizer))

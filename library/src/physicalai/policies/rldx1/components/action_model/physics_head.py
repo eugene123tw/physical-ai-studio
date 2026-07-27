@@ -4,27 +4,27 @@
 
 """Physics conditioning + flow matching stream for RLDXActionModel."""
 
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
+from .._dist import rank_zero_print as _print
 from .physics import (
     PhysicalSignalDecoder,
     PhysicalSignalEncoder,
     PhysicsNoiseEncoder,
 )
-from .._dist import rank_zero_print as _print
 
 
 class PhysicsInferenceState(NamedTuple):
     """Immutable state carried through Euler inference loop."""
 
-    embs: Optional[torch.Tensor]  # current physics embeddings for MSAT
-    hist_tok: Optional[torch.Tensor]  # fixed history tokens (computed once)
-    fut: Optional[torch.Tensor]  # evolving future state (Euler updated)
-    attn_mask: Optional[torch.Tensor]  # fixed attention mask
+    embs: torch.Tensor | None  # current physics embeddings for MSAT
+    hist_tok: torch.Tensor | None  # fixed history tokens (computed once)
+    fut: torch.Tensor | None  # evolving future state (Euler updated)
+    attn_mask: torch.Tensor | None  # fixed attention mask
 
 
 # --- State dict key remapping for backward compatibility ---
@@ -129,16 +129,15 @@ class PhysicsHead(nn.Module):
             )
         else:
             _print(
-                "[Physics] Flow matching disabled. "
-                "Physics used as conditioning only (no prediction loss)"
+                "[Physics] Flow matching disabled. Physics used as conditioning only (no prediction loss)",
             )
 
         _print(
-            f"\n[Physics] Physics stream enabled (dim={physics_dim}, weight={physics_loss_weight})"
+            f"\n[Physics] Physics stream enabled (dim={physics_dim}, weight={physics_loss_weight})",
         )
         _print(
             f"[Physics] hist_len={self.physics_hist_len}, fut_len={self.physics_fut_len}, "
-            f"flow_matching={self.physics_use_flow_matching}"
+            f"flow_matching={self.physics_use_flow_matching}",
         )
         if physics_dropout_prob > 0:
             mode = "hist-only" if self.physics_use_flow_matching else "all-conditioning"
@@ -146,7 +145,8 @@ class PhysicsHead(nn.Module):
 
     def _maybe_dropout(self, tokens: torch.Tensor) -> torch.Tensor:
         """Per-sample dropout: replace a dropped sample's full token slice with
-        the learned `physics_mask_token`. Active only during training."""
+        the learned `physics_mask_token`. Active only during training.
+        """
         if not (
             self.training
             and self.physics_dropout_prob > 0
@@ -212,11 +212,7 @@ class PhysicsHead(nn.Module):
 
     def compute_loss(self, physics_model_output, physics_velocity, action_mask, physics_attn_mask):
         """Compute physics prediction loss (flow matching only). Returns physics_loss or None."""
-        if not (
-            self.physics_use_flow_matching
-            and physics_model_output is not None
-            and physics_velocity is not None
-        ):
+        if not (self.physics_use_flow_matching and physics_model_output is not None and physics_velocity is not None):
             return None
 
         physics_hidden_fut = physics_model_output[:, -self.physics_fut_len :, :]

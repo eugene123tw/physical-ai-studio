@@ -393,10 +393,9 @@ class Rldx1Model(Model):
             },
         )
 
-        dtype = torch.bfloat16 if use_bf16 else torch.float32
-        net = net.to(dtype)
-
         state_dict = load_rldx_state_dict(base_model_path, revision=revision)
+
+        # ----- max_action_dim / max_state_dim slicing -----
         # Slice checkpoint tensors whose shape exceeds the model's (e.g. when
         # max_state_dim / max_action_dim is smaller than the pretrained 64).
         # Each mismatched dim is trimmed independently so the first-N weights
@@ -415,6 +414,8 @@ class Rldx1Model(Model):
                         list(ckpt_shape),
                         list(model_shape),
                     )
+
+        # --- Load state dict to net --- 
         missing, unexpected = net.load_state_dict(state_dict, strict=False)
         if unexpected:
             msg = (
@@ -423,8 +424,7 @@ class Rldx1Model(Model):
                 f"{unexpected[:5]}"
             )
             raise ValueError(msg)
-        # ``missing`` is expected to hold only non-persistent buffers (e.g. RoPE
-        # ``inv_freq``) that are recomputed at construction, not trained weights.
+
         if missing:
             logger.warning(
                 "%d parameter(s) not found in checkpoint (expected to be "

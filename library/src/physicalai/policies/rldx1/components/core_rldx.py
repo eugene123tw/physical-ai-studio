@@ -113,8 +113,11 @@ class RLDXActionModel(nn.Module):
 
         # State noise parameters
         self.state_additive_noise_scale = config.state_additive_noise_scale
-
-        self.beta_dist = Beta(config.noise_beta_alpha, config.noise_beta_beta)
+        self.beta_dist = Beta(
+            config.noise_beta_alpha, 
+            config.noise_beta_beta,
+            validate_args=False
+        )
         self.num_timestep_buckets = config.num_timestep_buckets
 
         # Real-Time Chunking.
@@ -889,12 +892,6 @@ class RLDX(PreTrainedModel):
             **kwargs,
         )
 
-        # Freeze cog_emb if configured (after backbone init which sets requires_grad=True)
-        if getattr(config, "freeze_cog_tokens", False):
-            if hasattr(self.backbone, "cog_emb"):
-                self.backbone.cog_emb.requires_grad_(False)
-                _print("[i] freeze_cog_tokens: cog_emb frozen (requires_grad=False)")
-
         # Initialize action model
         self.action_model = RLDXActionModel(config)
 
@@ -1106,32 +1103,6 @@ class RLDX(PreTrainedModel):
         return action_outputs
 
     def get_action(self, inputs: dict = None, **kwargs) -> BatchFeature:
-        if inputs is None:
-            inputs = kwargs
-        elif kwargs:
-            # PolicyRuntime stuffs top-level keys like ``action_prefix`` and
-            # ``rtc_prefix_len`` alongside the wrapped ``inputs`` modality
-            # dict, so when this method is called as
-            # ``model.get_action(**collated)`` they land in ``kwargs``
-            # rather than inside ``inputs``. Without this merge they are
-            # silently dropped before the action model's RTC check, so RTC
-            # always sees ``action_prefix=None`` and runs cold-start every
-            # chunk regardless of what PolicyRuntime injected.
-            #
-            # Loud-fail on key collision: today the inputs / kwargs key
-            # namespaces are disjoint (collator emits modalities; runtime
-            # injects RTC/memory control keys), but a silent overwrite
-            # would be hard to diagnose if a future modality reuses one
-            # of those names — surface the conflict here instead.
-            collision = set(inputs).intersection(kwargs)
-            if collision:
-                raise ValueError(
-                    "get_action: keys collide between `inputs` dict and "
-                    f"top-level kwargs: {sorted(collision)}. Pass each key "
-                    "in exactly one place."
-                )
-            inputs = {**inputs, **kwargs}
-
         reset_memory = inputs.pop("reset_memory", None) if self.use_memory else None
 
         backbone_inputs, action_inputs = self.prepare_input(inputs)

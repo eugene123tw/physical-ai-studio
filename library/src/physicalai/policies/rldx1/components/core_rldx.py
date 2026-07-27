@@ -8,15 +8,6 @@ from physicalai.policies.rldx1.components.config_rldx import RLDXNetworkConfig
 from physicalai.policies.rldx1.components.action_model.msat import MSAT
 from physicalai.policies.rldx1.components.action_model.physics import init_physics_params_near_zero
 from physicalai.policies.rldx1.components.action_model.physics_head import NoOpPhysicsHead, PhysicsHead
-from physicalai.policies.rldx1.components.action_model.rtc import (
-    RTCConfig,
-    build_noisy_trajectory_rtc,
-    build_per_token_time,
-    compute_soft_mask_weights,
-    guidance_scale,
-    rtc_config_from_rldx,
-    sample_training_prefix,
-)
 from physicalai.policies.rldx1.components.backbone.adapter import VTCQwen3VLBackbone
 from physicalai.policies.shared.components.nn import CategorySpecificMLP, MultiEmbodimentActionEncoder
 from physicalai.policies.rldx1.components.memory import TransformerMemory
@@ -119,16 +110,6 @@ class RLDXActionModel(nn.Module):
             validate_args=False
         )
         self.num_timestep_buckets = config.num_timestep_buckets
-
-        # Real-Time Chunking.
-        self._rtc: RTCConfig = rtc_config_from_rldx(config)
-        self._rtc.validate(self.action_horizon)
-        if self._rtc.enabled_training() or self._rtc.enabled_inference():
-            _print(
-                f"[RTC] enabled: training_max_delay={self._rtc.training_max_delay}, "
-                f"inference_mode={self._rtc.inference_mode}, "
-                f"inference_delay={self._rtc.inference_delay}"
-            )
 
         # Physics (tactile/torque) stream
         self.use_physics = getattr(config, "use_physics", False)
@@ -375,21 +356,10 @@ class RLDXActionModel(nn.Module):
         noise = torch.randn(actions.shape, device=actions.device, dtype=actions.dtype)
         t_raw = self.sample_time(batch_size, device=actions.device, dtype=actions.dtype)  # (B,)
 
-        # Training RTC: per-sample prefix with clean ground-truth actions at t=1.
-        if self.training and self._rtc.enabled_training():
-            prefix_mask = sample_training_prefix(
-                batch_size,
-                self.action_horizon,
-                self._rtc.training_max_delay,
-                device=actions.device,
-            )  # (B, H) bool
-            t_tok = build_per_token_time(t_raw, prefix_mask)  # (B, H)
-            noisy_trajectory = build_noisy_trajectory_rtc(actions, noise, t_tok)
-        else:
-            prefix_mask = None
-            t_tok = t_raw.unsqueeze(1).expand(-1, self.action_horizon).contiguous()
-            t = t_raw[:, None, None]
-            noisy_trajectory = (1 - t) * noise + t * actions
+        prefix_mask = None
+        t_tok = t_raw.unsqueeze(1).expand(-1, self.action_horizon).contiguous()
+        t = t_raw[:, None, None]
+        noisy_trajectory = (1 - t) * noise + t * actions
 
         velocity = actions - noise
         action_features = self.action_encoder(noisy_trajectory, t_tok, embodiment_id)
@@ -436,8 +406,6 @@ class RLDXActionModel(nn.Module):
         pred = self.action_decoder(action_model_output, embodiment_id)
         pred_actions = pred[:, -actions.shape[1] :]
 
-        # Action loss. Training RTC masks out the clean-prefix positions so
-        # the model is only graded on postfix reconstruction.
         action_mask = action_input.action_mask
         loss_mask = action_mask
         if prefix_mask is not None:
@@ -513,14 +481,7 @@ class RLDXActionModel(nn.Module):
             state_features: [B, state_horizon, input_embedding_dim]
             embodiment_id: [B] (embodiment IDs)
             backbone_output: Output from the backbone model
-            action_input: Optional, used for physics conditioning and for RTC
-                prefix inputs. When Real-Time Chunking is enabled by config,
-                ``action_input`` may carry:
-                - ``action_prefix``: [B, d, action_dim] frozen actions from the
-                  previous chunk.
-                - ``rtc_prefix_len``: int (defaults to
-                  ``config.rtc_inference_delay``).
-                Missing prefix at episode start falls back to standard sampling.
+            action_input: Optional, used for physics conditioning.
         """
         vl_embeds = backbone_features
 
@@ -529,81 +490,6 @@ class RLDXActionModel(nn.Module):
         device = vl_embeds.device
         dtype = vl_embeds.dtype
         horizon = self.config.action_horizon
-
-        # ─── RTC setup ──────────────────────────────────────────────────────
-        rtc = self._rtc
-        rtc_mode = "none"
-        prefix_actions = None
-        prefix_len = 0
-        soft_mask_W = None
-        postfix_target = None
-        if rtc.enabled_inference() and action_input is not None:
-            maybe_prefix = action_input.get("action_prefix", None)
-            cfg_len = int(action_input.get("rtc_prefix_len", rtc.inference_delay) or 0)
-            if maybe_prefix is not None and cfg_len > 0:
-                if not isinstance(maybe_prefix, torch.Tensor):
-                    maybe_prefix = torch.as_tensor(maybe_prefix, dtype=dtype, device=device)
-                else:
-                    maybe_prefix = maybe_prefix.to(device=device, dtype=dtype)
-                expected_dim = self.action_dim
-                if maybe_prefix.dim() != 3 or maybe_prefix.shape[-1] != expected_dim:
-                    raise ValueError(
-                        f"action_prefix must have shape (B, >=d, {expected_dim}); "
-                        f"got {tuple(maybe_prefix.shape)}"
-                    )
-                if not torch.isfinite(maybe_prefix).all():
-                    raise ValueError("action_prefix contains NaN or Inf values")
-                if maybe_prefix.shape[1] >= cfg_len:
-                    prefix_actions = maybe_prefix[:, :cfg_len].contiguous()
-                    prefix_len = cfg_len
-                    rtc_mode = rtc.inference_mode
-                    if rtc_mode == "guided":
-                        s = rtc.inference_exec_horizon or (horizon - prefix_len)
-                        soft_mask_W = compute_soft_mask_weights(
-                            horizon, prefix_len, s, device=device, dtype=dtype
-                        )  # (1, H); will broadcast to (B, H)
-                        # Optional Y target for the new chunk's [d, H) region —
-                        # the previous chunk's predictions sliced to the matching
-                        # absolute-time positions (Eq. 5 of arXiv 2506.07339).
-                        # Server stores this in SessionRegistry.rtc_chunk and
-                        # PolicyRuntime injects it as ``action_postfix_target``.
-                        # Cold start path leaves it None and the Jacobian VJP
-                        # falls back to the prefix-only signal.
-                        maybe_postfix = action_input.get("action_postfix_target", None)
-                        if maybe_postfix is not None:
-                            if not isinstance(maybe_postfix, torch.Tensor):
-                                maybe_postfix = torch.as_tensor(
-                                    maybe_postfix, dtype=dtype, device=device
-                                )
-                            else:
-                                maybe_postfix = maybe_postfix.to(device=device, dtype=dtype)
-                            if (
-                                maybe_postfix.dim() != 3
-                                or maybe_postfix.shape[0] != batch_size
-                                or maybe_postfix.shape[-1] != expected_dim
-                            ):
-                                raise ValueError(
-                                    f"action_postfix_target must have shape "
-                                    f"(B={batch_size}, *, {expected_dim}); got "
-                                    f"{tuple(maybe_postfix.shape)}"
-                                )
-                            if not torch.isfinite(maybe_postfix).all():
-                                raise ValueError("action_postfix_target contains NaN or Inf values")
-                            postfix_target = maybe_postfix.contiguous()
-
-        # Per-call RTC trace so deployers can see what happened on each
-        # inference. One line per invocation.
-        _rtc_parts = [f"mode={rtc_mode}", f"prefix_len={prefix_len}"]
-        if rtc_mode != "none":
-            _rtc_s = rtc.inference_exec_horizon or (horizon - prefix_len)
-            _rtc_parts.append(f"s={_rtc_s}")
-            if rtc_mode == "guided":
-                _rtc_parts.append(f"β={rtc.jacobian_beta}")
-                if rtc.jacobian_steps_only is not None:
-                    _rtc_parts.append(f"steps_only={rtc.jacobian_steps_only}")
-        elif rtc.enabled_inference():
-            _rtc_parts.append("cold_start=True")  # config wants RTC but no prefix arrived
-        _print(f"[RTC] B={batch_size} H={horizon} " + " ".join(_rtc_parts))
 
         # ─── Physics ────────────────────────────────────────────────────────
         with torch.no_grad():
@@ -615,9 +501,6 @@ class RLDXActionModel(nn.Module):
             dtype=dtype,
             device=device,
         )
-        # Trained mode hard-inpaints prefix; guided mode relies on VJP only.
-        if rtc_mode == "trained" and prefix_len > 0:
-            actions[:, :prefix_len] = prefix_actions
 
         # Use custom denoising timesteps if set, otherwise uniform spacing.
         if hasattr(self, "denoising_timesteps") and self.denoising_timesteps is not None:
@@ -655,85 +538,17 @@ class RLDXActionModel(nn.Module):
 
             t_scalar = torch.full((batch_size,), t_cont, device=device, dtype=dtype)
             t_tok = t_scalar.unsqueeze(1).expand(-1, horizon).clone()
-            # Per-token time t=1 on the prefix is a *training-RTC* trick
-            # (arXiv 2512.05964): the model has to be trained to expect a
-            # clean prefix marked by t=1. Applying it under ``guided`` to a
-            # checkpoint without RTC-training pushes the prefix tokens out
-            # of the model's training distribution and produces garbage
-            # velocity at the chunk boundary.
-            # Trained mode: t=1 + hard inpaint on prefix (paper 2512.05964).
-            # Guided mode skips both — VJP handles the prefix attraction.
-            if rtc_mode == "trained" and prefix_len > 0:
-                t_tok[:, :prefix_len] = 1.0
-                actions[:, :prefix_len] = prefix_actions
 
-            use_jacobian = rtc_mode == "guided" and (
-                rtc.jacobian_steps_only is None or i < rtc.jacobian_steps_only
-            )
-
-            if use_jacobian:
-                # Compute v_guided = v + c · VJP[(Y−Â¹)ᵀ diag(W), ∂Â¹/∂x].
-                x_g = actions.detach().requires_grad_(True)
-                with torch.enable_grad():
-                    mo = _dit_forward(x_g, t_scalar, t_tok)
-                    ao = mo["action"] if isinstance(mo, dict) else mo
-                    v = self.action_decoder(ao, embodiment_id)[:, -horizon:]
-                    a_hat = x_g + (1.0 - t_cont) * v
-                    # Inpainting target Y (Eq. 5 of arXiv 2506.07339).
-                    #
-                    # When the caller supplied ``action_postfix_target``
-                    # (server cache of the previous chunk's predictions),
-                    # the new chunk's ramp positions get a non-zero Y →
-                    # the soft-mask W's exponential decay produces a
-                    # smooth corrective gradient profile across the ramp.
-                    #
-                    # When that target is absent (cold start: first chunk
-                    # of an episode), Y collapses to the current ``a_hat``
-                    # outside the frozen prefix so the residual is zero
-                    # there. In that mode the soft-mask is dead weight in
-                    # the ramp band and the only postfix-side signal is
-                    # the leak from the prefix VJP through MSAT's
-                    # self-attention — sufficient to lock the prefix but
-                    # with no explicit ramp smoothing.
-                    if postfix_target is not None:
-                        Y = a_hat.detach().clone()
-                        Y[:, :prefix_len] = prefix_actions
-                        ramp_len = min(postfix_target.shape[1], horizon - prefix_len)
-                        if ramp_len > 0:
-                            Y[:, prefix_len : prefix_len + ramp_len] = postfix_target[:, :ramp_len]
-                    else:
-                        Y = a_hat.detach().clone()
-                        Y[:, :prefix_len] = prefix_actions
-                    W_b = soft_mask_W.to(dtype=a_hat.dtype)
-                    if W_b.shape[0] == 1 and batch_size > 1:
-                        W_b = W_b.expand(batch_size, -1)
-                    grad_outputs = W_b.unsqueeze(-1) * (Y - a_hat.detach())
-                    vjp = torch.autograd.grad(
-                        outputs=a_hat,
-                        inputs=x_g,
-                        grad_outputs=grad_outputs,
-                        retain_graph=False,
-                        create_graph=False,
-                    )[0]
-                c = guidance_scale(t_cont, rtc.jacobian_beta)
-                pred_velocity = (v.detach() + c * vjp.detach()).to(dtype=dtype)
-                if isinstance(mo, dict):
-                    model_output = {k: val.detach() for k, val in mo.items()}
-                else:
-                    model_output = mo.detach()
-            else:
-                with torch.no_grad():
-                    mo = _dit_forward(actions, t_scalar, t_tok)
-                    ao = mo["action"] if isinstance(mo, dict) else mo
-                    pred_velocity = self.action_decoder(ao, embodiment_id)[:, -horizon:]
-                    model_output = mo
+            with torch.no_grad():
+                mo = _dit_forward(actions, t_scalar, t_tok)
+                ao = mo["action"] if isinstance(mo, dict) else mo
+                pred_velocity = self.action_decoder(ao, embodiment_id)[:, -horizon:]
+                model_output = mo
 
             # Euler step.
             with torch.no_grad():
                 actions = actions + dt * pred_velocity
                 # Re-lock prefix between Euler steps (trained mode only).
-                if rtc_mode == "trained" and prefix_len > 0:
-                    actions[:, :prefix_len] = prefix_actions
                 phys_state = self.physics.update_state(phys_state, model_output, dt)
 
         return BatchFeature(
@@ -1074,12 +889,6 @@ class RLDX(PreTrainedModel):
 
         # Move to device and dtype
         def to_device_with_dtype(x):
-            # Non-tensor scalars (int ``rtc_prefix_len``, str, None, etc.)
-            # flow through unchanged. ``torch.is_floating_point`` rejects
-            # non-Tensor inputs with TypeError, so without this guard the
-            # RTC dispatch (which carries an int ``rtc_prefix_len`` next
-            # to the action_prefix tensor) crashes inside
-            # ``tree.map_structure`` before reaching the model.
             if not torch.is_tensor(x):
                 return x
             if torch.is_floating_point(x):

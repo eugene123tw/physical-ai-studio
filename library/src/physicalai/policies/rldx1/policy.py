@@ -91,6 +91,12 @@ class Rldx1(Policy):
             layers + input embeddings + lm_head). Overrides tune_top_llm_layers.
         backbone_trainable_params_fp32: Whether to cast trainable backbone
             parameters to float32 after bf16 loading for optimizer stability.
+            Default ``False`` here, diverging from upstream's ``True``.
+            TODO(Eugene): upstream defaults this to ``True``, but the fp32
+            copies of trainable backbone params OOM on an A100. DeepSpeed
+            ZeRO-Offload (CPU) avoids the OOM but is very slow in practice.
+            Explore a better way (e.g. selective fp32 casting, ZeRO-3 without
+            offload, or partial offload) to re-enable ``True`` by default.
         tune_visual: Whether to fine-tune the vision tower.
         tune_projector: Whether to fine-tune the projectors.
         tune_diffusion_model: Whether to fine-tune the MSAT action model.
@@ -142,7 +148,7 @@ class Rldx1(Policy):
         *,
         tune_top_llm_layers: int = 6,
         tune_llm: bool = False,
-        backbone_trainable_params_fp32: bool = True,
+        backbone_trainable_params_fp32: bool = False,
         tune_visual: bool = True,
         tune_projector: bool = True,
         tune_diffusion_model: bool = True,

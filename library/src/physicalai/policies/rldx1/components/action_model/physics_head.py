@@ -1,12 +1,6 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
-#
-# Vendored from RLWRLD/RLDX-1 (Apache-2.0), itself modified from NVIDIA Isaac
-# GR00T N1.7. Upstream: https://github.com/rlwrld/RLDX-1
-#   rldx/model/modules/action_model/physics_head.py -> action_model/physics_head.py
-# Original: https://github.com/NVIDIA/Isaac-GR00T
-# Studio modification: import paths rewritten to this vendored subpackage.
 
 """Physics conditioning + flow matching stream for RLDXActionModel."""
 

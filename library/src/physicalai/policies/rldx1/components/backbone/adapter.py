@@ -14,6 +14,9 @@ from transformers.utils import is_torchdynamo_compiling
 from physicalai.policies.rldx1.components.backbone.modeling_vtc import VTC_Qwen3VL
 from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 
+from transformers import AutoConfig
+from physicalai.policies.rldx1.components.backbone.modeling_vtc import LayerWrapper
+from physicalai.policies.rldx1.components.backbone.text_model_forward import install_vtc_text_forward
 
 # Default attention implementation for the Qwen3-VL backbone load.
 # Production stays on FlashAttention-2 for throughput; environments that
@@ -99,12 +102,6 @@ class VTCQwen3VLBackbone(nn.Module):
         skip_pretrained_weights = kwargs.pop("skip_pretrained_weights", False)
         if skip_pretrained_weights:
             _print("[i] Creating VTC-Qwen3-VL architecture only (weights from checkpoint)")
-            from transformers import AutoConfig
-
-            from physicalai.policies.rldx1.components.backbone.modeling_vtc import LayerWrapper
-            from physicalai.policies.rldx1.components.backbone.text_model_forward import (
-                install_vtc_text_forward,
-            )
 
             backbone_config = AutoConfig.from_pretrained(model_name, **transformers_loading_kwargs)
             if motion_config is not None:

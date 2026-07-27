@@ -124,7 +124,6 @@ class Rldx1Config(Config):
             ``0`` disables rotation).
         color_jitter_params: Train-time ``A.ColorJitter`` params (``None``
             disables color jitter).
-        use_relative_action: Must be False in v1. Relative actions are not supported.
         use_percentiles: Whether to normalize with 1st/99th percentiles (vs min/max).
         clip_outliers: Whether to clip normalized state/action to ``[-1, 1]`` (upstream
             ``clip_outliers``). ``True`` (default) matches the upstream RLDX-1 recipe:
@@ -132,10 +131,6 @@ class Rldx1Config(Config):
             bounds. Set ``False`` (Pi05-style, no clip) for wide-range action spaces
             where ``QUANTILES`` bounds would truncate task-critical extremes (e.g.
             PushT). Gates both the train-time clip and the inference denormalize clamp.
-        rtc_inference_mode: Real-Time Chunking inference mode ('none', 'trained').
-        rtc_training_max_delay: Max prefix delay sampled per step during RTC training.
-        rtc_inference_delay: Inference-time prefix delay for RTC.
-        rtc_inference_exec_horizon: RTC execution horizon (0 => action_horizon - delay).
         use_memory: Phase-2 memory stream. Must be False in v1.
         use_motion: Phase-2 motion stream. Must be False in v1.
         use_physics: Phase-2 physics stream. Must be False in v1.
@@ -265,19 +260,11 @@ class Rldx1Config(Config):
     random_crop_fraction: float | None = None
     random_rotation_angle: int | None = None
     color_jitter_params: dict[str, float] | None = None
-    use_relative_action: bool = False
     use_percentiles: bool = True
     # Clip normalized state/action to [-1, 1] (upstream clip_outliers). True keeps
     # upstream parity; False (Pi05-style) preserves out-of-percentile action tails
     # for wide-range tasks like PushT. Gates both the train clip and infer clamp.
     clip_outliers: bool = True
-
-    # Real-Time Chunking (optional; no released checkpoint enables it).
-    # "guided" mode is intentionally unsupported (autograd VJP, not exportable).
-    rtc_inference_mode: Literal["none", "trained"] = "none"
-    rtc_training_max_delay: int = 0
-    rtc_inference_delay: int = 0
-    rtc_inference_exec_horizon: int = 0
 
     # Phase-2 add-on streams. Kept so FT configs that carry them load cleanly;
     # must remain False in v1.
@@ -301,8 +288,7 @@ class Rldx1Config(Config):
         """Enforce the v1 scope boundary and normalize ``embodiment_id``.
 
         Raises:
-            NotImplementedError: If a phase-2 add-on stream or the unsupported
-                RTC ``guided`` mode is requested.
+            NotImplementedError: If a phase-2 add-on stream or the unsupported feature is enabled.
             ValueError: If ``embodiment_id`` is an unknown tag name or an int
                 outside ``[0, MAX_NUM_EMBODIMENTS)``.
         """
@@ -314,15 +300,7 @@ class Rldx1Config(Config):
                 )
                 raise NotImplementedError(msg)
 
-        if self.use_relative_action:
-            msg = (
-                "Rldx1Config.use_relative_action=True is not supported in v1; "
-                "only absolute actions are implemented."
-            )
-            raise NotImplementedError(msg)
-
         self.embodiment_id = self._resolve_embodiment_id(self.embodiment_id)
-
 
 
     @staticmethod

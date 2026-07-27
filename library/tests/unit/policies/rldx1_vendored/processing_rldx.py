@@ -172,7 +172,6 @@ class RLDXProcessor(ProcessorMixin):
         max_action_dim: int = 64,
         apply_sincos_state_encoding: bool = False,
         max_action_horizon: int = 16,
-        use_relative_action: bool = False,
         transformers_loading_kwargs: dict = {"trust_remote_code": True, "use_fast": True},
         memory_length: int = 1,
         general_embodiment_train_ratio: float = 0,
@@ -214,14 +213,12 @@ class RLDXProcessor(ProcessorMixin):
             use_percentiles=use_percentiles,
             clip_outliers=clip_outliers,
             apply_sincos_state_encoding=apply_sincos_state_encoding,
-            use_relative_action=use_relative_action,
         )
 
         # Save state action processor settings
         self.use_percentiles = use_percentiles
         self.clip_outliers = clip_outliers
         self.apply_sincos_state_encoding = apply_sincos_state_encoding
-        self.use_relative_action = use_relative_action
 
         # Save VLM settings
         self.formalize_language = formalize_language

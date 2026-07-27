@@ -26,7 +26,11 @@ class RLDXNetworkConfig(PretrainedConfig):
     reproject_vision: bool = False
     use_flash_attention: bool = True
     load_bf16: bool = True  # Enable BF16 loading
-    backbone_trainable_params_fp32: bool = True
+    # TODO(Eugene): upstream defaults this to True, but the fp32 copies of
+    # trainable backbone params OOM on an A100. DeepSpeed ZeRO-Offload (CPU)
+    # avoids the OOM but is very slow in practice. Explore a better way to
+    # re-enable True by default.
+    backbone_trainable_params_fp32: bool = False
     freeze_cog_tokens: bool = False  # Freeze cog_emb to prevent VLM backprop
 
     ### Image pipeline parameters
@@ -42,7 +46,6 @@ class RLDXNetworkConfig(PretrainedConfig):
     apply_sincos_state_encoding: bool = (
         False  # Global flag to enable per-embodiment sin/cos encoding
     )
-    use_relative_action: bool = True
     use_percentiles: bool = True
     conversation_image_first: bool = False
 
@@ -147,26 +150,6 @@ class RLDXNetworkConfig(PretrainedConfig):
     # State Augmentation parameters
     state_dropout_prob: float = 0.0  # State dropout probability
     state_additive_noise_scale: float = 0.0  # Scale for additive Gaussian noise on state features
-
-    # Real-Time Chunking (RTC). See rldx/model/modules/action_model/rtc.py.
-    #   training_max_delay: if > 0, each training step samples a per-sample
-    #     prefix length in [0, max_delay]; those positions use ground-truth
-    #     clean actions and do not contribute to the loss.
-    #   inference_mode: "none" / "trained" / "guided". Any non-none
-    #     mode requires a non-zero inference_delay and an action_prefix in
-    #     action_input at inference time.
-    # NOTE: rtc_jacobian_beta is intentionally NOT a model-config field — it
-    # is an inference-time guidance knob, not a property of the trained model.
-    # The eval server (`run_rldx_server.py`) accepts it as a CLI override and
-    # `rtc_config_from_rldx` falls back to RTCConfig's default when absent.
-    rtc_training_max_delay: int = 0
-    rtc_inference_mode: str = "none"
-    rtc_inference_delay: int = 0
-    rtc_inference_exec_horizon: int = 0  # s; 0 => action_horizon - inference_delay
-    # Apply Jacobian guidance only on the first N denoising steps. Default 3
-    # (skip last τ→1 step where VJP residual is mostly numerical noise on
-    # RLDX/MSAT). None = all steps, 1 = cheapest single-step variant.
-    rtc_jacobian_steps_only: int | None = 3
 
     # Memory configuration
     use_memory: bool = False  # Enable memory-augmented cognition tokens

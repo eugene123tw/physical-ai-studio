@@ -74,7 +74,6 @@ class StateActionProcessor:
         use_percentiles: bool = False,
         clip_outliers: bool = True,
         apply_sincos_state_encoding: bool = False,
-        use_relative_action: bool = False,
     ):
         """
         Initialize unified state and action processor.
@@ -98,7 +97,6 @@ class StateActionProcessor:
         self.use_percentiles = use_percentiles
         self.clip_outliers = clip_outliers
         self.apply_sincos_state_encoding = apply_sincos_state_encoding
-        self.use_relative_action = use_relative_action
 
         # Normalization parameters computed from statistics
         self.norm_params: dict[str, dict[str, dict[str, np.ndarray]]] = {}

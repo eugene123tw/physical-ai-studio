@@ -519,7 +519,7 @@ class Rldx1Preprocessor(nn.Module):
         if value is None:
             return None
         if isinstance(value, torch.Tensor):
-            return value[index].detach().cpu().numpy()
+            return value[index].detach().cpu().float().numpy()
         return np.asarray(value)[index]
 
     @staticmethod

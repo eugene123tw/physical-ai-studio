@@ -497,10 +497,46 @@ class Rldx1(Policy):
             },
         }
 
+    def _uses_deepspeed_cpu_offload(self) -> bool:
+        """Return whether the active Lightning strategy is DeepSpeed with optimizer offload.
+
+        DeepSpeed's ZeRO-Offload raises ``ZeRORuntimeException`` if a plain client
+        optimizer (e.g. ``torch.optim.AdamW``) is handed to ``deepspeed.initialize``
+        while ``zero_optimization.offload_optimizer`` targets ``cpu``/``nvme``; it
+        requires ``deepspeed.ops.adam.DeepSpeedCPUAdam`` (or an optimizer defined
+        directly in the DeepSpeed config) instead. Detecting this lets
+        ``_build_optimizer`` pick the right class automatically for both the
+        ``"deepspeed_stage_{2,3}_offload"`` string strategies and any hand-built
+        ``DeepSpeedStrategy(config=...)`` that sets ``offload_optimizer``.
+        """
+        trainer = getattr(self, "trainer", None)
+        if trainer is None:
+            return False
+        try:
+            from lightning.pytorch.strategies import DeepSpeedStrategy  # noqa: PLC0415
+        except ImportError:
+            return False
+
+        strategy = trainer.strategy
+        if not isinstance(strategy, DeepSpeedStrategy):
+            return False
+
+        offload_device = strategy.config.get("zero_optimization", {}).get("offload_optimizer", {}).get("device")
+        return offload_device in ("cpu", "nvme")
+
     def _build_optimizer(
         self, params: list[torch.nn.Parameter]
     ) -> torch.optim.Optimizer:
         """Build the optimizer selected by ``config.optim``.
+
+        Under a DeepSpeed strategy with optimizer CPU/NVMe offload enabled
+        (e.g. ``strategy="deepspeed_stage_2_offload"`` /
+        ``"deepspeed_stage_3_offload"``, or a custom ``DeepSpeedStrategy(config=...)``
+        with ``zero_optimization.offload_optimizer.device`` set), ``"adamw_torch"``
+        and ``"adamw_torch_fused"`` both build ``deepspeed.ops.adam.DeepSpeedCPUAdam``
+        instead of ``torch.optim.AdamW``: DeepSpeed's ZeRO-Offload rejects a plain
+        client-provided optimizer (see ``ZeRORuntimeException``). Without offload,
+        plain ``torch.optim.AdamW`` is used as before.
 
         Args:
             params: Trainable parameters to optimize.
@@ -512,7 +548,20 @@ class Rldx1(Policy):
             ValueError: If ``config.optim`` is not a supported value.
         """
         optim = self.config.optim
+        offload = self._uses_deepspeed_cpu_offload()
         if optim in ("adamw_torch", "adamw_torch_fused"):
+            if offload:
+                # ZeRO-Offload keeps optimizer state on the CPU/NVMe; DeepSpeed
+                # requires its fused CPU Adam kernel in that case. Lazy-imported
+                # so plain (non-offload) training never needs `deepspeed` installed.
+                from deepspeed.ops.adam import DeepSpeedCPUAdam  # noqa: PLC0415
+
+                return DeepSpeedCPUAdam(
+                    params,
+                    lr=self.config.learning_rate,
+                    weight_decay=self.config.weight_decay,
+                    betas=(0.9, 0.95),
+                )
             return torch.optim.AdamW(
                 params,
                 lr=self.config.learning_rate,
@@ -521,6 +570,14 @@ class Rldx1(Policy):
                 fused=optim == "adamw_torch_fused",
             )
         if optim == "adafactor":
+            if offload:
+                msg = (
+                    "optim='adafactor' is not supported together with DeepSpeed "
+                    "ZeRO-Offload. Use 'adamw_torch' or 'adamw_torch_fused' instead; "
+                    "they switch to deepspeed.ops.adam.DeepSpeedCPUAdam automatically "
+                    "when offload is enabled."
+                )
+                raise ValueError(msg)
             # Fixed-LR Adafactor: factoring the second moment cuts optimizer
             # state memory. relative_step/scale_parameter disabled so the
             # external warmup scheduler drives the LR.

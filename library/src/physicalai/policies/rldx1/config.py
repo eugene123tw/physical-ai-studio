@@ -200,10 +200,7 @@ class Rldx1Config(Config):
     tune_diffusion_model: bool = True
     tune_vlln: bool = True
 
-    # Independent LoRA control for backbone and action model. Allows mixed
-    # configurations like full fine-tune on backbone + LoRA on action (Paper Table 6, row 1):
-    #   backbone_use_lora=False  # Full FT on top-4 LLM layers
-    #   action_use_lora=True     # LoRA (r=64) on MSAT
+    # Independent LoRA control for backbone and action model.
     backbone_use_lora: bool = False
     action_use_lora: bool = False
 
@@ -288,8 +285,6 @@ class Rldx1Config(Config):
 
         Raises:
             NotImplementedError: If a phase-2 add-on stream or the unsupported feature is enabled.
-            ValueError: If ``embodiment_id`` is an unknown tag name or an int
-                outside ``[0, MAX_NUM_EMBODIMENTS)``.
         """
         for name in ("use_memory", "use_motion", "use_physics"):
             if getattr(self, name):

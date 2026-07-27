@@ -39,6 +39,12 @@ class VtcWindowBuffer:
     """
 
     def __init__(self, video_length: int, video_stride: int) -> None:
+        """Initialize the temporal frame buffer.
+
+        Args:
+            video_length: Number of frames in the temporal window.
+            video_stride: Env-step stride between sampled frames.
+        """
         self._video_length = video_length
         self._video_stride = video_stride
         self._history: dict[str, deque[torch.Tensor]] | None = None
@@ -185,7 +191,11 @@ def _image_keys(batch_dict: dict[str, Any]) -> list[str]:
 
 
 def _as_frame_tensor(value: Any) -> torch.Tensor:  # noqa: ANN401
-    """Coerce a single-frame view value to a ``(B, C, H, W)`` tensor."""
+    """Coerce a single-frame view value to a ``(B, C, H, W)`` tensor.
+
+    Returns:
+        Tensor of shape ``(B, C, H, W)``.
+    """
     if isinstance(value, torch.Tensor):
         return value
     return torch.as_tensor(np.asarray(value))

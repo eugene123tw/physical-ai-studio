@@ -145,8 +145,8 @@ class CategorySpecificLinear(nn.Module):
         self,
         old_action_dim: int,
         new_action_dim: int,
-        expand_input: bool = False,
-        expand_output: bool = False,
+        expand_input: bool = False,  # noqa: FBT001, FBT002
+        expand_output: bool = False,  # noqa: FBT001, FBT002
     ) -> None:
         """Expand selected weight dimensions for larger action spaces.
 
@@ -160,9 +160,8 @@ class CategorySpecificLinear(nn.Module):
             ValueError: If ``new_action_dim`` is not larger than ``old_action_dim``.
         """
         if new_action_dim <= old_action_dim:
-            raise ValueError(
-                f"New action dim {new_action_dim} must be larger than old action dim {old_action_dim}",
-            )
+            msg = f"New action dim {new_action_dim} must be larger than old action dim {old_action_dim}"
+            raise ValueError(msg)
 
         if expand_input and self.W.shape[1] == old_action_dim:
             repeat_times = new_action_dim // old_action_dim
@@ -235,7 +234,7 @@ class CategorySpecificMLP(nn.Module):
         hidden = F.relu(self.layer1(x, cat_ids))
         return self.layer2(hidden, cat_ids)
 
-    def expand_action_dimension(self, old_action_dim, new_action_dim):
+    def expand_action_dimension(self, old_action_dim: int, new_action_dim: int) -> None:
         """Expand output action dimension of the category-specific MLP.
 
         Args:
@@ -343,7 +342,7 @@ class MultiEmbodimentActionEncoder(nn.Module):
         # Expand single scalar time across all T steps
         if timesteps.dim() == 1 and timesteps.shape[0] == b:
             timesteps = timesteps.unsqueeze(1).expand(-1, t)
-        elif timesteps.dim() == 2 and timesteps.shape == (b, t):
+        elif timesteps.dim() == 2 and timesteps.shape == (b, t):  # noqa: PLR2004
             # RLDX-1 users per-token timesteps
             pass
         else:
@@ -360,7 +359,7 @@ class MultiEmbodimentActionEncoder(nn.Module):
         x = swish(self.W2(x, cat_ids))
         return self.W3(x, cat_ids)
 
-    def expand_action_dimension(self, old_action_dim, new_action_dim):
+    def expand_action_dimension(self, old_action_dim: int, new_action_dim: int) -> None:
         """Expand encoder input action dimension.
 
         Args:

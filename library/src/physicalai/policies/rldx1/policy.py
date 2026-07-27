@@ -52,6 +52,11 @@ from physicalai.policies.base import Policy
 from physicalai.train.schedulers import cosine_decay_with_warmup_scheduler
 from physicalai.train.utils import reformat_dataset_to_match_policy
 
+try:
+    from lightning.pytorch.utilities.types import OptimizerLRScheduler
+except ImportError:
+    OptimizerLRScheduler = Any  # type: ignore[assignment, misc]
+
 from .config import Rldx1Config
 from .model import Rldx1Model
 from .preprocessor import make_rldx1_transforms
@@ -433,7 +438,7 @@ class Rldx1(Policy):
         preprocessed = self._preprocessor(batch)
         return self.model.compute_val_loss(preprocessed)
 
-    def on_load_checkpoint(self, checkpoint: dict) -> None:
+    def on_load_checkpoint(self, checkpoint: dict) -> None:  # noqa: PLR6301
         """Remap legacy state-dict keys before loading.
 
         Checkpoints saved before the action denormalizer was moved from
@@ -454,7 +459,7 @@ class Rldx1(Policy):
         if remapped != state_dict:
             checkpoint["state_dict"] = remapped
 
-    def configure_optimizers(self) -> Any:  # type: ignore[override]
+    def configure_optimizers(self) -> OptimizerLRScheduler:  # type: ignore[override]
         """Create the configured optimizer and a cosine-decay-with-warmup scheduler.
 
         The optimizer is selected by ``config.optim``:
@@ -527,7 +532,7 @@ class Rldx1(Policy):
         if strategy.config is None:
             return False
         offload_device = strategy.config.get("zero_optimization", {}).get("offload_optimizer", {}).get("device")
-        return offload_device in ("cpu", "nvme")
+        return offload_device in {"cpu", "nvme"}
 
     def _build_optimizer(
         self,
@@ -555,7 +560,7 @@ class Rldx1(Policy):
         """
         optim = self.config.optim
         offload = self._uses_deepspeed_cpu_offload()
-        if optim in ("adamw_torch", "adamw_torch_fused"):
+        if optim in {"adamw_torch", "adamw_torch_fused"}:
             if offload:
                 # ZeRO-Offload keeps optimizer state on the CPU/NVMe; DeepSpeed
                 # requires its fused CPU Adam kernel in that case. Lazy-imported

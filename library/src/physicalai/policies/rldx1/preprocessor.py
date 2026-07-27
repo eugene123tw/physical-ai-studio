@@ -193,7 +193,7 @@ class Rldx1Preprocessor(nn.Module):
         >>> out = model.net.get_action(inputs)
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         max_state_dim: int = MAX_STATE_DIM,
@@ -353,7 +353,7 @@ class Rldx1Preprocessor(nn.Module):
         # When observation_delta_indices returns the VTC video window, the dataset
         # delivers state with shape (B, T, D). The RLDX backbone uses only the
         # current-step state, so slice to the last frame.
-        if state_tensor.ndim == 3:
+        if state_tensor.ndim == 3:  # noqa: PLR2004
             state_tensor = state_tensor[:, -1:, :]
         sa_batch: dict[str, Any] = {STATE: state_tensor.to(sa_device)}
         if has_action:
@@ -682,7 +682,7 @@ class Rldx1Postprocessor(nn.Module):
 # ============================================================================ #
 
 
-def make_rldx1_transforms(
+def make_rldx1_transforms(  # noqa: PLR0913
     *,
     stats: dict[str, dict[str, list[float]]] | None,
     env_action_dim: int = 0,

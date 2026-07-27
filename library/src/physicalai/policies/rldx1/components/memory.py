@@ -8,21 +8,30 @@ This module implements a Transformer-based memory that fuses cognition token emb
 from multiple timesteps to provide temporal context for action prediction.
 """
 
+from typing import Any
+
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812
 from diffusers.models.embeddings import SinusoidalPositionalEmbedding
 from torch import nn
 from transformers import LlamaConfig
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
+from physicalai.policies.rldx1.components._dist import rank_zero_print as _print  # noqa: PLC2701
 from physicalai.policies.rldx1.components.norms import RMSNorm
 
 
 class RotaryEmbedding(nn.Module):
     """Rotary Position Embedding (RoPE)."""
 
-    def __init__(self, dim: int, max_position_embeddings: int = 2048, base: float = 10000.0):
+    def __init__(self, dim: int, max_position_embeddings: int = 2048, base: float = 10000.0) -> None:
+        """Initialize RoPE with given dimension and base frequency.
+
+        Args:
+            dim: Head dimension for rotary embeddings.
+            max_position_embeddings: Maximum sequence length.
+            base: Base frequency for positional encoding.
+        """
         super().__init__()
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
@@ -30,8 +39,16 @@ class RotaryEmbedding(nn.Module):
         inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float() / self.dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
-    def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
-        # x: [batch_size, num_heads, seq_len, head_dim]
+    def forward(self, x: torch.Tensor, position_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute cosine and sine embeddings for the given positions.
+
+        Args:
+            x: Query or key tensor (used only for dtype; shape ignored).
+            position_ids: Position indices of shape ``(batch, seq_len)``.
+
+        Returns:
+            A ``(cos, sin)`` tuple, each of shape ``(batch, seq_len, head_dim)``.
+        """
         inv_freq: torch.Tensor = self.inv_freq  # type: ignore[assignment]
         inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         position_ids_expanded = position_ids[:, None, :].float()
@@ -43,14 +60,24 @@ class RotaryEmbedding(nn.Module):
 
 
 def rotate_half(x: torch.Tensor) -> torch.Tensor:
-    """Rotates half the hidden dims of the input."""
+    """Rotate half the hidden dims of the input.
+
+    Returns:
+        Tensor with the second half negated and swapped with the first half.
+    """
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
     return torch.cat((-x2, x1), dim=-1)
 
 
-def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
-    """Apply rotary position embedding to query and key tensors."""
+def apply_rotary_pos_emb(
+    q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply rotary position embedding to query and key tensors.
+
+    Returns:
+        A ``(q_embed, k_embed)`` tuple with RoPE applied.
+    """
     cos = cos.unsqueeze(1)  # [batch, 1, seq_len, head_dim]
     sin = sin.unsqueeze(1)  # [batch, 1, seq_len, head_dim]
     q_embed = (q * cos) + (rotate_half(q) * sin)
@@ -61,7 +88,13 @@ def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, si
 class MultiHeadAttention(nn.Module):
     """Multi-head attention with optional Grouped Query Attention (GQA) support."""
 
-    def __init__(self, config: LlamaConfig, layer_idx: int):
+    def __init__(self, config: LlamaConfig, layer_idx: int) -> None:
+        """Initialize multi-head attention.
+
+        Args:
+            config: LlamaConfig with hidden_size, attention heads, etc.
+            layer_idx: Layer index (used for debugging).
+        """
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
@@ -69,7 +102,8 @@ class MultiHeadAttention(nn.Module):
         self.num_heads = config.num_attention_heads
         self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = config.num_key_value_heads
-        assert self.num_key_value_heads is not None
+        if self.num_key_value_heads is None:
+            raise RuntimeError("num_key_value_heads must be set in LlamaConfig")
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
 
         self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
@@ -135,15 +169,18 @@ class MultiHeadAttention(nn.Module):
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
-        attn_output = self.o_proj(attn_output)
-
-        return attn_output
+        return self.o_proj(attn_output)
 
 
 class SwiGLUMLP(nn.Module):
     """MLP module with SwiGLU activation."""
 
-    def __init__(self, config: LlamaConfig):
+    def __init__(self, config: LlamaConfig) -> None:
+        """Initialize SwiGLU MLP.
+
+        Args:
+            config: LlamaConfig with hidden_size and intermediate_size.
+        """
         super().__init__()
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
@@ -153,13 +190,27 @@ class SwiGLUMLP(nn.Module):
         self.act_fn = nn.SiLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply SwiGLU MLP to input.
+
+        Args:
+            x: Input tensor.
+
+        Returns:
+            Output tensor with same batch/sequence shape.
+        """
         return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
 
 
 class TransformerDecoderLayer(nn.Module):
     """Transformer decoder layer with pre-normalization."""
 
-    def __init__(self, config: LlamaConfig, layer_idx: int):
+    def __init__(self, config: LlamaConfig, layer_idx: int) -> None:
+        """Initialize transformer decoder layer.
+
+        Args:
+            config: LlamaConfig with model dimensions.
+            layer_idx: Layer index.
+        """
         super().__init__()
         self.hidden_size = config.hidden_size
         self.self_attn = MultiHeadAttention(config, layer_idx)
@@ -172,8 +223,19 @@ class TransformerDecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
         position_ids: torch.Tensor | None = None,
-        use_rope: bool = True,
+        use_rope: bool = True,  # noqa: FBT001, FBT002
     ) -> torch.Tensor:
+        """Apply pre-norm attention + MLP with residual connections.
+
+        Args:
+            hidden_states: Input of shape ``(batch, seq_len, hidden_size)``.
+            attention_mask: Optional additive attention mask.
+            position_ids: Optional position indices for RoPE.
+            use_rope: Whether to apply rotary position embeddings.
+
+        Returns:
+            Output tensor of shape ``(batch, seq_len, hidden_size)``.
+        """
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states = self.self_attn(
@@ -187,9 +249,7 @@ class TransformerDecoderLayer(nn.Module):
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
-        hidden_states = residual + hidden_states
-
-        return hidden_states
+        return residual + hidden_states
 
 
 def _make_causal_mask(
@@ -198,7 +258,7 @@ def _make_causal_mask(
     device: torch.device,
     past_key_values_length: int = 0,
     block_attn_size: int = 1,
-    use_causal_attn: bool = True,
+    use_causal_attn: bool = True,  # noqa: FBT001, FBT002
 ) -> torch.Tensor:
     """Create causal attention mask.
 
@@ -209,6 +269,9 @@ def _make_causal_mask(
         past_key_values_length: Length of past key values
         block_attn_size: Size of blocks for block-wise attention
         use_causal_attn: If True, use causal mask; if False, use block attention
+
+    Returns:
+        Attention mask tensor of shape ``(batch, 1, tgt_len, tgt_len + past)``.
     """
     bsz, tgt_len = input_shape
 
@@ -243,7 +306,7 @@ class TransformerMemory(nn.Module):
     and produces a memory-augmented representation using causal self-attention.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         hidden_size: int = 1536,
         intermediate_size: int = 6144,
@@ -254,10 +317,26 @@ class TransformerMemory(nn.Module):
         rms_norm_eps: float = 1e-5,
         hidden_act: str = "silu",
         initializer_range: float = 0.02,
-        use_causal_attn: bool = True,
-        use_rope: bool = True,
+        use_causal_attn: bool = True,  # noqa: FBT001, FBT002
+        use_rope: bool = True,  # noqa: FBT001, FBT002
         block_attn_size: int = 1,
-    ):
+    ) -> None:
+        """Initialize transformer memory module.
+
+        Args:
+            hidden_size: Hidden dimension.
+            intermediate_size: FFN intermediate dimension.
+            num_hidden_layers: Number of transformer layers.
+            num_attention_heads: Number of attention heads.
+            num_key_value_heads: Number of KV heads (for GQA).
+            max_position_embeddings: Maximum sequence length.
+            rms_norm_eps: Epsilon for RMSNorm.
+            hidden_act: Activation function name.
+            initializer_range: Std for weight init.
+            use_causal_attn: Whether to use causal masking.
+            use_rope: Whether to apply RoPE.
+            block_attn_size: Block size for block attention.
+        """
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -266,17 +345,18 @@ class TransformerMemory(nn.Module):
         self.block_attn_size = block_attn_size
 
         # Create LlamaConfig for internal use
-        self.config = LlamaConfig(  # type: ignore[call-arg]
-            hidden_size=hidden_size,
-            intermediate_size=intermediate_size,
-            num_hidden_layers=num_hidden_layers,
-            num_attention_heads=num_attention_heads,
-            num_key_value_heads=num_key_value_heads,
-            max_position_embeddings=max_position_embeddings,
-            rms_norm_eps=rms_norm_eps,
-            hidden_act=hidden_act,
-            initializer_range=initializer_range,
-        )
+        llama_kwargs: dict[str, Any] = {
+            "hidden_size": hidden_size,
+            "intermediate_size": intermediate_size,
+            "num_hidden_layers": num_hidden_layers,
+            "num_attention_heads": num_attention_heads,
+            "num_key_value_heads": num_key_value_heads,
+            "max_position_embeddings": max_position_embeddings,
+            "rms_norm_eps": rms_norm_eps,
+            "hidden_act": hidden_act,
+            "initializer_range": initializer_range,
+        }
+        self.config = LlamaConfig(**llama_kwargs)  # type: ignore[call-arg]
 
         # Transformer layers
         self.layers = nn.ModuleList(
@@ -300,7 +380,7 @@ class TransformerMemory(nn.Module):
             f"hidden_size={hidden_size}, causal={use_causal_attn}, rope={use_rope})",
         )
 
-    def _init_weights(self, module):
+    def _init_weights(self, module: nn.Module) -> None:
         std = self.config.initializer_range
         if isinstance(module, nn.Linear):
             module.weight.data.normal_(mean=0.0, std=std)
@@ -312,7 +392,7 @@ class TransformerMemory(nn.Module):
     def forward(
         self,
         inputs_embeds: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,  # noqa: ARG002
         position_ids: torch.Tensor | None = None,
     ) -> BaseModelOutputWithPast:
         """Forward pass through the transformer memory.

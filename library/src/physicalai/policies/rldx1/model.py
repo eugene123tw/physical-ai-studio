@@ -28,7 +28,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812
 
 from physicalai.policies.base import Model
 from physicalai.policies.rldx1.components.config_rldx import RLDXNetworkConfig
@@ -106,6 +106,8 @@ def _bridge_studio_config(  # noqa: PLR0913
         action_lora_alpha: LoRA alpha for the action model.
         action_lora_dropout: LoRA dropout for the action model.
         action_lora_targets: Linear module names to wrap with LoRA (MSAT).
+        max_state_dim: Maximum state dimension; shorter state vectors are zero-padded.
+        max_action_dim: Maximum action dimension; shorter action vectors are zero-padded.
     """
     cfg.backbone_trainable_params_fp32 = backbone_trainable_params_fp32
     cfg.tune_visual = tune_visual
@@ -215,7 +217,7 @@ class Rldx1Model(Model):
         self.net: RLDX | None = None
 
     @classmethod
-    def from_pretrained(  # noqa: PLR0913
+    def from_pretrained(  # noqa: PLR0913, PLR0915, PLR0914
         cls,
         base_model_path: str = DEFAULT_BASE_MODEL_PATH,
         *,
@@ -294,6 +296,8 @@ class Rldx1Model(Model):
             action_lora_alpha: LoRA alpha for the action model.
             action_lora_dropout: LoRA dropout for the action model.
             action_lora_targets: Linear module names to wrap with LoRA in the action model.
+            max_state_dim: Maximum state dimension; shorter state vectors are zero-padded.
+            max_action_dim: Maximum action dimension; shorter action vectors are zero-padded.
             **kwargs: Architecture overrides forwarded to ``__init__``.
 
         Returns:

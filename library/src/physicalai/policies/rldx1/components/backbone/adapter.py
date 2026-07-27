@@ -123,7 +123,7 @@ class VTCQwen3VLBackbone(nn.Module):
                 self.qwen_model = self.qwen_model.to(torch.bfloat16)
         else:
             _print(f"[i] Loading VTC-Qwen3-VL model from {model_name}")
-            self.qwen_model = VTC_Qwen3VL.from_pretrained(
+            self.qwen_model = VTC_Qwen3VL.from_pretrained(  # type: ignore[assignment]
                 model_name,
                 motion_config=motion_config,
                 attn_implementation=_DEFAULT_ATTN_IMPL,
@@ -159,8 +159,9 @@ class VTCQwen3VLBackbone(nn.Module):
                 nn.Linear(llm_hidden_size, llm_hidden_size),
             )
             # Zero-init last linear so motion module tokens start as no-ops
-            nn.init.zeros_(self.moss_proj[-1].weight)
-            nn.init.zeros_(self.moss_proj[-1].bias)
+            last_linear = self.moss_proj[-1]  # type: ignore[index]
+            nn.init.zeros_(last_linear.weight)  # type: ignore[arg-type]
+            nn.init.zeros_(last_linear.bias)  # type: ignore[arg-type]
 
             if self.motion_pool_type == "conv":
                 self.moss_spatial_conv = nn.Sequential(
@@ -340,9 +341,9 @@ class VTCQwen3VLBackbone(nn.Module):
         BatchNorm behaviour.
         """
         if self.training:
-            if self.qwen_model and not self.tune_llm:
+            if not self.tune_llm:
                 self.qwen_model.eval()
-            if self.qwen_model.model.visual and not self.tune_visual:
+            if not self.tune_visual:
                 self.qwen_model.model.visual.eval()
             # motion module block must stay in train mode for correct BatchNorm behavior
             motion_block = getattr(self.qwen_model.model.visual, "motion_block", None)
@@ -386,6 +387,7 @@ class VTCQwen3VLBackbone(nn.Module):
         moss_feats = moss_feats.reshape(B * V_moss, D, -1).permute(0, 2, 1).contiguous()
         moss_feats = moss_feats.reshape(B, -1, D)
 
+        assert self.moss_proj is not None
         moss_feats = self.moss_proj(moss_feats)
         return moss_feats
 
@@ -453,6 +455,8 @@ class VTCQwen3VLBackbone(nn.Module):
         device = inputs_embeds.device
         image_mask = None
         video_mask = None
+        deepstack_image_embeds: list[torch.Tensor] | None = None
+        deepstack_video_embeds: list[torch.Tensor] | None = None
 
         # Build motion module kwargs for get_image_features
         moss_kwargs = {}
@@ -497,6 +501,8 @@ class VTCQwen3VLBackbone(nn.Module):
         visual_pos_masks = None
         deepstack_visual_embeds = None
         if image_mask is not None and video_mask is not None:
+            assert deepstack_image_embeds is not None
+            assert deepstack_video_embeds is not None
             image_mask = image_mask[..., 0]
             video_mask = video_mask[..., 0]
             visual_pos_masks = image_mask | video_mask
@@ -513,10 +519,12 @@ class VTCQwen3VLBackbone(nn.Module):
         elif image_mask is not None:
             image_mask = image_mask[..., 0]
             visual_pos_masks = image_mask
+            assert deepstack_image_embeds is not None
             deepstack_visual_embeds = deepstack_image_embeds
         elif video_mask is not None:
             video_mask = video_mask[..., 0]
             visual_pos_masks = video_mask
+            assert deepstack_video_embeds is not None
             deepstack_visual_embeds = deepstack_video_embeds
 
         # Extract and process motion module features for vl_input injection
@@ -540,6 +548,8 @@ class VTCQwen3VLBackbone(nn.Module):
         # Insert motion module tokens BEFORE image tokens (for causal attention benefit)
         # Sequence: [text | motion module | images | trailing] + [meta_queries]
         if moss_tokens is not None:
+            assert input_ids is not None, "input_ids is required for motion token injection"
+            assert attention_mask is not None, "attention_mask is required for motion token injection"
             image_token_id = self.qwen_model.model.config.image_token_id
             first_img_pos = (input_ids[0] == image_token_id).nonzero(as_tuple=True)[0][0].item()
             motion_insert_pos = first_img_pos

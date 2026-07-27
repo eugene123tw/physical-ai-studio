@@ -138,7 +138,7 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
                 **extra,
                 **download_kwargs,
                 **kwargs,
-            )  # type: ignore[arg-type]
+            )  # type: ignore[arg-type, misc]
 
         # Re-apply motion module init only when motion module is newly added (not in checkpoint).
         # from_pretrained's _init_weights overwrites kaiming Conv3d init and any
@@ -190,7 +190,7 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
 
             model.resize_token_embeddings(len(processor.tokenizer))
 
-            load_checkpoint_in_model(model, str(local_dir), device_map={"": "cpu"})
+            load_checkpoint_in_model(model, local_dir, device_map={"": "cpu"})  # type: ignore[arg-type]
             _print(f"[VTC] weights loaded from {local_dir}")
 
         return model

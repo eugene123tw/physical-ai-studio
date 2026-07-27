@@ -168,7 +168,7 @@ class CategorySpecificLinear(nn.Module):
             repeat_times = new_action_dim // old_action_dim
             remainder = new_action_dim % old_action_dim
 
-            new_w_parts = [self.W] * repeat_times
+            new_w_parts: list[torch.Tensor] = [self.W] * repeat_times
             if remainder > 0:
                 new_w_parts.append(self.W[:, :remainder, :])
 
@@ -178,14 +178,14 @@ class CategorySpecificLinear(nn.Module):
             repeat_times = new_action_dim // old_action_dim
             remainder = new_action_dim % old_action_dim
 
-            new_w_parts = [self.W] * repeat_times
+            new_w_parts2: list[torch.Tensor] = [self.W] * repeat_times
             if remainder > 0:
-                new_w_parts.append(self.W[:, :, :remainder])
+                new_w_parts2.append(self.W[:, :, :remainder])
 
-            self.W = nn.Parameter(torch.cat(new_w_parts, dim=2))
+            self.W = nn.Parameter(torch.cat(new_w_parts2, dim=2))
 
             if self.b.shape[1] == old_action_dim:
-                new_b_parts = [self.b] * repeat_times
+                new_b_parts: list[torch.Tensor] = [self.b] * repeat_times
                 if remainder > 0:
                     new_b_parts.append(self.b[:, :remainder])
 

@@ -32,7 +32,8 @@ class RotaryEmbedding(nn.Module):
 
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor):
         # x: [batch_size, num_heads, seq_len, head_dim]
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+        inv_freq: torch.Tensor = self.inv_freq  # type: ignore[assignment]
+        inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         position_ids_expanded = position_ids[:, None, :].float()
         freqs = (inv_freq_expanded @ position_ids_expanded).transpose(1, 2)
         emb = torch.cat((freqs, freqs), dim=-1)
@@ -68,6 +69,7 @@ class MultiHeadAttention(nn.Module):
         self.num_heads = config.num_attention_heads
         self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = config.num_key_value_heads
+        assert self.num_key_value_heads is not None
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
 
         self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
@@ -264,7 +266,7 @@ class TransformerMemory(nn.Module):
         self.block_attn_size = block_attn_size
 
         # Create LlamaConfig for internal use
-        self.config = LlamaConfig(
+        self.config = LlamaConfig(  # type: ignore[call-arg]
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
             num_hidden_layers=num_hidden_layers,

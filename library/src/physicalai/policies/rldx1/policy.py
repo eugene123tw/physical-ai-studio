@@ -220,7 +220,7 @@ class Rldx1(Policy):
         self.save_hyperparameters(ignore=["config"])
         self.hparams["config"] = self.config.to_dict()
 
-        self.model: Rldx1Model | None = None
+        self.model: Rldx1Model | None = None  # type: ignore[assignment]
         self._preprocessor: Rldx1Preprocessor | None = None
         self._postprocessor: Rldx1Postprocessor | None = None
 
@@ -338,12 +338,12 @@ class Rldx1(Policy):
             use_percentiles=config.use_percentiles,
             clip_outliers=config.clip_outliers,
             image_max_area=config.image_max_area,
-            image_min_area=config.image_min_area,
+            image_min_area=config.image_min_area or 0,  # type: ignore[arg-type]
             image_resize_m=config.image_resize_m,
             random_crop_fraction=config.random_crop_fraction,
             random_rotation_angle=config.random_rotation_angle,
             color_jitter_params=config.color_jitter_params,
-            embodiment_id=config.embodiment_id,
+            embodiment_id=int(config.embodiment_id),  # type: ignore[arg-type]
         )
 
     def setup(self, stage: str) -> None:
@@ -454,7 +454,7 @@ class Rldx1(Policy):
         if remapped != state_dict:
             checkpoint["state_dict"] = remapped
 
-    def configure_optimizers(self) -> dict[str, Any]:
+    def configure_optimizers(self) -> Any:  # type: ignore[override]
         """Create the configured optimizer and a cosine-decay-with-warmup scheduler.
 
         The optimizer is selected by ``config.optim``:
@@ -524,6 +524,8 @@ class Rldx1(Policy):
         if not isinstance(strategy, DeepSpeedStrategy):
             return False
 
+        if strategy.config is None:
+            return False
         offload_device = strategy.config.get("zero_optimization", {}).get("offload_optimizer", {}).get("device")
         return offload_device in ("cpu", "nvme")
 

@@ -3,6 +3,8 @@
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 
 
+from typing import Any
+
 import torch
 import torch.nn.functional as F
 import tree
@@ -119,7 +121,7 @@ class RLDXActionModel(nn.Module):
             physics_delta = getattr(config, "physics_delta_indices", None) or []
             effective_flow_matching = config_flow_matching and sum(1 for d in physics_delta if d > 0) > 0
 
-            self.physics = PhysicsHead(
+            self.physics: PhysicsHead | NoOpPhysicsHead = PhysicsHead(
                 physics_dim=physics_dim,
                 embed_dim=embed_dim,
                 msat_output_dim=msat_output_dim,
@@ -168,7 +170,8 @@ class RLDXActionModel(nn.Module):
             if self.config.add_pos_embed:
                 self.position_embedding.requires_grad_(False)
             if self.state_dropout_prob > 0:
-                self.mask_token.requires_grad_(False)
+                if self.mask_token is not None:
+                    self.mask_token.requires_grad_(False)
 
         if use_lora:
             # Replaces the unconditional ``self.model.requires_grad_(False)``:
@@ -328,6 +331,7 @@ class RLDXActionModel(nn.Module):
         if self.state_dropout_prob > 0:
             do_dropout = torch.rand(state_features.shape[0], device=state_features.device) < self.state_dropout_prob
             do_dropout = do_dropout[:, None, None].to(dtype=state_features.dtype)
+            assert self.mask_token is not None
             state_features = state_features * (1 - do_dropout) + self.mask_token * do_dropout
 
         # Add Gaussian noise to state features.
@@ -423,7 +427,7 @@ class RLDXActionModel(nn.Module):
             results["loss"] = loss
             results["physics_loss"] = physics_loss
 
-        return results
+        return BatchFeature(data=results)
 
     def _encode_features(
         self,
@@ -464,7 +468,7 @@ class RLDXActionModel(nn.Module):
         state_features: torch.Tensor,
         embodiment_id: torch.Tensor,
         backbone_output: BatchFeature,
-        action_input: BatchFeature = None,
+        action_input: BatchFeature | None = None,
     ) -> BatchFeature:
         """Generate actions using the flow matching diffusion process.
 
@@ -496,7 +500,7 @@ class RLDXActionModel(nn.Module):
 
         # Use custom denoising timesteps if set, otherwise uniform spacing.
         if hasattr(self, "denoising_timesteps") and self.denoising_timesteps is not None:
-            timesteps_list = list(self.denoising_timesteps) + [1.0]
+            timesteps_list = list(self.denoising_timesteps) + [1.0]  # type: ignore[arg-type]
         else:
             n = self.num_inference_timesteps
             timesteps_list = [t / float(n) for t in range(n)] + [1.0]
@@ -643,7 +647,7 @@ class RLDX(PreTrainedModel):
         """
         super().__init__(config)
         self.config = config
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
         kwargs["use_cog_tokens"] = True
         kwargs["cog_mode"] = "cog_only"
         kwargs["n_cog_tokens"] = getattr(self.config, "n_cog_tokens", 64)
@@ -712,7 +716,7 @@ class RLDX(PreTrainedModel):
 
         # Memory module (optional, enabled by config.use_memory)
         self.use_memory = getattr(config, "use_memory", False)
-        self.memory = None
+        self.memory: TransformerMemory | None = None
         self._cached_mq = None
 
         if self.use_memory:
@@ -900,7 +904,7 @@ class RLDX(PreTrainedModel):
         action_outputs = self.action_model(backbone_outputs, action_inputs)
         return action_outputs
 
-    def get_action(self, inputs: dict = None, **kwargs) -> BatchFeature:
+    def get_action(self, inputs: dict | None = None, **kwargs) -> BatchFeature:
         reset_memory = inputs.pop("reset_memory", None) if self.use_memory else None
 
         backbone_inputs, action_inputs = self.prepare_input(inputs)
@@ -929,6 +933,7 @@ class RLDX(PreTrainedModel):
         mq_for_memory = mq_all[:, :, n_mq_pass:, :]  # [B, K, n_mq_mem, d]
 
         mq_mem_seq = mq_for_memory.contiguous().view(B, K * n_mq_mem, d)
+        assert self.memory is not None
         mq_memory_out = self.memory(inputs_embeds=mq_mem_seq).last_hidden_state
         mq_augmented = mq_memory_out.view(B, K, n_mq_mem, d)[:, -1, :, :]
 
@@ -993,6 +998,7 @@ class RLDX(PreTrainedModel):
         else:
             self._cached_mq = torch.cat([self._cached_mq[:, n_mq_mem:, :], mq_current], dim=1)
 
+        assert self.memory is not None
         mq_memory_out = self.memory(inputs_embeds=self._cached_mq).last_hidden_state
         mq_augmented = mq_memory_out[:, -n_mq_mem:, :]
 

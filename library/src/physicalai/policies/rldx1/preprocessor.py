@@ -626,7 +626,7 @@ class Rldx1Postprocessor(nn.Module):
         self.clip_outliers = clip_outliers
         self.env_action_dim = env_action_dim
 
-        if action_feature is not None:
+        if action_feature is not None and action_feature.shape is not None:
             self._action_dim = int(action_feature.shape[0])
             norm_map = build_state_action_norm_map(use_percentiles=use_percentiles)
             self._action_denormalizer: nn.Module = FeatureNormalizeTransform(

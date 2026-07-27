@@ -66,6 +66,7 @@ from .components.processing.qwen_vision_process import process_vision_info
 
 if TYPE_CHECKING:
     from transformers import ProcessorMixin
+    from transformers.feature_extraction_utils import BatchFeature
 
 # Output key for the action validity mask (matches the vendored collator key).
 ACTION_MASK = "action_mask"
@@ -419,7 +420,7 @@ def tokenize_vlm_batch(
     conversations: list[list[dict[str, Any]]],
     *,
     image_patch_size: int = _VLM_IMAGE_PATCH_SIZE,
-) -> dict[str, Any]:
+) -> BatchFeature:
     """Tokenize a batch of Qwen conversations into VLM model inputs.
 
     Replaces ``RLDXDataCollator._collate_vlm_content``: applies the chat

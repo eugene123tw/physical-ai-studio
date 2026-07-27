@@ -315,7 +315,7 @@ class Rldx1Model(Model):
         backbone_attn = attn_implementation if attn_implementation in {"sdpa", "eager", "flash_attention_2"} else "sdpa"
         os.environ.setdefault("RLDX_ATTN_IMPL", backbone_attn)
 
-        cfg: RLDXNetworkConfig = RLDXNetworkConfig.from_pretrained(base_model_path, revision=revision)
+        cfg: RLDXNetworkConfig = RLDXNetworkConfig.from_pretrained(base_model_path, revision=revision)  # type: ignore[arg-type]
         cfg.diffusion_model_cfg["gradient_checkpointing"] = gradient_checkpointing
 
         # Bridge the Studio-level fine-tuning / PEFT knobs onto the vendored

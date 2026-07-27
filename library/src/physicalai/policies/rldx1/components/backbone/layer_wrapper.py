@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 import torch
 from torch import nn
@@ -106,8 +107,8 @@ class LayerWrapper(nn.Module):
         hidden_states: torch.Tensor,
         input_ids: torch.Tensor | None = None,
         *args: object,
-        **kwargs: object,
-    ) -> tuple[torch.Tensor, dict[str, object]]:
+        **kwargs: Any,
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Run the wrapped layer with optional image-token compression.
 
         Args:
@@ -125,7 +126,7 @@ class LayerWrapper(nn.Module):
         # The patched Qwen3VLTextModel.forward passes input_ids positionally.
         # Fall back to kwargs for any caller that routes it as a keyword.
         if input_ids is None and "input_ids" in kwargs:
-            input_ids = kwargs.pop("input_ids")
+            input_ids = kwargs.pop("input_ids")  # type: ignore[assignment]
         if "image_wise_encoding" in kwargs and isinstance(
             kwargs["image_wise_encoding"],
             torch.Tensor,
@@ -146,6 +147,7 @@ class LayerWrapper(nn.Module):
             device = hidden_states.device
 
             token_indices = torch.arange(seq_len, device=device).view(1, -1).expand(bsz, -1)
+            assert input_ids is not None, "input_ids required for image-token compression"
             begin_idx, end_idx = self.get_removing_indices(
                 hidden_states,
                 input_ids,
@@ -174,7 +176,7 @@ class LayerWrapper(nn.Module):
                 (hidden_states * drop_mask.unsqueeze(-1)).sum(dim=1) / drop_mask.sum(dim=1, keepdim=True).clamp(min=1)
             ).reshape(bsz, self.motion_token, -1)
 
-            hidden_states = [
+            hs_parts: list[torch.Tensor] = [
                 torch.cat(
                     [
                         hidden_states[b][keep_mask_front[b]],
@@ -192,7 +194,7 @@ class LayerWrapper(nn.Module):
                 for b in range(bsz)
             ]
 
-            hidden_states = self.left_pad_emb_list(hidden_states)
+            hidden_states = self.left_pad_emb_list(hs_parts)
 
             if "attention_mask" in kwargs and kwargs["attention_mask"] is not None:
                 att_list = [

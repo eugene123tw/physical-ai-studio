@@ -52,12 +52,12 @@ def smart_resize(
     w_bar = max(factor, round_by_factor(width, factor))
     if h_bar * w_bar > max_pixels:
         beta = math.sqrt((height * width) / max_pixels)
-        h_bar = floor_by_factor(height / beta, factor)
-        w_bar = floor_by_factor(width / beta, factor)
+        h_bar = floor_by_factor(int(height / beta), factor)
+        w_bar = floor_by_factor(int(width / beta), factor)
     elif h_bar * w_bar < min_pixels:
         beta = math.sqrt(min_pixels / (height * width))
-        h_bar = ceil_by_factor(height * beta, factor)
-        w_bar = ceil_by_factor(width * beta, factor)
+        h_bar = ceil_by_factor(int(height * beta), factor)
+        w_bar = ceil_by_factor(int(width * beta), factor)
     return h_bar, w_bar
 
 
@@ -73,8 +73,8 @@ def fetch_image(ele: dict[str, str | Image.Image], image_patch_size: int = 14) -
     # resize
     if "resized_height" in ele and "resized_width" in ele:
         resized_height, resized_width = smart_resize(
-            ele["resized_height"],
-            ele["resized_width"],
+            int(ele["resized_height"]),  # type: ignore[arg-type]
+            int(ele["resized_width"]),  # type: ignore[arg-type]
             factor=patch_factor,
         )
     else:
@@ -85,8 +85,8 @@ def fetch_image(ele: dict[str, str | Image.Image], image_patch_size: int = 14) -
             height,
             width,
             factor=patch_factor,
-            min_pixels=min_pixels,
-            max_pixels=max_pixels,
+            min_pixels=int(min_pixels),  # type: ignore[arg-type]
+            max_pixels=int(max_pixels),  # type: ignore[arg-type]
         )
     image = image.resize((resized_width, resized_height))
     return image
@@ -97,8 +97,10 @@ def extract_vision_info(
 ) -> list[dict[str, Any]]:
     vision_infos = []
     if isinstance(conversations[0], dict):
-        conversations = [conversations]
-    for conversation in conversations:
+        _convs: list[list[dict[str, Any]]] = [conversations]  # type: ignore[list-item]
+    else:
+        _convs = conversations  # type: ignore[assignment]
+    for conversation in _convs:
         for message in conversation:
             if isinstance(message["content"], list):
                 for ele in message["content"]:

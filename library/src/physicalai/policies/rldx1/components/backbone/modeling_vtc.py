@@ -96,7 +96,7 @@ def _checkpoint_has_motion_weights(
 
 class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, motion_config=None, **kwargs):
+    def from_pretrained(cls, pretrained_model_name_or_path, motion_config=None, **kwargs):  # type: ignore[override]
         # Pop HF download kwargs out so they reach every snapshot_download /
         # *.from_pretrained call below that actually hits the Hub. Leaving
         # them in ``kwargs`` would route them only into
@@ -138,7 +138,7 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
                 **extra,
                 **download_kwargs,
                 **kwargs,
-            )
+            )  # type: ignore[arg-type]
 
         # Re-apply motion module init only when motion module is newly added (not in checkpoint).
         # from_pretrained's _init_weights overwrites kaiming Conv3d init and any
@@ -190,7 +190,7 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
 
             model.resize_token_embeddings(len(processor.tokenizer))
 
-            load_checkpoint_in_model(model, local_dir, device_map={"": "cpu"})
+            load_checkpoint_in_model(model, str(local_dir), device_map={"": "cpu"})
             _print(f"[VTC] weights loaded from {local_dir}")
 
         return model

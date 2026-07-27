@@ -16,7 +16,7 @@ class STSSTransformation(nn.Module):
         assert window[1] == window[2]
         self.corr_func = corr_func
         if self.corr_func == "cosine":
-            self.pad_value = 0
+            self.pad_value: float = 0
         elif self.corr_func == "dotproduct_softmax":
             self.pad_value = -float("Inf")
         else:

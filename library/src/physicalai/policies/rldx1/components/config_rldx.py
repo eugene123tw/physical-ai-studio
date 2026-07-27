@@ -3,6 +3,7 @@
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 
 from dataclasses import MISSING, Field, field
+from typing import ClassVar
 
 from transformers import PretrainedConfig
 
@@ -11,7 +12,7 @@ class RLDXNetworkConfig(PretrainedConfig):
     """Unified configuration for RLDX model with backbone and action model."""
 
     # Model identification
-    model_type: str = "RLDX-1"
+    model_type: ClassVar[str] = "RLDX-1"
     model_dtype: str = "bfloat16"  # Use bfloat16 for Flash Attention compatibility
 
     # Backbone configuration

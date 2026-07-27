@@ -403,7 +403,7 @@ class VTCQwen3VLBackbone(nn.Module):
 
     def _forward_qwen_with_cog_tokens(
         self,
-        qwen_input: dict[str, Any],
+        qwen_input: dict[str, Any] | Any,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run the VTC-Qwen3-VL LM forward pass with appended cognition tokens.
 
@@ -579,6 +579,7 @@ class VTCQwen3VLBackbone(nn.Module):
         full_emb = torch.cat([inputs_embeds, meta_raw], dim=1)
 
         # Extend attention_mask for cognition tokens
+        assert attention_mask is not None, "attention_mask is required for cog-token forward pass"
         meta_ones = torch.ones(bsz, self.n_cog_tokens, dtype=attention_mask.dtype, device=device)
         full_att_mask = torch.cat([attention_mask, meta_ones], dim=1)
 
@@ -593,6 +594,7 @@ class VTCQwen3VLBackbone(nn.Module):
             visual_pos_masks = torch.cat([visual_pos_masks, vis_pad], dim=1)
 
         # Extend input_ids with placeholder tokens
+        assert input_ids is not None, "input_ids is required for cog-token forward pass"
         meta_ids = torch.full(
             (bsz, self.n_cog_tokens),
             placeholder_token_id,
@@ -650,7 +652,7 @@ class VTCQwen3VLBackbone(nn.Module):
                 )
                 position_ids = torch.arange(seq_length, device=device)
                 position_ids = position_ids.view(1, -1).expand(batch_size, -1)
-                if cache_position is not None:
+                if cache_position is not None and isinstance(delta, torch.Tensor):
                     delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
@@ -778,7 +780,7 @@ class VTCQwen3VLBackbone(nn.Module):
         filtered = {k: vl_input[k] for k in keys_to_use}
         if "num_frames" in vl_input:
             filtered["num_frames"] = vl_input["num_frames"]
-        vl_input = filtered
+        vl_input = BatchFeature(data=filtered)
         outputs, attention_mask, image_mask = self.forward_qwen(vl_input)
 
         return BatchFeature(

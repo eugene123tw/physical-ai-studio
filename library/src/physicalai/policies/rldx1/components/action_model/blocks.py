@@ -647,23 +647,23 @@ class DoubleStreamBlock(nn.Module):
         sa_attn = _merge_heads(sa_attn)  # (B, N_sa, inner_dim)
         sa_attn_proj = self.sa_proj(self.dropout(sa_attn))
         sa_attn_proj = self.sa_norm2_attn(sa_attn_proj)  # Post-attention norm
-        sa_tokens += sa_mod1.gate * sa_attn_proj
+        sa_tokens = sa_tokens + sa_mod1.gate * sa_attn_proj  # noqa: PLR6104
 
         vl_attn = _merge_heads(vl_attn)  # (B, N_vl, inner_dim)
         vl_attn_proj = self.vl_proj(self.dropout(vl_attn))
         vl_attn_proj = self.vl_norm2_attn(vl_attn_proj)  # Post-attention norm
-        vl_tokens += vl_mod1.gate * vl_attn_proj
+        vl_tokens = vl_tokens + vl_mod1.gate * vl_attn_proj  # noqa: PLR6104
 
         # MLP blocks
         sa_mlp_input = (1 + sa_mod2.scale) * self.sa_norm2_mlp(sa_tokens) + sa_mod2.shift
         sa_mlp_out = self.sa_mlp(sa_mlp_input)
         sa_mlp_out = self.sa_norm3_mlp(sa_mlp_out)  # Post-FFN norm
-        sa_tokens += sa_mod2.gate * sa_mlp_out
+        sa_tokens = sa_tokens + sa_mod2.gate * sa_mlp_out  # noqa: PLR6104
 
         vl_mlp_input = (1 + vl_mod2.scale) * self.vl_norm2_mlp(vl_tokens) + vl_mod2.shift
         vl_mlp_out = self.vl_mlp(vl_mlp_input)
         vl_mlp_out = self.vl_norm3_mlp(vl_mlp_out)  # Post-FFN norm
-        vl_tokens += vl_mod2.gate * vl_mlp_out
+        vl_tokens = vl_tokens + vl_mod2.gate * vl_mlp_out  # noqa: PLR6104
 
         return sa_tokens, vl_tokens
 
@@ -1032,22 +1032,22 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
         p_attn = _merge_heads(attn_out[:, :, n_vl + sa :])
 
         # Residual + post-attn norm
-        sa_tokens += sa_mod1.gate * self.sa_norm2_attn(
+        sa_tokens = sa_tokens + sa_mod1.gate * self.sa_norm2_attn(  # noqa: PLR6104
             self.sa_proj(self.dropout(sa_attn)),
         )
-        vl_tokens += vl_mod1.gate * self.vl_norm2_attn(
+        vl_tokens = vl_tokens + vl_mod1.gate * self.vl_norm2_attn(  # noqa: PLR6104
             self.vl_proj(self.dropout(vl_attn)),
         )
-        p_tokens += p_mod1.gate * self.p_norm2_attn(self.p_proj(self.dropout(p_attn)))
+        p_tokens = p_tokens + p_mod1.gate * self.p_norm2_attn(self.p_proj(self.dropout(p_attn)))  # noqa: PLR6104
 
         # MLP
-        sa_tokens += sa_mod2.gate * self.sa_norm3_mlp(
+        sa_tokens = sa_tokens + sa_mod2.gate * self.sa_norm3_mlp(  # noqa: PLR6104
             self.sa_mlp((1 + sa_mod2.scale) * self.sa_norm2_mlp(sa_tokens) + sa_mod2.shift),
         )
-        vl_tokens += vl_mod2.gate * self.vl_norm3_mlp(
+        vl_tokens = vl_tokens + vl_mod2.gate * self.vl_norm3_mlp(  # noqa: PLR6104
             self.vl_mlp((1 + vl_mod2.scale) * self.vl_norm2_mlp(vl_tokens) + vl_mod2.shift),
         )
-        p_tokens += p_mod2.gate * self.p_norm3_mlp(
+        p_tokens = p_tokens + p_mod2.gate * self.p_norm3_mlp(  # noqa: PLR6104
             self.p_mlp((1 + p_mod2.scale) * self.p_norm2_mlp(p_tokens) + p_mod2.shift),
         )
 
@@ -1269,12 +1269,12 @@ class ExpandedSingleStreamBlock(SingleStreamBlock):
         mlp_x1, mlp_x2 = x_mlp.chunk(2, dim=-1)
         x_mlp_out = self.mlp_proj(F.silu(mlp_x1) * mlp_x2)
         x_out = self.linear2(torch.cat([x_attn, x_mlp_out], dim=-1))
-        x += mod.gate * self.dropout(self.post_norm(x_out))
+        x = x + mod.gate * self.dropout(self.post_norm(x_out))  # noqa: PLR6104
 
         # P MLP
         p_mlp_x1, p_mlp_x2 = p_mlp.chunk(2, dim=-1)
         p_mlp_out = self.p_mlp_proj(F.silu(p_mlp_x1) * p_mlp_x2)
         p_out = self.p_linear2(torch.cat([p_attn, p_mlp_out], dim=-1))
-        p_tokens += p_mod.gate * self.dropout(self.p_post_norm(p_out))
+        p_tokens = p_tokens + p_mod.gate * self.dropout(self.p_post_norm(p_out))  # noqa: PLR6104
 
         return x, p_tokens

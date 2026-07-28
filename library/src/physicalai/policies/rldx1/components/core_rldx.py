@@ -929,7 +929,6 @@ class RLDX(PreTrainedModel):
         Returns:
             Tuple of ``(backbone_inputs, action_inputs)`` :class:`~transformers.feature_extraction_utils.BatchFeature`.
         """
-
         backbone_inputs = self.backbone.prepare_input(inputs)
         action_inputs = self.action_model.prepare_input(inputs)
 

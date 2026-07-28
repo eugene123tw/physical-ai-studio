@@ -10,7 +10,22 @@ from torch import nn
 
 
 class STSSTransformation(nn.Module):
-    def __init__(self, window=(5, 9, 9), corr_func="cosine"):
+    """Compute local spatio-temporal self-similarity (STSS) correlation volumes.
+
+    For each token in a video feature map, computes pairwise cosine or dot-product
+    similarity against a spatial neighbourhood in nearby frames, producing a local
+    (temporal-window × spatial-window × spatial-window) correlation tensor.
+    """
+
+    def __init__(self, window=(5, 9, 9), corr_func="cosine") -> None:
+        """Initialize STSSTransformation.
+
+        Args:
+            window: (T, H, W) local window sizes for the temporal, height, and width axes.
+                H and W must be equal.
+            corr_func: Correlation function to use. One of ``"cosine"``,
+                ``"dotproduct"``, or ``"dotproduct_softmax"``.
+        """
         super().__init__()
         self.window = window
         assert window[1] == window[2]
@@ -22,7 +37,7 @@ class STSSTransformation(nn.Module):
         else:
             self.pad_value = 0
 
-    def _convert_global_to_local(self, corr_g):
+    def _convert_global_to_local(self, corr_g: torch.Tensor) -> torch.Tensor:
         """Convert absolute correlation to relative (local window) correlation.
 
         Args:
@@ -55,7 +70,19 @@ class STSSTransformation(nn.Module):
 
         return corr_l
 
-    def _correlation(self, feat1, feat2):
+    def _correlation(self, feat1: torch.Tensor, feat2: torch.Tensor) -> torch.Tensor:
+        """Compute pairwise correlation between two spatial feature maps.
+
+        Applies the configured similarity function and crops the full global
+        correlation to the local spatial window via ``_convert_global_to_local``.
+
+        Args:
+            feat1: Source feature map of shape ``(B, C, H, W)``.
+            feat2: Target feature map of shape ``(B, C, H, W)``.
+
+        Returns:
+            Local correlation tensor of shape ``(B, H, W, window_h, window_w)``.
+        """
         if self.corr_func == "cosine":
             feat1 = F.normalize(feat1, p=2, dim=1)
             feat2 = F.normalize(feat2, p=2, dim=1)
@@ -74,7 +101,17 @@ class STSSTransformation(nn.Module):
 
         return corr
 
-    def forward(self, x, grid_sizes):
+    def forward(self, x: torch.Tensor, grid_sizes: torch.Tensor) -> torch.Tensor:
+        """Compute STSS correlation volumes for a batch of video tokens.
+
+        Args:
+            x: Flattened token tensor of shape ``(B*T*H*W, C)``.
+            grid_sizes: Tensor of shape ``(B, 3)`` where each row is ``[t, h, w]``.
+                All rows are assumed equal (single video size per batch).
+
+        Returns:
+            Correlation volume of shape ``(B, T, H, W, 1, window_t, window_h, window_w)``.
+        """
         t, h, w = grid_sizes[0]
         if self.window[0] > 1:
             x = rearrange(x, "(b t h w) c -> b t c h w", t=t, h=h, w=w)
@@ -106,7 +143,24 @@ class STSSTransformation(nn.Module):
 
 
 class STSSExtraction(nn.Module):
-    def __init__(self, window=(5, 9, 9), chnls=(256,), use_layernorm=False, use_syncbn=False):
+    """Project STSS correlation volumes to compact channel features.
+
+    Flattens the spatial-window dimensions of the correlation volume and applies
+    a 1×1×1 Conv3d to project them to a learnable feature space.
+    """
+
+    def __init__(self, window=(5, 9, 9), chnls=(256,), use_layernorm: bool = False, use_syncbn: bool = False) -> None:
+        """Initialize STSSExtraction.
+
+        Args:
+            window: (T, H, W) local window sizes matching those used in
+                :class:`STSSTransformation`.
+            chnls: Tuple with a single int specifying the output channel count
+                of the projection conv.
+            use_layernorm: Use ``GroupNorm(1, chnls[0])`` instead of BatchNorm.
+            use_syncbn: Use ``SyncBatchNorm`` instead of ``BatchNorm3d``.
+                Ignored when ``use_layernorm`` is ``True``.
+        """
         super().__init__()
         self.window = window
         self.chnls = chnls
@@ -131,7 +185,16 @@ class STSSExtraction(nn.Module):
             nn.GELU(),
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Extract features from a correlation volume.
+
+        Args:
+            x: Correlation volume of shape
+                ``(B, T, H, W, 1, window_t, window_h, window_w)``.
+
+        Returns:
+            Feature tensor of shape ``(B*window_t, chnls[0], T, H, W)``.
+        """
         b, t, h, w, _, ell, u, v = x.size()
         x = rearrange(x, "b t h w 1 l u v -> (b l) (u v) t h w", t=t, h=h, w=w)
         x = self.conv0(x)
@@ -139,15 +202,35 @@ class STSSExtraction(nn.Module):
 
 
 class STSSIntegration(nn.Module):
+    """Fuse temporal-window STSS feature slices into a single motion feature map.
+
+    In ``"lite"`` mode a single 1×1×1 Conv3d fuses all temporal slices at once.
+    In the default mode a three-layer 3×3 Conv3d stack is used for richer spatial
+    mixing before the final temporal fusion.
+    """
+
     def __init__(
         self,
         d_in,
         window=(5, 9, 9),
         chnls=(64, 64, 64),
-        use_layernorm=False,
-        use_syncbn=False,
-        mode="lite",
-    ):
+        use_layernorm: bool = False,
+        use_syncbn: bool = False,
+        mode: str = "lite",
+    ) -> None:
+        """Initialize STSSIntegration.
+
+        Args:
+            d_in: Input channel count (output of :class:`STSSExtraction`).
+            window: (T, H, W) local window sizes.
+            chnls: Three-element tuple with the channel counts for the three
+                conv layers. In ``"lite"`` mode only ``chnls[-1]`` is used.
+            use_layernorm: Use ``GroupNorm(1, ...)`` instead of BatchNorm.
+            use_syncbn: Use ``SyncBatchNorm`` instead of ``BatchNorm3d``.
+                Ignored when ``use_layernorm`` is ``True``.
+            mode: ``"lite"`` for a single 1×1×1 fusion conv, or any other value
+                for the full three-layer spatial conv stack.
+        """
         super().__init__()
         self.window = window
         self.mode = mode
@@ -214,16 +297,30 @@ class STSSIntegration(nn.Module):
             nn.GELU(),
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Integrate temporal STSS feature slices.
+
+        Args:
+            x: Feature tensor of shape ``(B*window_t, C, T, H, W)`` produced by
+                :class:`STSSExtraction`.
+
+        Returns:
+            Integrated feature map of shape ``(B, chnls[-1], T, H, W)``.
+        """
         if self.mode == "lite":
             return self.fuse(x)
         x = self.conv0(x)
         x = self.conv1(x)
-        x = self.conv2_fuse(x)
-        return x
+        return self.conv2_fuse(x)
 
 
 class STSSEncoder(nn.Module):
+    """Single STSS encoder block combining projection, transformation, extraction, and integration.
+
+    Applies a linear input projection, computes the STSS correlation volume, extracts
+    compact features, integrates temporal slices, and projects to the output dimension.
+    """
+
     def __init__(
         self,
         d_in,
@@ -233,10 +330,24 @@ class STSSEncoder(nn.Module):
         ext_chnls=(256,),
         int_chnls=(256, 256, 512),
         corr_func="cosine",
-        use_layernorm=False,
-        use_syncbn=False,
-        int_mode="lite",
-    ):
+        use_layernorm: bool = False,
+        use_syncbn: bool = False,
+        int_mode: str = "lite",
+    ) -> None:
+        """Initialize STSSEncoder.
+
+        Args:
+            d_in: Input token feature dimension.
+            d_hid: Hidden dimension after the input projection.
+            d_out: Output feature dimension.
+            window: (T, H, W) local window sizes passed to :class:`STSSTransformation`.
+            ext_chnls: Channel counts for :class:`STSSExtraction`.
+            int_chnls: Channel counts for :class:`STSSIntegration`.
+            corr_func: Correlation function; see :class:`STSSTransformation`.
+            use_layernorm: Use GroupNorm instead of BatchNorm in extraction/integration.
+            use_syncbn: Use SyncBatchNorm instead of BatchNorm in extraction/integration.
+            int_mode: Integration mode passed to :class:`STSSIntegration`.
+        """
         super().__init__()
         self.window = window
         self.ln_pre = nn.LayerNorm(d_in, eps=1e-6)
@@ -258,7 +369,16 @@ class STSSEncoder(nn.Module):
         )
         self.out_proj = nn.Linear(int_chnls[-1], d_out)
 
-    def forward(self, x, grid_sizes):
+    def forward(self, x: torch.Tensor, grid_sizes: torch.Tensor) -> torch.Tensor:
+        """Run the STSS encoder on a batch of video tokens.
+
+        Args:
+            x: Flattened token tensor of shape ``(B*T*H*W, d_in)``.
+            grid_sizes: Tensor of shape ``(B, 3)`` with rows ``[t, h, w]``.
+
+        Returns:
+            Motion feature tensor of shape ``(B*T*H*W, d_out)``.
+        """
         t, h, w = grid_sizes[0]
         x = self.in_proj(self.ln_pre(x))
         x = self.stss_transformation(x, grid_sizes)
@@ -269,6 +389,14 @@ class STSSEncoder(nn.Module):
 
 
 class MotionModule(nn.Module):
+    """Motion feature extractor built from a stack of :class:`STSSEncoder` blocks.
+
+    Accepts flattened video tokens with heterogeneous or homogeneous spatial grids and
+    produces per-token motion features by summing the outputs of all STSS encoders.
+    Optionally applies a learnable layer-scale parameter instead of a final linear
+    projection, and supports gradient monitoring during training.
+    """
+
     def __init__(
         self,
         d_in,
@@ -283,9 +411,29 @@ class MotionModule(nn.Module):
         layerscale_init=1e-5,
         use_layernorm=False,
         use_syncbn=False,
-        gradient_check=False,
-        int_mode="lite",
-    ):
+        gradient_check: bool = False,
+        int_mode: str = "lite",
+    ) -> None:
+        """Initialize MotionModule.
+
+        Args:
+            d_in: Input token feature dimension.
+            d_hid: Hidden dimension inside each :class:`STSSEncoder`.
+            d_out: Output feature dimension.
+            window: (T, H, W) local window sizes for all STSS encoders.
+            ext_chnls: Extraction channel counts passed to each encoder.
+            int_chnls: Integration channel counts passed to each encoder.
+            corr_func: Correlation function; see :class:`STSSTransformation`.
+            n_encoders: Number of stacked :class:`STSSEncoder` blocks.
+            use_layerscale: When ``True``, replace the output linear projection with a
+                learnable per-channel scale parameter.
+            layerscale_init: Initial value for the layer-scale parameter.
+            use_layernorm: Use GroupNorm instead of BatchNorm inside encoders.
+            use_syncbn: Use SyncBatchNorm inside encoders.
+            gradient_check: When ``True``, register a backward hook that logs
+                gradient statistics of the module output during training.
+            int_mode: Integration mode passed to each :class:`STSSEncoder`.
+        """
         super().__init__()
         self.use_layerscale = use_layerscale
         self.layerscale_init = layerscale_init
@@ -319,7 +467,7 @@ class MotionModule(nn.Module):
         self._grad_check_steps = {1, 2, 5, 10}  # log at these steps
         self._grad_check_interval = 50  # then every N steps
 
-    def _gradient_check_hook(self, grad):
+    def _gradient_check_hook(self, grad: torch.Tensor | None) -> torch.Tensor | None:
         """Backward hook: log gradient stats flowing through motion module output."""
         self._grad_check_counter += 1
         step = self._grad_check_counter
@@ -343,7 +491,7 @@ class MotionModule(nn.Module):
             print(f"[motion module Grad Check] step={step}: grad is None!")
         return grad
 
-    def initialize_weights(self):
+    def initialize_weights(self) -> None:
         """Initialize all weights in MotionModule."""
         for m in self.modules():
             if isinstance(m, nn.Linear):
@@ -365,7 +513,22 @@ class MotionModule(nn.Module):
         # started as a no-op — dropped so motion module contributes from step 1 instead of
         # warming up behind a residual shortcut.
 
-    def forward(self, x, grid_sizes):
+    def forward(self, x: torch.Tensor, grid_sizes: torch.Tensor) -> torch.Tensor:
+        """Compute motion features for a batch of video tokens.
+
+        Handles both homogeneous batches (all videos share the same grid) and
+        heterogeneous batches (each video has a different ``[t, h, w]``) by
+        splitting, processing per video, and concatenating the results.
+
+        Args:
+            x: Flattened token tensor of shape
+                ``(sum(t_i * h_i * w_i), d_in)``.
+            grid_sizes: Int tensor of shape ``(B, 3)`` where each row is
+                ``[t, h, w]`` for the corresponding video.
+
+        Returns:
+            Motion feature tensor of shape ``(sum(t_i * h_i * w_i), d_out)``.
+        """
         # x: (total_tokens, C) where total_tokens = sum(t_i * h_i * w_i)
         # grid_sizes: (batch_size, 3) where each row is [t, h, w]
         all_same_grid = (grid_sizes == grid_sizes[0]).all()

@@ -14,7 +14,6 @@ from torch.distributions import Beta
 from transformers import AutoConfig, AutoModel, PreTrainedModel
 from transformers.feature_extraction_utils import BatchFeature
 
-from physicalai.policies.rldx1.components._dist import rank_zero_print as _print  # noqa: PLC2701
 from physicalai.policies.rldx1.components.action_model.msat import MSAT
 from physicalai.policies.rldx1.components.action_model.physics import init_physics_params_near_zero
 from physicalai.policies.rldx1.components.action_model.physics_head import NoOpPhysicsHead, PhysicsHead
@@ -132,7 +131,7 @@ class RLDXActionModel(nn.Module):
                 action_horizon=self.action_horizon,
                 physics_dropout_prob=getattr(config, "physics_dropout_prob", 0.0),
             )
-            _print("[Physics] Applying near-zero (exit-zero) initialization...")
+            print("[Physics] Applying near-zero (exit-zero) initialization...")
             init_physics_params_near_zero(self)
         else:
             self.physics = NoOpPhysicsHead()
@@ -191,18 +190,18 @@ class RLDXActionModel(nn.Module):
             # never moves. fp32 storage lets small updates accumulate.
             self.vlln.to(torch.float32)
 
-        _print(f"[MSAT] Tune action model projector: {self.tune_projector}")
-        _print(f"[MSAT] Tune action model diffusion model: {self.tune_diffusion_model}")
-        _print(f"[MSAT] Tune action model vlln: {self.tune_vlln}")
-        _print(f"[MSAT] Action model LoRA: {use_lora}")
+        print(f"[MSAT] Tune action model projector: {self.tune_projector}")
+        print(f"[MSAT] Tune action model diffusion model: {self.tune_diffusion_model}")
+        print(f"[MSAT] Tune action model vlln: {self.tune_vlln}")
+        print(f"[MSAT] Action model LoRA: {use_lora}")
 
         # Check if any parameters are still trainable. If not, _print a warning.
         if not tune_projector and not tune_diffusion_model and not tune_vlln and not use_lora:
             for name, p in self.named_parameters():
                 if p.requires_grad:
-                    _print(f"Action head trainable parameter: {name}")
+                    print(f"Action head trainable parameter: {name}")
         if not any(p.requires_grad for p in self.parameters()):
-            _print("Warning: No action model trainable parameters found.")
+            print("Warning: No action model trainable parameters found.")
 
     def _apply_action_model_lora(self) -> None:
         """Inject PEFT LoRA adapters into the MSAT diffusion model.
@@ -238,7 +237,7 @@ class RLDXActionModel(nn.Module):
         filtered = [t for t in target_modules if _present(t)]
         skipped = [t for t in target_modules if t not in filtered]
         if skipped:
-            _print(f"[ActionModel LoRA] Skipping absent target modules: {skipped}")
+            print(f"[ActionModel LoRA] Skipping absent target modules: {skipped}")
         if not filtered:
             msg = f"[ActionModel LoRA] None of the requested target modules {target_modules} exist in the MSAT."
             raise ValueError(msg)
@@ -258,12 +257,12 @@ class RLDXActionModel(nn.Module):
         trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         total = sum(p.numel() for p in self.model.parameters())
         ratio = (100.0 * trainable / total) if total > 0 else 0.0
-        _print(
+        print(
             f"[ActionModel LoRA] target_modules={filtered}, "
             f"r={lora_config.r}, alpha={lora_config.lora_alpha}, "
             f"dropout={lora_config.lora_dropout}",
         )
-        _print(f"[ActionModel LoRA] trainable params: {trainable} / {total} ({ratio:.2f}%)")
+        print(f"[ActionModel LoRA] trainable params: {trainable} / {total} ({ratio:.2f}%)")
 
     def set_frozen_modules_to_eval_mode(self) -> None:
         """Set frozen submodules to eval mode.
@@ -359,7 +358,7 @@ class RLDXActionModel(nn.Module):
 
         # Add Gaussian noise to state features.
         if self.training and self.state_additive_noise_scale > 0:
-            _print(
+            print(
                 f"Adding Gaussian noise to state features with scale {self.state_additive_noise_scale}",
             )
             noise = torch.randn_like(state_features) * self.state_additive_noise_scale
@@ -707,7 +706,7 @@ class RLDX(PreTrainedModel):
         kwargs["use_cog_tokens"] = True
         kwargs["cog_mode"] = "cog_only"
         kwargs["n_cog_tokens"] = getattr(self.config, "n_cog_tokens", 64)
-        _print(f"\n[MSAT Configs] n_cog_tokens: {kwargs['n_cog_tokens']}")
+        print(f"\n[MSAT Configs] n_cog_tokens: {kwargs['n_cog_tokens']}")
 
         # Build motion module config if enabled
         if getattr(self.config, "use_motion", False):
@@ -735,7 +734,7 @@ class RLDX(PreTrainedModel):
                 "motion_drop": getattr(self.config, "motion_drop", True),
                 "motion_gradient_check": getattr(self.config, "motion_gradient_check", False),
             }
-            _print(f"[motion module] Enabled with config: {kwargs['motion_config']}")
+            print(f"[motion module] Enabled with config: {kwargs['motion_config']}")
 
         if config.backbone_model_type != "vtc_qwen3_vl":
             msg = f"Unsupported backbone_model_type={config.backbone_model_type!r}; only 'vtc_qwen3_vl' is supported."
@@ -807,7 +806,7 @@ class RLDX(PreTrainedModel):
         memory_cfg = dict(getattr(config, "memory_cfg", {}))
         backbone_hidden_size = self._get_backbone_hidden_size()
         if memory_cfg.get("hidden_size") != backbone_hidden_size:
-            _print(
+            print(
                 f"[i] Updating memory hidden_size from {memory_cfg.get('hidden_size')} to {backbone_hidden_size}",
             )
             memory_cfg["hidden_size"] = backbone_hidden_size
@@ -820,7 +819,7 @@ class RLDX(PreTrainedModel):
         self.memory = TransformerMemory(**memory_cfg)
 
         n_out = (self._n_cog_tokens + n_mq_mem) if self._concat_memory else self._n_cog_tokens
-        _print(
+        print(
             f"\n[i] Memory enabled: length={self._memory_length}, "
             f"n_mq_mem={n_mq_mem}, concat={self._concat_memory}, "
             f"dropout={self._memory_dropout_ratio}, output_tokens={n_out}",
@@ -856,7 +855,7 @@ class RLDX(PreTrainedModel):
         total = len(layers)
 
         if num == 0:
-            _print("[Backbone LoRA] backbone_lora_num_layers=0, skipping injection")
+            print("[Backbone LoRA] backbone_lora_num_layers=0, skipping injection")
             return
 
         layers_to_transform = list(range(total)) if num < 0 or num >= total else list(range(total - num, total))
@@ -895,17 +894,17 @@ class RLDX(PreTrainedModel):
                 continue
             p.data = p.data.to(torch.float32)
             n_cast += 1
-        _print(f"[Backbone LoRA] Ensured fp32 dtype on {n_cast} LoRA parameter tensors")
+        print(f"[Backbone LoRA] Ensured fp32 dtype on {n_cast} LoRA parameter tensors")
 
         trainable = sum(p.numel() for p in self.backbone.parameters() if p.requires_grad)
         total_p = sum(p.numel() for p in self.backbone.parameters())
         ratio = (100.0 * trainable / total_p) if total_p > 0 else 0.0
-        _print(
+        print(
             f"[Backbone LoRA] layers_to_transform={layers_to_transform} (total={total}), "
             f"r={lora_cfg.r}, alpha={lora_cfg.lora_alpha}, "
             f"dropout={lora_cfg.lora_dropout}, target_modules={target_modules}",
         )
-        _print(f"[Backbone LoRA] trainable params: {trainable} / {total_p} ({ratio:.3f}%)")
+        print(f"[Backbone LoRA] trainable params: {trainable} / {total_p} ({ratio:.3f}%)")
 
     @property
     def _n_output_tokens(self) -> int:

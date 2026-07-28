@@ -17,7 +17,6 @@ from torch import nn
 from transformers import LlamaConfig
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
-from physicalai.policies.rldx1.components._dist import rank_zero_print as _print  # noqa: PLC2701
 from physicalai.policies.rldx1.components.norms import RMSNorm
 
 
@@ -386,7 +385,7 @@ class TransformerMemory(nn.Module):
         # Initialize weights
         self.apply(self._init_weights)
 
-        _print(
+        print(
             f"\n[i] Transformer-based memory module initialized: "
             f"(layers={num_hidden_layers}, heads={num_attention_heads}, "
             f"hidden_size={hidden_size}, causal={use_causal_attn}, rope={use_rope})",

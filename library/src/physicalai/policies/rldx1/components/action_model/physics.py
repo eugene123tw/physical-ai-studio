@@ -4,7 +4,6 @@
 
 import torch
 import torch.nn.functional as F
-from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 from torch import nn
 
 from physicalai.policies.rldx1.components.action_model.blocks import (
@@ -132,14 +131,14 @@ def init_physics_params_near_zero(action_model: nn.Module) -> None:
             _xavier(enc.W1)
             _xavier(enc.W2)
             _small_noise(enc.W3, std=1e-5)
-            _print(f"   [Physics init] {enc_name}: W1,W2=Xavier, W3=near-zero(1e-5)")
+            print(f"   [Physics init] {enc_name}: W1,W2=Xavier, W3=near-zero(1e-5)")
 
     # ── (A) Decoder: first Linear = Kaiming (keep), last = near-zero (exit) ──
     if hasattr(physics_owner, "physics_decoder"):
         last = _last_linear(physics_owner.physics_decoder.net)
         if last is not None:
             _small_noise(last, std=1e-4)
-        _print("   [Physics init] decoder: last_linear=near-zero(1e-4)")
+        print("   [Physics init] decoder: last_linear=near-zero(1e-4)")
 
     # ── (B) ExpandedDoubleStreamBlock — P stream ──
     n_double = 0
@@ -180,7 +179,7 @@ def init_physics_params_near_zero(action_model: nn.Module) -> None:
                 _reset_norm_identity(m)
 
     if n_double > 0:
-        _print(
+        print(
             f"   [Physics init] {n_double} ExpandedDoubleStreamBlocks: "
             f"p_qkv=Xavier, p_proj=near-zero, p_mlp exit=near-zero",
         )
@@ -215,14 +214,14 @@ def init_physics_params_near_zero(action_model: nn.Module) -> None:
                 _xavier(m)
 
     if n_single > 0:
-        _print(
+        print(
             f"   [Physics init] {n_single} ExpandedSingleStreamBlocks: p_linear1=Xavier, p_linear2=near-zero",
         )
 
     # ── (D) MSAT physics output projection ──
     if hasattr(msat, "proj_out_physics_1"):
         _small_noise(msat.proj_out_physics_1, std=1e-5)
-        _print("   [Physics init] proj_out_physics_1=near-zero(1e-5)")
+        print("   [Physics init] proj_out_physics_1=near-zero(1e-5)")
     if hasattr(msat, "proj_out_physics_2"):
         _small_noise(msat.proj_out_physics_2, std=1e-4)
-        _print("   [Physics init] proj_out_physics_2=near-zero(1e-4)")
+        print("   [Physics init] proj_out_physics_2=near-zero(1e-4)")

@@ -10,7 +10,6 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .._dist import rank_zero_print as _print
 from .physics import (
     PhysicalSignalDecoder,
     PhysicalSignalEncoder,
@@ -60,7 +59,7 @@ def remap_physics_keys(state_dict: dict) -> dict:
                 break
         remapped[new_key] = value
     if renamed_count > 0:
-        _print(f"[Physics] Remapped {renamed_count} older-format keys → physics.* layout")
+        print(f"[Physics] Remapped {renamed_count} older-format keys → physics.* layout")
     return remapped
 
 
@@ -128,20 +127,20 @@ class PhysicsHead(nn.Module):
                 f"({action_horizon}) so that action_mask can be reused for physics loss masking"
             )
         else:
-            _print(
+            print(
                 "[Physics] Flow matching disabled. Physics used as conditioning only (no prediction loss)",
             )
 
-        _print(
+        print(
             f"\n[Physics] Physics stream enabled (dim={physics_dim}, weight={physics_loss_weight})",
         )
-        _print(
+        print(
             f"[Physics] hist_len={self.physics_hist_len}, fut_len={self.physics_fut_len}, "
             f"flow_matching={self.physics_use_flow_matching}",
         )
         if physics_dropout_prob > 0:
             mode = "hist-only" if self.physics_use_flow_matching else "all-conditioning"
-            _print(f"[Physics] physics_dropout_prob={physics_dropout_prob} ({mode})")
+            print(f"[Physics] physics_dropout_prob={physics_dropout_prob} ({mode})")
 
     def _maybe_dropout(self, tokens: torch.Tensor) -> torch.Tensor:
         """Per-sample dropout: replace a dropped sample's full token slice with

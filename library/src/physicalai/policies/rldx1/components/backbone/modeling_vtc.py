@@ -2,16 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 
+"""VTC Qwen3-VL model with motion module support."""
+
 import glob
 import json
 import os
 import pathlib
 from typing import Any
 
-# from transformers.trainer_utils import load_sharded_checkpoint
 from accelerate import load_checkpoint_in_model
 from huggingface_hub import snapshot_download
-from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 from transformers import AutoConfig, AutoProcessor, Qwen3VLForConditionalGeneration
 
 from .layer_wrapper import LayerWrapper
@@ -40,7 +40,7 @@ def _checkpoint_has_motion_weights(
     if pathlib.Path(path_or_name).is_dir():
         shards = sorted(glob.glob(os.path.join(path_or_name, "*.safetensors")))
         if not shards:
-            _print(f"[w] motion module probe: no *.safetensors under {path_or_name}")
+            print(f"[w] motion module probe: no *.safetensors under {path_or_name}")
             return None
         try:
             for shard in shards:
@@ -49,7 +49,7 @@ def _checkpoint_has_motion_weights(
                         return True
             return False
         except Exception as exc:
-            _print(f"[w] motion module probe: scan failed on {path_or_name}: {exc!r}")
+            print(f"[w] motion module probe: scan failed on {path_or_name}: {exc!r}")
             return None
 
     # HF Hub path: try sharded index first (cheap), then fall back to the
@@ -59,7 +59,7 @@ def _checkpoint_has_motion_weights(
         from huggingface_hub import hf_hub_download
         from huggingface_hub.utils import EntryNotFoundError
     except Exception as exc:
-        _print(f"[w] motion module probe: huggingface_hub unavailable: {exc!r}")
+        print(f"[w] motion module probe: huggingface_hub unavailable: {exc!r}")
         return None
 
     try:
@@ -71,7 +71,7 @@ def _checkpoint_has_motion_weights(
     except EntryNotFoundError:
         index_path = None
     except Exception as exc:
-        _print(f"[w] motion module probe: index.json download failed for {path_or_name}: {exc!r}")
+        print(f"[w] motion module probe: index.json download failed for {path_or_name}: {exc!r}")
         return None
 
     if index_path is not None:
@@ -80,13 +80,13 @@ def _checkpoint_has_motion_weights(
                 index = json.load(f)
             return any("motion_block" in k for k in index.get("weight_map", {}))
         except Exception as exc:
-            _print(f"[w] motion module probe: index.json parse failed: {exc!r}")
+            print(f"[w] motion module probe: index.json parse failed: {exc!r}")
             return None
 
     # Non-sharded HF Hub checkpoint: don't download the full model.safetensors
     # (potentially 10s of GB) just to read key names. Return indeterminate and
     # let the caller preserve whatever weights from_pretrained already loaded.
-    _print(
+    print(
         f"[w] motion module probe: {path_or_name} has no sharded index.json. Not "
         f"downloading full model.safetensors for key scan; preserving "
         f"loaded motion module weights (skipping re-init).",
@@ -108,7 +108,7 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
         revision = download_kwargs.get("revision")
 
         if "vtc" in pretrained_model_name_or_path.lower():
-            _print(
+            print(
                 f"[i] VTC loading pretrained VTC + Qwe3nVL weights from {pretrained_model_name_or_path}",
             )
             # Reference architecture config — always the upstream Qwen3-VL.
@@ -116,7 +116,7 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
             # download_kwargs here.
             base_config = AutoConfig.from_pretrained("Qwen/Qwen3-VL-8B-Instruct")
         else:
-            _print(f"[i] VTC loading Qwen3-VL weights from {pretrained_model_name_or_path}")
+            print(f"[i] VTC loading Qwen3-VL weights from {pretrained_model_name_or_path}")
             base_config = AutoConfig.from_pretrained(
                 pretrained_model_name_or_path,
                 **download_kwargs,
@@ -126,7 +126,7 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
         if motion_config is not None:
             for k, v in motion_config.items():
                 setattr(base_config.vision_config, k, v)
-            _print(f"[i] motion module config injected into vision_config: {motion_config}")
+            print(f"[i] motion module config injected into vision_config: {motion_config}")
 
         if "vtc" in pretrained_model_name_or_path.lower():
             model = Qwen3VLForConditionalGeneration._from_config(base_config, **kwargs)
@@ -146,19 +146,19 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
         if motion_config is not None and hasattr(model.model.visual, "motion_block"):
             probe = _checkpoint_has_motion_weights(pretrained_model_name_or_path, revision=revision)
             if probe is True:
-                _print(
+                print(
                     "[i] motion module weights loaded from checkpoint, skipping re-initialization",
                 )
             elif probe is False:
                 model.model.visual.motion_block.initialize_weights()
-                _print("[i] motion module weights re-initialized (not found in checkpoint)")
+                print("[i] motion module weights re-initialized (not found in checkpoint)")
             else:
                 # Indeterminate: preserve whatever from_pretrained already
                 # loaded. Re-initializing here risked overwriting trained
                 # motion module weights when the probe couldn't reach the checkpoint
                 # (missing index.json for non-sharded ckpts, HF download
                 # failure, malformed json, etc.).
-                _print(
+                print(
                     "[w] motion module ckpt probe indeterminate — skipping re-init to "
                     "avoid overwriting loaded weights. If fresh motion module init is "
                     "intended, verify the checkpoint layout.",
@@ -191,6 +191,6 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
             model.resize_token_embeddings(len(processor.tokenizer))
 
             load_checkpoint_in_model(model, local_dir, device_map={"": "cpu"})  # type: ignore[arg-type]
-            _print(f"[VTC] weights loaded from {local_dir}")
+            print(f"[VTC] weights loaded from {local_dir}")
 
         return model

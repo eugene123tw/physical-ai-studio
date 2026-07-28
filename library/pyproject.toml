@@ -105,11 +105,7 @@ smolvla = [
     "safetensors>=0.4.3,<1.0.0",
 ]
 
-# RLWRLD RLDX-1 (NVIDIA Isaac GR00T N1.7-based) VLA foundation model.
-# Vendored architecture + data pipeline under policies/rldx1/components.
-# The pipeline mirrors the upstream RLDXProcessor exactly (per-joint-group
-# normalization, relative actions, albumentations image resize, Qwen3-VL
-# vision processing) so Studio feeds the model byte-identical inputs.
+# RLWRLD RLDX-1
 rldx1 = [
     "transformers>=5.3.0,<5.6.0",
     "safetensors>=0.4.3,<1.0.0",

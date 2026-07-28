@@ -702,13 +702,13 @@ class StateActionProcessor:
                 f"Expected action dim 9 (xyz + rot6d) for EEF, got {action.shape[1]}"
             )
 
-            action_chunking: EndEffectorActionChunk | JointActionChunk = EndEffectorActionChunk(
+            action_chunking: Any = EndEffectorActionChunk(
                 [
                     EndEffectorPose(translation=m[:3], rotation=m[3:], rotation_type="rot6d")
                     for m in action
                 ]
             )
-            reference_frame: EndEffectorPose | JointPose = EndEffectorPose(
+            reference_frame: Any = EndEffectorPose(
                 translation=reference_state[:3],
                 rotation=reference_state[3:],
                 rotation_type="rot6d",
@@ -745,13 +745,13 @@ class StateActionProcessor:
                 f"Expected action dim 9 (xyz + rot6d) for EEF, got {action.shape[1]}"
             )
 
-            rel_action: EndEffectorActionChunk | JointActionChunk = EndEffectorActionChunk(
+            rel_action: Any = EndEffectorActionChunk(
                 [
                     EndEffectorPose(translation=m[:3], rotation=m[3:], rotation_type="rot6d")
                     for m in action
                 ]
             )
-            reference_frame: EndEffectorPose | JointPose = EndEffectorPose(
+            reference_frame: Any = EndEffectorPose(
                 translation=reference_state[:3],
                 rotation=reference_state[3:],
                 rotation_type="rot6d",

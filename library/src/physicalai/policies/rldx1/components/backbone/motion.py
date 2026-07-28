@@ -413,7 +413,7 @@ class MotionModule(nn.Module):
         d_out: int,
         window: tuple[int, int, int] = (5, 9, 9),
         ext_chnls: tuple[int, ...] = (256,),
-        int_chnls: tuple[int, ...] = (256, 256, 512),
+        int_chnls: tuple[int, int, int] = (256, 256, 512),
         corr_func: str = "cosine",
         n_encoders: int = 1,
         use_layerscale: bool = False,  # noqa: FBT001, FBT002

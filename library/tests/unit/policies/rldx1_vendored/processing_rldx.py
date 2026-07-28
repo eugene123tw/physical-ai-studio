@@ -470,7 +470,7 @@ class RLDXProcessor(ProcessorMixin):
         if normalized_states is not None:
             transformed_inputs["state"] = normalized_states.to(torch.get_default_dtype())
         if normalized_actions is not None:
-            transformed_inputs["action"] = normalized_actions.to(torch.get_default_dtype())  # type: ignore[union-attr]
+            transformed_inputs["action"] = normalized_actions.to(torch.get_default_dtype())  # type: ignore[attr-defined]
         if action_mask is not None:
             transformed_inputs["action_mask"] = action_mask
 

@@ -769,7 +769,7 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
 
         self.pos_embed_p = None
 
-    def forward(  # noqa: PLR0912, PLR0915, PLR0914  # type: ignore[override]
+    def forward(  # type: ignore[override]  # noqa: PLR0912, PLR0915, PLR0914
         self,
         sa_tokens: torch.Tensor,
         vl_tokens: torch.Tensor,

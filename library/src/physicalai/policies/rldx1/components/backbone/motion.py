@@ -159,8 +159,8 @@ class STSSExtraction(nn.Module):
         self,
         window: tuple[int, int, int] = (5, 9, 9),
         chnls: tuple[int, ...] = (256,),
-        use_layernorm: bool = False,
-        use_syncbn: bool = False,
+        use_layernorm: bool = False,  # noqa: FBT001, FBT002
+        use_syncbn: bool = False,  # noqa: FBT001, FBT002
     ) -> None:
         """Initialize STSSExtraction.
 
@@ -225,8 +225,8 @@ class STSSIntegration(nn.Module):
         d_in: int,
         window: tuple[int, int, int] = (5, 9, 9),
         chnls: tuple[int, int, int] = (64, 64, 64),
-        use_layernorm: bool = False,
-        use_syncbn: bool = False,
+        use_layernorm: bool = False,  # noqa: FBT001, FBT002
+        use_syncbn: bool = False,  # noqa: FBT001, FBT002
         mode: str = "lite",
     ) -> None:
         """Initialize STSSIntegration.
@@ -341,8 +341,8 @@ class STSSEncoder(nn.Module):
         ext_chnls: tuple[int, ...] = (256,),
         int_chnls: tuple[int, ...] = (256, 256, 512),
         corr_func: str = "cosine",
-        use_layernorm: bool = False,
-        use_syncbn: bool = False,
+        use_layernorm: bool = False,  # noqa: FBT001, FBT002
+        use_syncbn: bool = False,  # noqa: FBT001, FBT002
         int_mode: str = "lite",
     ) -> None:
         """Initialize STSSEncoder.
@@ -416,11 +416,11 @@ class MotionModule(nn.Module):
         int_chnls: tuple[int, ...] = (256, 256, 512),
         corr_func: str = "cosine",
         n_encoders: int = 1,
-        use_layerscale: bool = False,
+        use_layerscale: bool = False,  # noqa: FBT001, FBT002
         layerscale_init: float = 1e-5,
-        use_layernorm: bool = False,
-        use_syncbn: bool = False,
-        gradient_check: bool = False,
+        use_layernorm: bool = False,  # noqa: FBT001, FBT002
+        use_syncbn: bool = False,  # noqa: FBT001, FBT002
+        gradient_check: bool = False,  # noqa: FBT001, FBT002
         int_mode: str = "lite",
     ) -> None:
         """Initialize MotionModule.

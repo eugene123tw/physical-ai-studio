@@ -1,6 +1,8 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
+# ruff: noqa: T201
+
 """RLDX model components: action head (RLDXActionModel) and full VLA model (RLDX)."""
 
 from typing import Any
@@ -362,7 +364,7 @@ class RLDXActionModel(nn.Module):
                 f"Adding Gaussian noise to state features with scale {self.state_additive_noise_scale}",
             )
             noise = torch.randn_like(state_features) * self.state_additive_noise_scale
-            state_features += noise
+            state_features = state_features + noise  # noqa: PLR6104
 
         # Embed noised action trajectory.
         actions = action_input.action
@@ -382,7 +384,7 @@ class RLDXActionModel(nn.Module):
         if self.config.add_pos_embed:
             pos_ids = torch.arange(action_features.shape[1], dtype=torch.long, device=device)
             pos_embs = self.position_embedding(pos_ids).unsqueeze(0)
-            action_features += pos_embs
+            action_features = action_features + pos_embs  # noqa: PLR6104
 
         # Join vision, language, state and action embedding along sequence dimension.
         sa_embs = torch.cat((state_features, action_features), dim=1)
@@ -445,7 +447,7 @@ class RLDXActionModel(nn.Module):
             physics_attn_mask,
         )
         if physics_loss is not None:
-            loss += self.physics.physics_loss_weight * physics_loss
+            loss = loss + self.physics.physics_loss_weight * physics_loss  # noqa: PLR6104
             results["loss"] = loss
             results["physics_loss"] = physics_loss
 

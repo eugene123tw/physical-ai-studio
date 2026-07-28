@@ -82,6 +82,7 @@ class PhysicalSignalDecoder(nn.Module):
 
 class PhysicsNoiseEncoder(nn.Module):
     """Encode noisy future physics tokens with diffusion timestep conditioning."""
+
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int) -> None:
         """Initialize PhysicsNoiseEncoder.
 

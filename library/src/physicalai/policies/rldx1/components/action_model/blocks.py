@@ -7,37 +7,52 @@
 from typing import NamedTuple
 
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812
 from torch import nn
 
 from physicalai.policies.rldx1.components.action_model.ops import (
     SwiGLUFFN,
-    _merge_heads,
-    _split_heads,
+    _merge_heads,  # noqa: PLC2701
+    _split_heads,  # noqa: PLC2701
     apply_rotary_emb,
 )
 from physicalai.policies.rldx1.components.norms import create_norm_layer, create_qk_norm_layers
 
 
 class ModulationOut(NamedTuple):
+    """Modulation output containing shift, scale, and gate tensors."""
+
     shift: torch.Tensor
     scale: torch.Tensor
     gate: torch.Tensor
 
 
 class Modulation(nn.Module):
-    """Flux-style modulation for AdaLN.
-    - double=True: generates 6 parameters (shift1, scale1, gate1, shift2, scale2, gate2)
-    - double=False: generates 3 parameters (shift, scale, gate)
-    """
+    """Flux-style modulation for AdaLN."""
 
-    def __init__(self, dim: int, double: bool, remove_bias: bool = False):
+    def __init__(self, dim: int, double: bool, remove_bias: bool = False) -> None:  # noqa: FBT001, FBT002
+        """Initialize Modulation.
+
+        Args:
+            dim: Hidden dimension used for both input and per-parameter output size.
+            double: If ``True``, generates 6 parameters (two ``ModulationOut``); otherwise 3 (one).
+            remove_bias: If ``True``, disables the bias term in the linear projection.
+        """
         super().__init__()
         self.is_double = double
         self.multiplier = 6 if double else 3
         self.lin = nn.Linear(dim, self.multiplier * dim, bias=not remove_bias)
 
     def forward(self, vec: torch.Tensor) -> tuple[ModulationOut, ModulationOut | None]:
+        """Compute AdaLN modulation parameters from a conditioning vector.
+
+        Args:
+            vec: Conditioning vector of shape ``(B, dim)``.
+
+        Returns:
+            Tuple ``(mod1, mod2)`` where ``mod1`` is always a ``ModulationOut`` and
+            ``mod2`` is a ``ModulationOut`` when ``double=True`` or ``None`` otherwise.
+        """
         out = self.lin(F.silu(vec))[:, None, :].chunk(self.multiplier, dim=-1)
         return (
             ModulationOut(*out[:3]),
@@ -47,34 +62,56 @@ class Modulation(nn.Module):
 
 # Models ================================================
 class SingleStreamBlock(nn.Module):
-    """Flux-style SingleStreamBlock with parallel linear layers.
-    Processes concatenated VL+SA stream as a single stream.
-    """
+    """Flux-style SingleStreamBlock with parallel linear layers."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         hidden_size: int,
         num_attention_heads: int,
         attention_head_dim: int,
         mlp_ratio: float = 4.0,
         dropout: float = 0.0,
-        activation_fn: str = "gelu",
-        attention_bias: bool = True,
+        activation_fn: str = "gelu",  # noqa: ARG002
+        attention_bias: bool = True,  # noqa: FBT001, FBT002
         norm_eps: float = 1e-6,
         qk_norm: str = "none",
-        use_swiglu: bool = False,
+        use_swiglu: bool = False,  # noqa: FBT001, FBT002, ARG002
         positional_embeddings: str | None = None,
         max_seq_length: int | None = None,
         temb_type: str = "layerwise_mod",
-        remove_bias: bool = False,
+        remove_bias: bool = False,  # noqa: FBT001, FBT002
         pre_norm: str = "layer_norm",
         post_norm: str = "none",
-    ):
+    ) -> None:
+        """Initialize SingleStreamBlock.
+
+        Args:
+            hidden_size: Hidden dimension for the stream.
+            num_attention_heads: Number of attention heads.
+            attention_head_dim: Dimension per attention head.
+            mlp_ratio: MLP expansion ratio. Default ``4.0``.
+            dropout: Dropout probability. Default ``0.0``.
+            activation_fn: Activation function name (unused; kept for API compatibility). Default ``"gelu"``.
+            attention_bias: Whether to use bias in QKV/projection linears. Default ``True``.
+            norm_eps: Epsilon for normalization layers. Default ``1e-6``.
+            qk_norm: QK normalization strategy (``"none"``, ``"rms_norm"``, etc.). Default ``"none"``.
+            use_swiglu: Unused; kept for API compatibility. Default ``False``.
+            positional_embeddings: Positional embedding type. Supported: ``None``,
+                ``"rope_sa_only"``, ``"rope_vl_sa"``. Default ``None``.
+            max_seq_length: Maximum sequence length (for positional encodings). Default ``None``.
+            temb_type: Timestep embedding injection strategy (``"layerwise_mod"``,
+                ``"shared_mod"``, ``"input_token"``). Default ``"layerwise_mod"``.
+            remove_bias: If ``True``, removes bias from modulation and MLP projection. Default ``False``.
+            pre_norm: Pre-normalization layer type. Default ``"layer_norm"``.
+            post_norm: Post-normalization layer type (``"none"`` disables it). Default ``"none"``.
+
+        Raises:
+            NotImplementedError: If ``positional_embeddings="sinusoidal"`` is requested.
+        """
         super().__init__()
         if positional_embeddings == "sinusoidal":
-            raise NotImplementedError(
-                "positional_embeddings='sinusoidal' is not supported; use 'rope_sa_only', 'rope_vl_sa', or None.",
-            )
+            msg = "positional_embeddings='sinusoidal' is not supported; use 'rope_sa_only', 'rope_vl_sa', or None."
+            raise NotImplementedError(msg)
         self.hidden_size = hidden_size
         self.num_heads = num_attention_heads
         self.head_dim = attention_head_dim
@@ -112,12 +149,12 @@ class SingleStreamBlock(nn.Module):
         self.post_norm = create_norm_layer(post_norm, hidden_size, eps=norm_eps)
         # Modulation takes inner_dim (temb dimension) and outputs hidden_size-sized parameters
         # For SingleStreamBlock, we assume hidden_size == inner_dim (from DoubleStreamBlock output)
-        if temb_type != "shared_mod" and temb_type != "input_token":
+        if temb_type not in {"shared_mod", "input_token"}:
             self.modulation = Modulation(hidden_size, double=False, remove_bias=remove_bias)
 
         # Positional embedding mode (RoPE or disabled)
         self.positional_embeddings = positional_embeddings
-        if positional_embeddings in ("rope_sa_only", "rope_vl_sa"):
+        if positional_embeddings in {"rope_sa_only", "rope_vl_sa"}:
             # RoPE will be applied in forward pass, no embedding module needed here
             self.pos_embed = None
             self.use_rope = True
@@ -127,22 +164,38 @@ class SingleStreamBlock(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(
+    def forward(  # noqa: PLR0914
         self,
         x: torch.Tensor,
         temb: torch.Tensor,
         pe: torch.Tensor | None = None,
         shared_modulation: ModulationOut | None = None,
         time_token: torch.Tensor | None = None,
-        block_idx: int = 0,
+        block_idx: int = 0,  # noqa: ARG002
         attn_mask: torch.Tensor | None = None,
-    ):
+    ) -> torch.Tensor:
         """Forward pass following Flux SingleStreamBlock pattern.
-        x: (B, N, hidden_size) - concatenated VL+SA tokens (may include time_token if time_token is None here)
-        temb: (B, hidden_size)
-        pe: RoPE complex frequencies, shape (B, N, head_dim//2) as complex64 if use_rope else None
-        shared_modulation: Optional ModulationOut (shift, scale, gate) when temb_type="shared_mod"
-        time_token: Optional time token indicator - if not None, use identity modulation
+
+        Args:
+            x: Concatenated VL+SA tokens of shape ``(B, N, hidden_size)``.
+            temb: Timestep embedding of shape ``(B, hidden_size)``.
+            pe: RoPE complex frequencies of shape ``(B, N, head_dim // 2)`` as
+                ``complex64`` when RoPE is enabled, else ``None``.
+            shared_modulation: Pre-computed ``ModulationOut`` used when
+                ``temb_type="shared_mod"``. Ignored otherwise.
+            time_token: When not ``None``, signals that a time token is present and
+                causes identity (no-op) modulation to be applied.
+            block_idx: Block index (reserved for future use). Default ``0``.
+            attn_mask: Optional attention mask passed to
+                ``F.scaled_dot_product_attention``.
+
+        Returns:
+            Updated ``x`` of shape ``(B, N, hidden_size)``.
+
+        Raises:
+            ValueError: If ``temb_type="shared_mod"`` but ``shared_modulation`` is ``None``.
+            AttributeError: If the ``modulation`` attribute is missing for
+                ``temb_type="layerwise_mod"``.
         """
         # If time_token is provided (not None), use identity modulation (time_token handles conditioning)
         use_identity_mod = time_token is not None
@@ -154,13 +207,13 @@ class SingleStreamBlock(nn.Module):
             )
         elif self.temb_type == "shared_mod":
             if shared_modulation is None:
-                raise ValueError("temb_type='shared_mod' but shared_modulation is None")
+                msg = "temb_type='shared_mod' but shared_modulation is None"
+                raise ValueError(msg)
             mod = shared_modulation
         else:
             if not hasattr(self, "modulation"):
-                raise AttributeError(
-                    f"modulation not found. temb_type={self.temb_type} may not create modulation modules.",
-                )
+                msg = (f"modulation not found. temb_type={self.temb_type} may not create modulation modules.",)
+                raise AttributeError(msg)
             mod, _ = self.modulation(temb)
         # Pre-norm (shared for parallel computation)
         x_mod = (1 + mod.scale) * self.pre_norm(x) + mod.shift
@@ -180,13 +233,13 @@ class SingleStreamBlock(nn.Module):
         v = _split_heads(v, self.num_heads)  # (B, H, N, Dh)
 
         # Apply QK normalization
-        B, H, N, Dh = q.shape
-        q = q.reshape(B * H, N, Dh)
-        k = k.reshape(B * H, N, Dh)
+        batch_size, head, num, d_head = q.shape
+        q = q.reshape(batch_size * head, num, d_head)
+        k = k.reshape(batch_size * head, num, d_head)
         q = self.q_norm(q)
         k = self.k_norm(k)
-        q = q.reshape(B, H, N, Dh)
-        k = k.reshape(B, H, N, Dh)
+        q = q.reshape(batch_size, head, num, d_head)
+        k = k.reshape(batch_size, head, num, d_head)
 
         # Apply RoPE to Q and K if enabled (before attention computation)
         if self.use_rope and pe is not None:
@@ -209,12 +262,9 @@ class SingleStreamBlock(nn.Module):
 
 
 class DoubleStreamBlock(nn.Module):
-    """Flux-style DoubleStreamBlock.
-    Processes SA and VL streams separately but with joint attention.
-    Each stream has independent modulation, norm, attention, and MLP.
-    """
+    """Flux-style DoubleStreamBlock."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913, PLR0917, PLR0912, PLR0915
         self,
         sa_dim: int,
         vl_dim: int,
@@ -223,21 +273,45 @@ class DoubleStreamBlock(nn.Module):
         mlp_ratio: float = 4.0,
         vl_mlp_ratio: float | None = None,  # If None, use mlp_ratio
         dropout: float = 0.0,
-        attention_bias: bool = True,
+        attention_bias: bool = True,  # noqa: FBT001, FBT002
         norm_eps: float = 1e-6,
         qk_norm: str = "none",
         positional_embeddings: str | None = None,
         max_seq_length: int | None = None,
         temb_type: str = "layerwise_mod",
-        remove_bias: bool = False,
+        remove_bias: bool = False,  # noqa: FBT001, FBT002
         pre_norm: str = "layer_norm",
         post_norm: str = "none",
-    ):
+    ) -> None:
+        """Initialize DoubleStreamBlock.
+
+        Args:
+            sa_dim: Hidden dimension of the SA (action/robot-state) stream.
+            vl_dim: Hidden dimension of the VL (vision-language) stream.
+            num_attention_heads: Number of joint attention heads.
+            attention_head_dim: Dimension per attention head.
+            mlp_ratio: MLP expansion ratio for the SA stream. Default ``4.0``.
+            vl_mlp_ratio: MLP expansion ratio for the VL stream. ``None`` uses
+                ``mlp_ratio``. Default ``None``.
+            dropout: Dropout probability. Default ``0.0``.
+            attention_bias: Whether to use bias in QKV/projection linears. Default ``True``.
+            norm_eps: Epsilon for normalization layers. Default ``1e-6``.
+            qk_norm: QK normalization strategy. Default ``"none"``.
+            positional_embeddings: Positional embedding type. Supported: ``None``,
+                ``"rope_sa_only"``, ``"rope_vl_sa"``. Default ``None``.
+            max_seq_length: Maximum sequence length. Default ``None``.
+            temb_type: Timestep embedding injection strategy. Default ``"layerwise_mod"``.
+            remove_bias: If ``True``, removes bias from modulation. Default ``False``.
+            pre_norm: Pre-normalization layer type. Default ``"layer_norm"``.
+            post_norm: Post-normalization layer type. Default ``"none"``.
+
+        Raises:
+            NotImplementedError: If ``positional_embeddings="sinusoidal"`` is requested.
+        """
         super().__init__()
         if positional_embeddings == "sinusoidal":
-            raise NotImplementedError(
-                "positional_embeddings='sinusoidal' is not supported; use 'rope_sa_only', 'rope_vl_sa', or None.",
-            )
+            msg = ("positional_embeddings='sinusoidal' is not supported; use 'rope_sa_only', 'rope_vl_sa', or None.",)
+            raise NotImplementedError(msg)
         self.sa_dim = sa_dim
         self.vl_dim = vl_dim
         self.num_heads = num_attention_heads
@@ -250,7 +324,7 @@ class DoubleStreamBlock(nn.Module):
 
         # SA stream components
         # Modulation takes inner_dim (temb dimension) and outputs sa_dim-sized parameters
-        if temb_type != "shared_mod" and temb_type != "input_token":
+        if temb_type not in {"shared_mod", "input_token"}:
             self.sa_mod = Modulation(self.inner_dim, double=True, remove_bias=remove_bias)
         # Project modulation output to sa_dim if needed (not needed for input_token)
         if temb_type != "input_token":
@@ -274,7 +348,7 @@ class DoubleStreamBlock(nn.Module):
 
         # VL stream components
         # Modulation takes inner_dim (temb dimension) and outputs vl_dim-sized parameters
-        if temb_type != "shared_mod" and temb_type != "input_token":
+        if temb_type not in {"shared_mod", "input_token"}:
             self.vl_mod = Modulation(self.inner_dim, double=True, remove_bias=remove_bias)
         # Project modulation output to vl_dim if needed (not needed for input_token)
         if temb_type != "input_token":
@@ -302,7 +376,7 @@ class DoubleStreamBlock(nn.Module):
 
         # Positional embedding mode (RoPE or disabled)
         self.positional_embeddings = positional_embeddings
-        if positional_embeddings in ("rope_sa_only", "rope_vl_sa"):
+        if positional_embeddings in {"rope_sa_only", "rope_vl_sa"}:
             # RoPE will be applied in forward pass, no embedding module needed here
             self.pos_embed_sa = None
             self.pos_embed_vl = None
@@ -314,29 +388,48 @@ class DoubleStreamBlock(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
-    def forward(
+    def forward(  # noqa: PLR0914, PLR0915
         self,
         sa_tokens: torch.Tensor,
         vl_tokens: torch.Tensor,
         temb: torch.Tensor,
         pe: torch.Tensor | None = None,
         shared_modulations: dict | None = None,
-        has_time_token: bool = False,
-        block_idx: int = 0,
+        has_time_token: bool = False,  # noqa: FBT001, FBT002
+        block_idx: int = 0,  # noqa: ARG002
         encoder_attention_mask: torch.Tensor | None = None,
-    ):
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass following Flux DoubleStreamBlock pattern.
-        sa_tokens: (B, N_sa, sa_dim) - N_sa includes time_token if has_time_token=True
-        vl_tokens: (B, N_vl, vl_dim)
-        temb: (B, inner_dim)
-        pe: RoPE complex frequencies, shape (B, N_vl + N_sa, head_dim//2) as complex64 if use_rope else None
-        shared_modulations: Optional dict with 'sa_mod1_raw', 'sa_mod2_raw', 'vl_mod1_raw', 'vl_mod2_raw' keys
-        has_time_token: bool flag indicating if time_token is present in sa_tokens
-        encoder_attention_mask: Optional [B, N_vl] mask (1=visible, 0=masked) for VL tokens
+
+        Args:
+            sa_tokens: SA stream tokens of shape ``(B, N_sa, sa_dim)``. ``N_sa``
+                includes the time token when ``has_time_token=True``.
+            vl_tokens: VL stream tokens of shape ``(B, N_vl, vl_dim)``.
+            temb: Timestep embedding of shape ``(B, inner_dim)``.
+            pe: RoPE complex frequencies of shape ``(B, N_vl + N_sa, head_dim // 2)``
+                as ``complex64`` when RoPE is enabled, else ``None``.
+            shared_modulations: Optional dict with keys ``"sa_mod1_raw"``,
+                ``"sa_mod2_raw"``, ``"vl_mod1_raw"``, ``"vl_mod2_raw"`` used when
+                ``temb_type="shared_mod"``.
+            has_time_token: If ``True``, a time token is present in ``sa_tokens`` and
+                identity modulation is applied.
+            block_idx: Block index (reserved for future use). Default ``0``.
+            encoder_attention_mask: Optional key-value visibility mask of shape
+                ``(B, N_vl)`` (1 = visible, 0 = masked) for VL tokens.
+
+        Returns:
+            Tuple ``(sa_tokens, vl_tokens)`` with updated tensors of their original shapes.
+
+        Raises:
+            ValueError: If batch sizes of ``sa_tokens`` and ``vl_tokens`` do not match.
+            AttributeError: If the modulation attributes are missing for
+                ``temb_type="layerwise_mod"``.
         """
-        B, N_sa, _ = sa_tokens.shape
-        B2, N_vl, _ = vl_tokens.shape
-        assert B == B2
+        batch, n_sa, _ = sa_tokens.shape
+        batch2, n_vl, _ = vl_tokens.shape
+        if batch != batch2:
+            msg = f"Batch size mismatch: sa_tokens {batch} vs vl_tokens {batch2}"
+            raise ValueError(msg)
 
         use_identity_mod = has_time_token
 
@@ -345,71 +438,71 @@ class DoubleStreamBlock(nn.Module):
             # Use identity modulation when time_token is present
             sa_mod1 = ModulationOut(
                 shift=torch.zeros(
-                    B,
+                    batch,
                     1,
                     self.sa_dim,
                     device=sa_tokens.device,
                     dtype=sa_tokens.dtype,
                 ),
                 scale=torch.zeros(
-                    B,
+                    batch,
                     1,
                     self.sa_dim,
                     device=sa_tokens.device,
                     dtype=sa_tokens.dtype,
                 ),
-                gate=torch.ones(B, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype),
+                gate=torch.ones(batch, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype),
             )
             sa_mod2 = ModulationOut(
                 shift=torch.zeros(
-                    B,
+                    batch,
                     1,
                     self.sa_dim,
                     device=sa_tokens.device,
                     dtype=sa_tokens.dtype,
                 ),
                 scale=torch.zeros(
-                    B,
+                    batch,
                     1,
                     self.sa_dim,
                     device=sa_tokens.device,
                     dtype=sa_tokens.dtype,
                 ),
-                gate=torch.ones(B, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype),
+                gate=torch.ones(batch, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype),
             )
             vl_mod1 = ModulationOut(
                 shift=torch.zeros(
-                    B,
+                    batch,
                     1,
                     self.vl_dim,
                     device=vl_tokens.device,
                     dtype=vl_tokens.dtype,
                 ),
                 scale=torch.zeros(
-                    B,
+                    batch,
                     1,
                     self.vl_dim,
                     device=vl_tokens.device,
                     dtype=vl_tokens.dtype,
                 ),
-                gate=torch.ones(B, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype),
+                gate=torch.ones(batch, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype),
             )
             vl_mod2 = ModulationOut(
                 shift=torch.zeros(
-                    B,
+                    batch,
                     1,
                     self.vl_dim,
                     device=vl_tokens.device,
                     dtype=vl_tokens.dtype,
                 ),
                 scale=torch.zeros(
-                    B,
+                    batch,
                     1,
                     self.vl_dim,
                     device=vl_tokens.device,
                     dtype=vl_tokens.dtype,
                 ),
-                gate=torch.ones(B, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype),
+                gate=torch.ones(batch, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype),
             )
         elif self.temb_type == "shared_mod" and shared_modulations is not None:
             sa_mod1_raw = shared_modulations["sa_mod1_raw"]
@@ -441,9 +534,8 @@ class DoubleStreamBlock(nn.Module):
         else:
             # Layerwise modulation (temb_type="layerwise_mod")
             if not hasattr(self, "sa_mod") or not hasattr(self, "vl_mod"):
-                raise AttributeError(
-                    f"sa_mod or vl_mod not found. temb_type={self.temb_type} may not create modulation modules.",
-                )
+                msg = f"sa_mod or vl_mod not found. temb_type={self.temb_type} may not create modulation modules."
+                raise AttributeError(msg)
             sa_mod1_raw, sa_mod2_raw = self.sa_mod(temb)
             vl_mod1_raw, vl_mod2_raw = self.vl_mod(temb)
 
@@ -494,24 +586,23 @@ class DoubleStreamBlock(nn.Module):
         vl_v = _split_heads(vl_v, self.num_heads)  # (B, H, N_vl, Dh)
 
         # Apply QK normalization per modality
-        B, H, _, Dh = sa_q.shape
-        sa_q = sa_q.reshape(B * H, N_sa, Dh)
-        sa_k = sa_k.reshape(B * H, N_sa, Dh)
-        vl_q = vl_q.reshape(B * H, N_vl, Dh)
-        vl_k = vl_k.reshape(B * H, N_vl, Dh)
+        batch, heads, _, d_head = sa_q.shape
+        sa_q = sa_q.reshape(batch * heads, n_sa, d_head)
+        sa_k = sa_k.reshape(batch * heads, n_sa, d_head)
+        vl_q = vl_q.reshape(batch * heads, n_vl, d_head)
+        vl_k = vl_k.reshape(batch * heads, n_vl, d_head)
 
         sa_q = self.q_norm_sa(sa_q)
         sa_k = self.k_norm_sa(sa_k)
         vl_q = self.q_norm_vl(vl_q)
         vl_k = self.k_norm_vl(vl_k)
 
-        sa_q = sa_q.reshape(B, H, N_sa, Dh)
-        sa_k = sa_k.reshape(B, H, N_sa, Dh)
-        vl_q = vl_q.reshape(B, H, N_vl, Dh)
-        vl_k = vl_k.reshape(B, H, N_vl, Dh)
+        sa_q = sa_q.reshape(batch, heads, n_sa, d_head)
+        sa_k = sa_k.reshape(batch, heads, n_sa, d_head)
+        vl_q = vl_q.reshape(batch, heads, n_vl, d_head)
+        vl_k = vl_k.reshape(batch, heads, n_vl, d_head)
 
         # Joint attention: concat Q, K, V (VL first, then time_token+SA)
-        # Sequence: [VL | time_token | SA]
         q = torch.cat([vl_q, sa_q], dim=2)  # (B, H, N_vl + N_sa, Dh)
         k = torch.cat([vl_k, sa_k], dim=2)  # (B, H, N_vl + N_sa, Dh)
         v = torch.cat([vl_v, sa_v], dim=2)  # (B, H, N_vl + N_sa, Dh)
@@ -523,10 +614,10 @@ class DoubleStreamBlock(nn.Module):
         # Build joint attention mask from encoder_attention_mask if provided
         joint_attn_mask = None
         if encoder_attention_mask is not None:
-            B_mask = encoder_attention_mask.shape[0]
+            b_mask = encoder_attention_mask.shape[0]
             sa_ones = torch.ones(
-                B_mask,
-                N_sa,
+                b_mask,
+                n_sa,
                 device=encoder_attention_mask.device,
                 dtype=encoder_attention_mask.dtype,
             )
@@ -548,31 +639,31 @@ class DoubleStreamBlock(nn.Module):
 
         # Split attention outputs
         vl_attn, sa_attn = (
-            attn_out[:, :, :N_vl],
-            attn_out[:, :, N_vl:],
+            attn_out[:, :, :n_vl],
+            attn_out[:, :, n_vl:],
         )  # (B, H, N_vl, Dh), (B, H, N_sa, Dh)
 
         # Project and apply post-norm if enabled, then residual with gate
         sa_attn = _merge_heads(sa_attn)  # (B, N_sa, inner_dim)
         sa_attn_proj = self.sa_proj(self.dropout(sa_attn))
         sa_attn_proj = self.sa_norm2_attn(sa_attn_proj)  # Post-attention norm
-        sa_tokens = sa_tokens + sa_mod1.gate * sa_attn_proj
+        sa_tokens += sa_mod1.gate * sa_attn_proj
 
         vl_attn = _merge_heads(vl_attn)  # (B, N_vl, inner_dim)
         vl_attn_proj = self.vl_proj(self.dropout(vl_attn))
         vl_attn_proj = self.vl_norm2_attn(vl_attn_proj)  # Post-attention norm
-        vl_tokens = vl_tokens + vl_mod1.gate * vl_attn_proj
+        vl_tokens += vl_mod1.gate * vl_attn_proj
 
         # MLP blocks
         sa_mlp_input = (1 + sa_mod2.scale) * self.sa_norm2_mlp(sa_tokens) + sa_mod2.shift
         sa_mlp_out = self.sa_mlp(sa_mlp_input)
         sa_mlp_out = self.sa_norm3_mlp(sa_mlp_out)  # Post-FFN norm
-        sa_tokens = sa_tokens + sa_mod2.gate * sa_mlp_out
+        sa_tokens += sa_mod2.gate * sa_mlp_out
 
         vl_mlp_input = (1 + vl_mod2.scale) * self.vl_norm2_mlp(vl_tokens) + vl_mod2.shift
         vl_mlp_out = self.vl_mlp(vl_mlp_input)
         vl_mlp_out = self.vl_norm3_mlp(vl_mlp_out)  # Post-FFN norm
-        vl_tokens = vl_tokens + vl_mod2.gate * vl_mlp_out
+        vl_tokens += vl_mod2.gate * vl_mlp_out
 
         return sa_tokens, vl_tokens
 
@@ -587,7 +678,7 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
     When p_tokens is given, performs 3-way joint attention [VL | SA | P].
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         sa_dim: int,
         vl_dim: int,
@@ -598,16 +689,43 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
         vl_mlp_ratio: float | None = None,
         p_mlp_ratio: float | None = None,
         dropout: float = 0.0,
-        attention_bias: bool = True,
+        attention_bias: bool = True,  # noqa: FBT001, FBT002
         norm_eps: float = 1e-6,
         qk_norm: str = "none",
         positional_embeddings: str | None = None,
         max_seq_length: int | None = None,
         temb_type: str = "layerwise_mod",
-        remove_bias: bool = False,
+        remove_bias: bool = False,  # noqa: FBT001, FBT002
         pre_norm: str = "layer_norm",
         post_norm: str = "none",
-    ):
+    ) -> None:
+        """Initialize ExpandedDoubleStreamBlock.
+
+        Calls ``DoubleStreamBlock.__init__`` for the SA/VL streams, then registers
+        the P (physics) stream parameters.
+
+        Args:
+            sa_dim: Hidden dimension of the SA stream.
+            vl_dim: Hidden dimension of the VL stream.
+            p_dim: Hidden dimension of the P (physics) stream.
+            num_attention_heads: Number of joint attention heads.
+            attention_head_dim: Dimension per attention head.
+            mlp_ratio: MLP expansion ratio for the SA stream. Default ``4.0``.
+            vl_mlp_ratio: MLP expansion ratio for the VL stream. ``None`` uses
+                ``mlp_ratio``. Default ``None``.
+            p_mlp_ratio: MLP expansion ratio for the P stream. ``None`` uses
+                ``mlp_ratio``. Default ``None``.
+            dropout: Dropout probability. Default ``0.0``.
+            attention_bias: Whether to use bias in QKV/projection linears. Default ``True``.
+            norm_eps: Epsilon for normalization layers. Default ``1e-6``.
+            qk_norm: QK normalization strategy. Default ``"none"``.
+            positional_embeddings: Positional embedding type. Default ``None``.
+            max_seq_length: Maximum sequence length. Default ``None``.
+            temb_type: Timestep embedding injection strategy. Default ``"layerwise_mod"``.
+            remove_bias: If ``True``, removes bias from modulation. Default ``False``.
+            pre_norm: Pre-normalization layer type. Default ``"layer_norm"``.
+            post_norm: Post-normalization layer type. Default ``"none"``.
+        """
         super().__init__(
             sa_dim=sa_dim,
             vl_dim=vl_dim,
@@ -630,7 +748,7 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
         self.p_dim = p_dim
         p_mlp_ratio_actual = p_mlp_ratio if p_mlp_ratio is not None else mlp_ratio
 
-        if temb_type != "shared_mod" and temb_type != "input_token":
+        if temb_type not in {"shared_mod", "input_token"}:
             self.p_mod = Modulation(self.inner_dim, double=True, remove_bias=remove_bias)
         if temb_type != "input_token":
             self.p_mod_proj = nn.Linear(self.inner_dim, p_dim, bias=True) if self.inner_dim != p_dim else nn.Identity()
@@ -651,19 +769,45 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
 
         self.pos_embed_p = None
 
-    def forward(
+    def forward(  # noqa: PLR0912, PLR0915, PLR0914
         self,
         sa_tokens: torch.Tensor,
         vl_tokens: torch.Tensor,
         temb: torch.Tensor,
         pe: torch.Tensor | None = None,
         shared_modulations: dict | None = None,
-        has_time_token: bool = False,
+        has_time_token: bool = False,  # noqa: FBT001, FBT002
         block_idx: int = 0,
         encoder_attention_mask: torch.Tensor | None = None,
         p_tokens: torch.Tensor | None = None,
         physics_attention_mask: torch.Tensor | None = None,
-    ):
+    ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Forward pass with optional 3-way joint attention [VL | SA | P].
+
+        When ``p_tokens`` is ``None``, delegates to ``DoubleStreamBlock.forward``
+        (2-way SA/VL attention). When ``p_tokens`` is provided, performs 3-way joint
+        attention and returns an extra physics token tensor.
+
+        Args:
+            sa_tokens: SA stream tokens of shape ``(B, N_sa, sa_dim)``.
+            vl_tokens: VL stream tokens of shape ``(B, N_vl, vl_dim)``.
+            temb: Timestep embedding of shape ``(B, inner_dim)``.
+            pe: RoPE complex frequencies as ``complex64`` when RoPE is enabled,
+                else ``None``.
+            shared_modulations: Optional modulation dict for ``temb_type="shared_mod"``.
+            has_time_token: If ``True``, identity modulation is applied.
+            block_idx: Block index (reserved for future use). Default ``0``.
+            encoder_attention_mask: Optional VL key-visibility mask of shape
+                ``(B, N_vl)`` (1 = visible, 0 = masked).
+            p_tokens: Optional P stream tokens of shape ``(B, N_p, p_dim)``. When
+                ``None``, 2-way attention is used.
+            physics_attention_mask: Optional scalar mask per sample for P-stream
+                visibility of shape ``(B,)`` (1 = visible, 0 = masked).
+
+        Returns:
+            ``(sa_tokens, vl_tokens)`` when ``p_tokens`` is ``None``, or
+            ``(sa_tokens, vl_tokens, p_tokens)`` when physics tokens are provided.
+        """
         if p_tokens is None:
             return super().forward(
                 sa_tokens,
@@ -677,55 +821,64 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
             )
 
         # ── 3-way attention [VL | SA | P] ────────────────────────────────
-        B, N_sa, _ = sa_tokens.shape
-        N_vl = vl_tokens.shape[1]
-        N_p = p_tokens.shape[1]
+        batch_size, sa, _ = sa_tokens.shape
+        n_vl = vl_tokens.shape[1]
+        n_p = p_tokens.shape[1]
         use_identity_mod = has_time_token
 
         # Modulation
         if use_identity_mod:
             sa_mod1 = sa_mod2 = ModulationOut(
                 shift=torch.zeros(
-                    B,
+                    batch_size,
                     1,
                     self.sa_dim,
                     device=sa_tokens.device,
                     dtype=sa_tokens.dtype,
                 ),
                 scale=torch.zeros(
-                    B,
+                    batch_size,
                     1,
                     self.sa_dim,
                     device=sa_tokens.device,
                     dtype=sa_tokens.dtype,
                 ),
-                gate=torch.ones(B, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype),
+                gate=torch.ones(batch_size, 1, self.sa_dim, device=sa_tokens.device, dtype=sa_tokens.dtype),
             )
             vl_mod1 = vl_mod2 = ModulationOut(
                 shift=torch.zeros(
-                    B,
+                    batch_size,
                     1,
                     self.vl_dim,
                     device=vl_tokens.device,
                     dtype=vl_tokens.dtype,
                 ),
                 scale=torch.zeros(
-                    B,
+                    batch_size,
                     1,
                     self.vl_dim,
                     device=vl_tokens.device,
                     dtype=vl_tokens.dtype,
                 ),
-                gate=torch.ones(B, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype),
+                gate=torch.ones(batch_size, 1, self.vl_dim, device=vl_tokens.device, dtype=vl_tokens.dtype),
             )
             p_mod1 = p_mod2 = ModulationOut(
-                shift=torch.zeros(B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
-                scale=torch.zeros(B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
-                gate=torch.ones(B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
+                shift=torch.zeros(batch_size, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
+                scale=torch.zeros(batch_size, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
+                gate=torch.ones(batch_size, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
             )
         elif self.temb_type == "shared_mod" and shared_modulations is not None:
 
-            def _proj(proj, raw):
+            def _proj(proj: nn.Module, raw: ModulationOut) -> ModulationOut:
+                """Project each component of a ``ModulationOut`` through a linear layer.
+
+                Args:
+                    proj: Projection module (e.g. ``nn.Linear`` or ``nn.Identity``).
+                    raw: Source ``ModulationOut`` whose shift/scale/gate tensors are projected.
+
+                Returns:
+                    New ``ModulationOut`` with projected shift, scale, and gate tensors.
+                """
                 return ModulationOut(
                     shift=proj(raw.shift),
                     scale=proj(raw.scale),
@@ -743,24 +896,33 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
             else:
                 p_mod1 = p_mod2 = ModulationOut(
                     shift=torch.zeros(
-                        B,
+                        batch_size,
                         1,
                         self.p_dim,
                         device=p_tokens.device,
                         dtype=p_tokens.dtype,
                     ),
                     scale=torch.zeros(
-                        B,
+                        batch_size,
                         1,
                         self.p_dim,
                         device=p_tokens.device,
                         dtype=p_tokens.dtype,
                     ),
-                    gate=torch.ones(B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
+                    gate=torch.ones(batch_size, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
                 )
         else:
 
-            def _proj(proj, raw):
+            def _proj(proj: nn.Module, raw: ModulationOut) -> ModulationOut:
+                """Project each component of a ``ModulationOut`` through a linear layer.
+
+                Args:
+                    proj: Projection module (e.g. ``nn.Linear`` or ``nn.Identity``).
+                    raw: Source ``ModulationOut`` whose shift/scale/gate tensors are projected.
+
+                Returns:
+                    New ``ModulationOut`` with projected shift, scale, and gate tensors.
+                """
                 return ModulationOut(
                     shift=proj(raw.shift),
                     scale=proj(raw.scale),
@@ -796,13 +958,43 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
         # QK norm — direct reassignment so the norm modules stay on the
         # autograd graph. The previous `q_t.data = ...` loop swapped storage
         # but bypassed grad_fn, leaving q_norm_*/k_norm_* weights ungradable.
-        B, H, _, Dh = sa_q.shape
-        sa_q = self.q_norm_sa(sa_q.reshape(B * H, N_sa, Dh)).reshape(B, H, N_sa, Dh)
-        sa_k = self.k_norm_sa(sa_k.reshape(B * H, N_sa, Dh)).reshape(B, H, N_sa, Dh)
-        vl_q = self.q_norm_vl(vl_q.reshape(B * H, N_vl, Dh)).reshape(B, H, N_vl, Dh)
-        vl_k = self.k_norm_vl(vl_k.reshape(B * H, N_vl, Dh)).reshape(B, H, N_vl, Dh)
-        p_q = self.q_norm_p(p_q.reshape(B * H, N_p, Dh)).reshape(B, H, N_p, Dh)
-        p_k = self.k_norm_p(p_k.reshape(B * H, N_p, Dh)).reshape(B, H, N_p, Dh)
+        batch_size, num_heads, _, d_head = sa_q.shape
+        sa_q = self.q_norm_sa(sa_q.reshape(batch_size * num_heads, sa, d_head)).reshape(
+            batch_size,
+            num_heads,
+            sa,
+            d_head,
+        )
+        sa_k = self.k_norm_sa(sa_k.reshape(batch_size * num_heads, sa, d_head)).reshape(
+            batch_size,
+            num_heads,
+            sa,
+            d_head,
+        )
+        vl_q = self.q_norm_vl(vl_q.reshape(batch_size * num_heads, n_vl, d_head)).reshape(
+            batch_size,
+            num_heads,
+            n_vl,
+            d_head,
+        )
+        vl_k = self.k_norm_vl(vl_k.reshape(batch_size * num_heads, n_vl, d_head)).reshape(
+            batch_size,
+            num_heads,
+            n_vl,
+            d_head,
+        )
+        p_q = self.q_norm_p(p_q.reshape(batch_size * num_heads, n_p, d_head)).reshape(
+            batch_size,
+            num_heads,
+            n_p,
+            d_head,
+        )
+        p_k = self.k_norm_p(p_k.reshape(batch_size * num_heads, n_p, d_head)).reshape(
+            batch_size,
+            num_heads,
+            n_p,
+            d_head,
+        )
 
         # Joint attention [VL | SA | P]
         q = torch.cat([vl_q, sa_q, p_q], dim=2)
@@ -818,14 +1010,14 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
             if encoder_attention_mask is not None:
                 vl_mask = encoder_attention_mask  # [B, N_vl]
             else:
-                vl_mask = torch.ones(B, N_vl, device=q.device, dtype=q.dtype)
+                vl_mask = torch.ones(batch_size, n_vl, device=q.device, dtype=q.dtype)
             # SA mask (always visible)
-            sa_mask = torch.ones(B, N_sa, device=q.device, dtype=vl_mask.dtype)
+            sa_mask = torch.ones(batch_size, sa, device=q.device, dtype=vl_mask.dtype)
             # P mask
             if physics_attention_mask is not None:
-                p_mask = physics_attention_mask[:, None].expand(-1, N_p).to(dtype=vl_mask.dtype)
+                p_mask = physics_attention_mask[:, None].expand(-1, n_p).to(dtype=vl_mask.dtype)
             else:
-                p_mask = torch.ones(B, N_p, device=q.device, dtype=vl_mask.dtype)
+                p_mask = torch.ones(batch_size, n_p, device=q.device, dtype=vl_mask.dtype)
             kv_mask = torch.cat([vl_mask, sa_mask, p_mask], dim=1)
             attn_mask = kv_mask[:, None, None, :]
             attn_mask = torch.where(
@@ -835,27 +1027,27 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
             )
 
         attn_out = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
-        vl_attn = _merge_heads(attn_out[:, :, :N_vl])
-        sa_attn = _merge_heads(attn_out[:, :, N_vl : N_vl + N_sa])
-        p_attn = _merge_heads(attn_out[:, :, N_vl + N_sa :])
+        vl_attn = _merge_heads(attn_out[:, :, :n_vl])
+        sa_attn = _merge_heads(attn_out[:, :, n_vl : n_vl + sa])
+        p_attn = _merge_heads(attn_out[:, :, n_vl + sa :])
 
         # Residual + post-attn norm
-        sa_tokens = sa_tokens + sa_mod1.gate * self.sa_norm2_attn(
+        sa_tokens += sa_mod1.gate * self.sa_norm2_attn(
             self.sa_proj(self.dropout(sa_attn)),
         )
-        vl_tokens = vl_tokens + vl_mod1.gate * self.vl_norm2_attn(
+        vl_tokens += vl_mod1.gate * self.vl_norm2_attn(
             self.vl_proj(self.dropout(vl_attn)),
         )
-        p_tokens = p_tokens + p_mod1.gate * self.p_norm2_attn(self.p_proj(self.dropout(p_attn)))
+        p_tokens += p_mod1.gate * self.p_norm2_attn(self.p_proj(self.dropout(p_attn)))
 
         # MLP
-        sa_tokens = sa_tokens + sa_mod2.gate * self.sa_norm3_mlp(
+        sa_tokens += sa_mod2.gate * self.sa_norm3_mlp(
             self.sa_mlp((1 + sa_mod2.scale) * self.sa_norm2_mlp(sa_tokens) + sa_mod2.shift),
         )
-        vl_tokens = vl_tokens + vl_mod2.gate * self.vl_norm3_mlp(
+        vl_tokens += vl_mod2.gate * self.vl_norm3_mlp(
             self.vl_mlp((1 + vl_mod2.scale) * self.vl_norm2_mlp(vl_tokens) + vl_mod2.shift),
         )
-        p_tokens = p_tokens + p_mod2.gate * self.p_norm3_mlp(
+        p_tokens += p_mod2.gate * self.p_norm3_mlp(
             self.p_mlp((1 + p_mod2.scale) * self.p_norm2_mlp(p_tokens) + p_mod2.shift),
         )
 
@@ -872,7 +1064,7 @@ class ExpandedSingleStreamBlock(SingleStreamBlock):
     When p_tokens is given, does joint attention [VL+SA | P] then separate outputs.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         hidden_size: int,
         p_dim: int,
@@ -881,17 +1073,41 @@ class ExpandedSingleStreamBlock(SingleStreamBlock):
         mlp_ratio: float = 4.0,
         dropout: float = 0.0,
         activation_fn: str = "gelu",
-        attention_bias: bool = True,
+        attention_bias: bool = True,  # noqa: FBT001, FBT002
         norm_eps: float = 1e-6,
         qk_norm: str = "none",
-        use_swiglu: bool = False,
+        use_swiglu: bool = False,  # noqa: FBT001, FBT002
         positional_embeddings: str | None = None,
         max_seq_length: int | None = None,
         temb_type: str = "layerwise_mod",
-        remove_bias: bool = False,
+        remove_bias: bool = False,  # noqa: FBT001, FBT002
         pre_norm: str = "layer_norm",
         post_norm: str = "none",
-    ):
+    ) -> None:
+        """Initialize ExpandedSingleStreamBlock.
+
+        Calls ``SingleStreamBlock.__init__`` for the VL+SA stream, then registers
+        the P (physics) stream parameters.
+
+        Args:
+            hidden_size: Hidden dimension for the VL+SA stream.
+            p_dim: Hidden dimension for the P (physics) stream.
+            num_attention_heads: Number of joint attention heads.
+            attention_head_dim: Dimension per attention head.
+            mlp_ratio: MLP expansion ratio. Default ``4.0``.
+            dropout: Dropout probability. Default ``0.0``.
+            activation_fn: Activation function name (kept for API compatibility). Default ``"gelu"``.
+            attention_bias: Whether to use bias in QKV/projection linears. Default ``True``.
+            norm_eps: Epsilon for normalization layers. Default ``1e-6``.
+            qk_norm: QK normalization strategy. Default ``"none"``.
+            use_swiglu: Unused; kept for API compatibility. Default ``False``.
+            positional_embeddings: Positional embedding type. Default ``None``.
+            max_seq_length: Maximum sequence length. Default ``None``.
+            temb_type: Timestep embedding injection strategy. Default ``"layerwise_mod"``.
+            remove_bias: If ``True``, removes bias from modulation. Default ``False``.
+            pre_norm: Pre-normalization layer type. Default ``"layer_norm"``.
+            post_norm: Post-normalization layer type. Default ``"none"``.
+        """
         super().__init__(
             hidden_size=hidden_size,
             num_attention_heads=num_attention_heads,
@@ -927,7 +1143,7 @@ class ExpandedSingleStreamBlock(SingleStreamBlock):
         self.p_pre_norm = create_norm_layer(pre_norm, p_dim, eps=norm_eps)
         self.p_post_norm = create_norm_layer(post_norm, p_dim, eps=norm_eps)
 
-    def forward(
+    def forward(  # noqa: PLR0914
         self,
         x: torch.Tensor,
         temb: torch.Tensor,
@@ -937,7 +1153,32 @@ class ExpandedSingleStreamBlock(SingleStreamBlock):
         block_idx: int = 0,
         attn_mask: torch.Tensor | None = None,
         p_tokens: torch.Tensor | None = None,
-    ):
+    ) -> tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
+        """Forward pass with optional joint attention [VL+SA | P].
+
+        When ``p_tokens`` is ``None``, delegates to ``SingleStreamBlock.forward``.
+        When ``p_tokens`` is provided, performs joint attention over both streams
+        and returns updated ``x`` and ``p_tokens``.
+
+        Args:
+            x: Concatenated VL+SA tokens of shape ``(B, N, hidden_size)``.
+            temb: Timestep embedding of shape ``(B, hidden_size)``.
+            pe: RoPE complex frequencies as ``complex64`` when RoPE is enabled,
+                else ``None``.
+            shared_modulation: Pre-computed ``ModulationOut`` for
+                ``temb_type="shared_mod"``.
+            time_token: When not ``None``, signals identity modulation for the
+                VL+SA stream.
+            block_idx: Block index (reserved for future use). Default ``0``.
+            attn_mask: Optional attention mask passed to
+                ``F.scaled_dot_product_attention``.
+            p_tokens: Optional P stream tokens of shape ``(B, N_p, p_dim)``. When
+                ``None``, delegates to ``SingleStreamBlock.forward``.
+
+        Returns:
+            Updated ``x`` of shape ``(B, N, hidden_size)`` when ``p_tokens`` is
+            ``None``, or tuple ``(x, p_tokens)`` when physics tokens are provided.
+        """
         if p_tokens is None:
             return super().forward(
                 x,
@@ -950,43 +1191,43 @@ class ExpandedSingleStreamBlock(SingleStreamBlock):
             )
 
         # ── Joint attention [VL+SA | P] ──────────────────────────────────
-        B, N_x, _ = x.shape
-        N_p = p_tokens.shape[1]
+        batch_size, n_x, _ = x.shape
+        n_p = p_tokens.shape[1]
 
         # VL+SA modulation (same as SingleStreamBlock)
         use_identity_mod = time_token is not None
         if use_identity_mod:
             mod = ModulationOut(
-                shift=torch.zeros(B, 1, self.hidden_size, device=x.device, dtype=x.dtype),
-                scale=torch.zeros(B, 1, self.hidden_size, device=x.device, dtype=x.dtype),
-                gate=torch.ones(B, 1, self.hidden_size, device=x.device, dtype=x.dtype),
+                shift=torch.zeros(batch_size, 1, self.hidden_size, device=x.device, dtype=x.dtype),
+                scale=torch.zeros(batch_size, 1, self.hidden_size, device=x.device, dtype=x.dtype),
+                gate=torch.ones(batch_size, 1, self.hidden_size, device=x.device, dtype=x.dtype),
             )
             p_mod = ModulationOut(
-                shift=torch.zeros(B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
-                scale=torch.zeros(B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
-                gate=torch.ones(B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
+                shift=torch.zeros(batch_size, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
+                scale=torch.zeros(batch_size, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
+                gate=torch.ones(batch_size, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
             )
         elif self.temb_type == "shared_mod":
             mod = (
                 shared_modulation
                 if shared_modulation is not None
                 else ModulationOut(
-                    shift=torch.zeros(B, 1, self.hidden_size, device=x.device, dtype=x.dtype),
-                    scale=torch.zeros(B, 1, self.hidden_size, device=x.device, dtype=x.dtype),
-                    gate=torch.ones(B, 1, self.hidden_size, device=x.device, dtype=x.dtype),
+                    shift=torch.zeros(batch_size, 1, self.hidden_size, device=x.device, dtype=x.dtype),
+                    scale=torch.zeros(batch_size, 1, self.hidden_size, device=x.device, dtype=x.dtype),
+                    gate=torch.ones(batch_size, 1, self.hidden_size, device=x.device, dtype=x.dtype),
                 )
             )
             p_mod = ModulationOut(
-                shift=torch.zeros(B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
-                scale=torch.zeros(B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
-                gate=torch.ones(B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
+                shift=torch.zeros(batch_size, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
+                scale=torch.zeros(batch_size, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
+                gate=torch.ones(batch_size, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
             )
         else:
             mod, _ = self.modulation(temb)
             p_mod = ModulationOut(
-                shift=torch.zeros(B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
-                scale=torch.zeros(B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
-                gate=torch.ones(B, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
+                shift=torch.zeros(batch_size, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
+                scale=torch.zeros(batch_size, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
+                gate=torch.ones(batch_size, 1, self.p_dim, device=p_tokens.device, dtype=p_tokens.dtype),
             )
 
         # VL+SA: pre-norm -> fused QKV+MLP
@@ -1008,11 +1249,11 @@ class ExpandedSingleStreamBlock(SingleStreamBlock):
         p_q, p_k, p_v = [_split_heads(t, self.num_heads) for t in p_qkv.chunk(3, dim=-1)]
 
         # QK norm
-        B, H, _, Dh = x_q.shape
-        x_q = self.q_norm(x_q.reshape(B * H, N_x, Dh)).reshape(B, H, N_x, Dh)
-        x_k = self.k_norm(x_k.reshape(B * H, N_x, Dh)).reshape(B, H, N_x, Dh)
-        p_q = self.p_q_norm(p_q.reshape(B * H, N_p, Dh)).reshape(B, H, N_p, Dh)
-        p_k = self.p_k_norm(p_k.reshape(B * H, N_p, Dh)).reshape(B, H, N_p, Dh)
+        batch_size, head, _, d_head = x_q.shape
+        x_q = self.q_norm(x_q.reshape(batch_size * head, n_x, d_head)).reshape(batch_size, head, n_x, d_head)
+        x_k = self.k_norm(x_k.reshape(batch_size * head, n_x, d_head)).reshape(batch_size, head, n_x, d_head)
+        p_q = self.p_q_norm(p_q.reshape(batch_size * head, n_p, d_head)).reshape(batch_size, head, n_p, d_head)
+        p_k = self.p_k_norm(p_k.reshape(batch_size * head, n_p, d_head)).reshape(batch_size, head, n_p, d_head)
 
         # Joint attention [VL+SA | P]
         q = torch.cat([x_q, p_q], dim=2)
@@ -1021,19 +1262,19 @@ class ExpandedSingleStreamBlock(SingleStreamBlock):
         if self.use_rope and pe is not None:
             q, k = apply_rotary_emb(q, k, pe)
         attn_out = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
-        x_attn = _merge_heads(attn_out[:, :, :N_x])
-        p_attn = _merge_heads(attn_out[:, :, N_x:])
+        x_attn = _merge_heads(attn_out[:, :, :n_x])
+        p_attn = _merge_heads(attn_out[:, :, n_x:])
 
         # VL+SA MLP
         mlp_x1, mlp_x2 = x_mlp.chunk(2, dim=-1)
         x_mlp_out = self.mlp_proj(F.silu(mlp_x1) * mlp_x2)
         x_out = self.linear2(torch.cat([x_attn, x_mlp_out], dim=-1))
-        x = x + mod.gate * self.dropout(self.post_norm(x_out))
+        x += mod.gate * self.dropout(self.post_norm(x_out))
 
         # P MLP
         p_mlp_x1, p_mlp_x2 = p_mlp.chunk(2, dim=-1)
         p_mlp_out = self.p_mlp_proj(F.silu(p_mlp_x1) * p_mlp_x2)
         p_out = self.p_linear2(torch.cat([p_attn, p_mlp_out], dim=-1))
-        p_tokens = p_tokens + p_mod.gate * self.dropout(self.p_post_norm(p_out))
+        p_tokens += p_mod.gate * self.dropout(self.p_post_norm(p_out))
 
         return x, p_tokens

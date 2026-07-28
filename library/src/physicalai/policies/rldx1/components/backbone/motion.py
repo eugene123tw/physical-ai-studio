@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 
+"""Motion module for RLDX-1 backbone."""
+
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from torch import nn
@@ -14,10 +16,10 @@ class STSSTransformation(nn.Module):
 
     For each token in a video feature map, computes pairwise cosine or dot-product
     similarity against a spatial neighbourhood in nearby frames, producing a local
-    (temporal-window × spatial-window × spatial-window) correlation tensor.
+    (temporal-window x spatial-window x spatial-window) correlation tensor.
     """
 
-    def __init__(self, window=(5, 9, 9), corr_func="cosine") -> None:
+    def __init__(self, window: tuple[int, int, int] = (5, 9, 9), corr_func: str = "cosine") -> None:
         """Initialize STSSTransformation.
 
         Args:
@@ -25,10 +27,15 @@ class STSSTransformation(nn.Module):
                 H and W must be equal.
             corr_func: Correlation function to use. One of ``"cosine"``,
                 ``"dotproduct"``, or ``"dotproduct_softmax"``.
+
+        Raises:
+            ValueError: If ``window[1] != window[2]`` (height and width window sizes differ).
         """
         super().__init__()
         self.window = window
-        assert window[1] == window[2]
+        if window[1] != window[2]:
+            msg = f"window height and width must be equal, got {window[1]} and {window[2]}"
+            raise ValueError(msg)
         self.corr_func = corr_func
         if self.corr_func == "cosine":
             self.pad_value: float = 0
@@ -41,9 +48,10 @@ class STSSTransformation(nn.Module):
         """Convert absolute correlation to relative (local window) correlation.
 
         Args:
-            corr_g: (b, h, w, h, w) global correlation tensor
+            corr_g: Global correlation tensor of shape ``(B, H, W, H, W)``.
+
         Returns:
-            (b, h, w, window, window) local correlation tensor
+            Local correlation tensor of shape ``(B, H, W, window_h, window_w)``.
         """
         max_d = self.window[1] // 2
 
@@ -86,9 +94,9 @@ class STSSTransformation(nn.Module):
         if self.corr_func == "cosine":
             feat1 = F.normalize(feat1, p=2, dim=1)
             feat2 = F.normalize(feat2, p=2, dim=1)
-        elif self.corr_func in ["dotproduct", "dotproduct_softmax"]:
+        elif self.corr_func in {"dotproduct", "dotproduct_softmax"}:
             scale = feat1.size(1) ** -0.5
-            feat1 = feat1 * scale
+            feat1 *= scale
 
         corr = torch.einsum("bchw,bcuv->bhwuv", feat1, feat2)
         corr = self._convert_global_to_local(corr)
@@ -137,19 +145,23 @@ class STSSTransformation(nn.Module):
             x_tgt = rearrange(x_tgt, "b t c h w -> (b t) c h w")
 
         stss = self._correlation(x_src, x_tgt)
-        stss = rearrange(stss, "(b t l) h w u v -> b t h w 1 l u v", t=t, l=self.window[0])
-
-        return stss
+        return rearrange(stss, "(b t l) h w u v -> b t h w 1 l u v", t=t, l=self.window[0])
 
 
 class STSSExtraction(nn.Module):
     """Project STSS correlation volumes to compact channel features.
 
     Flattens the spatial-window dimensions of the correlation volume and applies
-    a 1×1×1 Conv3d to project them to a learnable feature space.
+    a 1x1x1 Conv3d to project them to a learnable feature space.
     """
 
-    def __init__(self, window=(5, 9, 9), chnls=(256,), use_layernorm: bool = False, use_syncbn: bool = False) -> None:
+    def __init__(
+        self,
+        window: tuple[int, int, int] = (5, 9, 9),
+        chnls: tuple[int, ...] = (256,),
+        use_layernorm: bool = False,
+        use_syncbn: bool = False,
+    ) -> None:
         """Initialize STSSExtraction.
 
         Args:
@@ -195,25 +207,24 @@ class STSSExtraction(nn.Module):
         Returns:
             Feature tensor of shape ``(B*window_t, chnls[0], T, H, W)``.
         """
-        b, t, h, w, _, ell, u, v = x.size()
+        _, t, h, w, _, _, _, _ = x.size()
         x = rearrange(x, "b t h w 1 l u v -> (b l) (u v) t h w", t=t, h=h, w=w)
-        x = self.conv0(x)
-        return x
+        return self.conv0(x)
 
 
 class STSSIntegration(nn.Module):
     """Fuse temporal-window STSS feature slices into a single motion feature map.
 
-    In ``"lite"`` mode a single 1×1×1 Conv3d fuses all temporal slices at once.
-    In the default mode a three-layer 3×3 Conv3d stack is used for richer spatial
+    In ``"lite"`` mode a single 1x1x1 Conv3d fuses all temporal slices at once.
+    In the default mode a three-layer 3x3 Conv3d stack is used for richer spatial
     mixing before the final temporal fusion.
     """
 
     def __init__(
         self,
-        d_in,
-        window=(5, 9, 9),
-        chnls=(64, 64, 64),
+        d_in: int,
+        window: tuple[int, int, int] = (5, 9, 9),
+        chnls: tuple[int, int, int] = (64, 64, 64),
         use_layernorm: bool = False,
         use_syncbn: bool = False,
         mode: str = "lite",
@@ -228,7 +239,7 @@ class STSSIntegration(nn.Module):
             use_layernorm: Use ``GroupNorm(1, ...)`` instead of BatchNorm.
             use_syncbn: Use ``SyncBatchNorm`` instead of ``BatchNorm3d``.
                 Ignored when ``use_layernorm`` is ``True``.
-            mode: ``"lite"`` for a single 1×1×1 fusion conv, or any other value
+            mode: ``"lite"`` for a single 1x1x1 fusion conv, or any other value
                 for the full three-layer spatial conv stack.
         """
         super().__init__()
@@ -323,13 +334,13 @@ class STSSEncoder(nn.Module):
 
     def __init__(
         self,
-        d_in,
-        d_hid,
-        d_out,
-        window=(7, 11, 11),
-        ext_chnls=(256,),
-        int_chnls=(256, 256, 512),
-        corr_func="cosine",
+        d_in: int,
+        d_hid: int,
+        d_out: int,
+        window: tuple[int, int, int] = (7, 11, 11),
+        ext_chnls: tuple[int, ...] = (256,),
+        int_chnls: tuple[int, ...] = (256, 256, 512),
+        corr_func: str = "cosine",
         use_layernorm: bool = False,
         use_syncbn: bool = False,
         int_mode: str = "lite",
@@ -379,13 +390,11 @@ class STSSEncoder(nn.Module):
         Returns:
             Motion feature tensor of shape ``(B*T*H*W, d_out)``.
         """
-        t, h, w = grid_sizes[0]
         x = self.in_proj(self.ln_pre(x))
         x = self.stss_transformation(x, grid_sizes)
         x = self.stss_extraction(x)
         x = self.stss_integration(x)
-        x = self.out_proj(rearrange(x, "b c t h w -> (b t h w) c"))
-        return x
+        return self.out_proj(rearrange(x, "b c t h w -> (b t h w) c"))
 
 
 class MotionModule(nn.Module):
@@ -399,18 +408,18 @@ class MotionModule(nn.Module):
 
     def __init__(
         self,
-        d_in,
-        d_hid,
-        d_out,
-        window=(5, 9, 9),
-        ext_chnls=(256,),
-        int_chnls=(256, 256, 512),
-        corr_func="cosine",
-        n_encoders=1,
-        use_layerscale=False,
-        layerscale_init=1e-5,
-        use_layernorm=False,
-        use_syncbn=False,
+        d_in: int,
+        d_hid: int,
+        d_out: int,
+        window: tuple[int, int, int] = (5, 9, 9),
+        ext_chnls: tuple[int, ...] = (256,),
+        int_chnls: tuple[int, ...] = (256, 256, 512),
+        corr_func: str = "cosine",
+        n_encoders: int = 1,
+        use_layerscale: bool = False,
+        layerscale_init: float = 1e-5,
+        use_layernorm: bool = False,
+        use_syncbn: bool = False,
         gradient_check: bool = False,
         int_mode: str = "lite",
     ) -> None:
@@ -468,27 +477,18 @@ class MotionModule(nn.Module):
         self._grad_check_interval = 50  # then every N steps
 
     def _gradient_check_hook(self, grad: torch.Tensor | None) -> torch.Tensor | None:
-        """Backward hook: log gradient stats flowing through motion module output."""
+        """Backward hook: log gradient stats flowing through motion module output.
+
+        Args:
+            grad: Gradient tensor of shape ``(B*T*H*W, d_out)`` or ``None`` if no gradient is flowing.
+
+        Returns:
+            The same gradient tensor, unmodified.
+        """
         self._grad_check_counter += 1
         step = self._grad_check_counter
         if step not in self._grad_check_steps and step % self._grad_check_interval != 0:
             return grad
-        if grad is not None:
-            print(
-                f"[motion module Grad Check] step={step}: "
-                f"norm={grad.norm().item():.6f}, "
-                f"mean={grad.mean().item():.8f}, "
-                f"std={grad.std().item():.6f}, "
-                f"max={grad.abs().max().item():.6f}",
-            )
-            # Check key parameter values
-            if not self.use_layerscale:
-                w = self.out_proj.weight
-                print(
-                    f"  out_proj.weight: norm={w.norm().item():.6f}, is_zero={torch.allclose(w, torch.zeros_like(w))}",
-                )
-        else:
-            print(f"[motion module Grad Check] step={step}: grad is None!")
         return grad
 
     def initialize_weights(self) -> None:
@@ -502,7 +502,7 @@ class MotionModule(nn.Module):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0.0)
-            elif isinstance(m, (nn.BatchNorm2d, nn.BatchNorm3d)) or isinstance(m, nn.LayerNorm):
+            elif isinstance(m, (nn.BatchNorm2d, nn.BatchNorm3d, nn.LayerNorm)):
                 nn.init.constant_(m.weight, 1.0)
                 nn.init.constant_(m.bias, 0.0)
 
@@ -556,7 +556,7 @@ class MotionModule(nn.Module):
             out = torch.cat(processed_videos, dim=0)
 
         if self.use_layerscale:
-            out = out * self.layerscale
+            out *= self.layerscale
         else:
             out = self.out_proj(out)
 

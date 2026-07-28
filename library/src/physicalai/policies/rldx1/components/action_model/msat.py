@@ -10,13 +10,15 @@ Submodules:
 - blocks.py: Modulation and stream blocks used by MSAT
 """
 
+from collections.abc import Callable
+from typing import Any
+
 import torch
 import torch.nn.functional as F
 from diffusers import ConfigMixin, ModelMixin
 from diffusers.configuration_utils import register_to_config
 from torch import nn
 
-# Re-export so callers can import ``_print`` from ``msat`` directly.
 from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 from physicalai.policies.rldx1.components.action_model.blocks import (
     DoubleStreamBlock,
@@ -46,7 +48,7 @@ class JointBase(ModelMixin, ConfigMixin):
 
     _supports_gradient_checkpointing = True
 
-    def _apply_checkpoint(self, func, *args):
+    def _apply_checkpoint(self, func: Callable[..., Any], *args: Any) -> Any:
         """Apply gradient checkpointing if enabled, matching Pi05Model's convention."""
         if self.gradient_checkpointing and self.training:
             return torch.utils.checkpoint.checkpoint(
@@ -59,24 +61,24 @@ class JointBase(ModelMixin, ConfigMixin):
 
     def _build_double_blocks(
         self,
-        depth,
-        sa_dim,
-        vl_dim,
-        num_heads,
-        head_dim,
-        dropout,
-        attention_bias,
-        norm_eps,
+        depth: int,
+        sa_dim: int,
+        vl_dim: int,
+        num_heads: int,
+        head_dim: int,
+        dropout: float,
+        attention_bias: bool,  # noqa: FBT001
+        norm_eps: float,
         qk_norm: str = "none",
         mlp_ratio: float = 4.0,
         vl_mlp_ratio: float | None = None,
         positional_embeddings: str | None = None,
         max_seq_length: int | None = None,
         temb_type: str = "layerwise_mod",
-        remove_bias: bool = False,
+        remove_bias: bool = False,  # noqa: FBT001, FBT002
         pre_norm: str = "layer_norm",
         post_norm: str = "none",
-    ):
+    ) -> nn.ModuleList:
         """Build lower double-stream blocks.
 
         Args:
@@ -127,24 +129,24 @@ class JointBase(ModelMixin, ConfigMixin):
 
     def _build_single_blocks(
         self,
-        depth,
-        hidden_size,
-        num_heads,
-        head_dim,
-        dropout,
+        depth: int,
+        hidden_size: int,
+        num_heads: int,
+        head_dim: int,
+        dropout: float,
         activation_fn: str = "gelu",
-        attention_bias: bool = True,
+        attention_bias: bool = True,  # noqa: FBT001, FBT002
         norm_eps: float = 1e-6,
         qk_norm: str = "none",
-        use_swiglu: bool = False,
+        use_swiglu: bool = False,  # noqa: FBT001, FBT002
         mlp_ratio: float = 4.0,
         positional_embeddings: str | None = None,
         max_seq_length: int | None = None,
         temb_type: str = "layerwise_mod",
-        remove_bias: bool = False,
+        remove_bias: bool = False,  # noqa: FBT001, FBT002
         pre_norm: str = "layer_norm",
         post_norm: str = "none",
-    ):
+    ) -> nn.ModuleList:
         """Build upper single-stream blocks.
 
         Args:
@@ -195,28 +197,28 @@ class JointBase(ModelMixin, ConfigMixin):
 
     def _build_expanded_double_blocks(
         self,
-        depth,
-        sa_dim,
-        vl_dim,
-        p_dim,
-        num_heads,
-        head_dim,
-        dropout,
+        depth: int,
+        sa_dim: int,
+        vl_dim: int,
+        p_dim: int,
+        num_heads: int,
+        head_dim: int,
+        dropout: float,
         activation_fn: str = "gelu",
-        attention_bias: bool = True,
+        attention_bias: bool = True,  # noqa: FBT001, FBT002
         norm_eps: float = 1e-6,
-        qk_norm="none",
-        use_swiglu=False,
-        mlp_ratio=4.0,
-        vl_mlp_ratio=None,
-        p_mlp_ratio=None,
-        positional_embeddings=None,
-        max_seq_length=None,
-        temb_type="layerwise_mod",
-        remove_bias=False,
-        pre_norm="layer_norm",
-        post_norm="none",
-    ):
+        qk_norm: str = "none",
+        use_swiglu: bool = False,  # noqa: FBT001, FBT002
+        mlp_ratio: float = 4.0,
+        vl_mlp_ratio: float | None = None,
+        p_mlp_ratio: float | None = None,
+        positional_embeddings: str | None = None,
+        max_seq_length: int | None = None,
+        temb_type: str = "layerwise_mod",
+        remove_bias: bool = False,  # noqa: FBT001, FBT002
+        pre_norm: str = "layer_norm",
+        post_norm: str = "none",
+    ) -> nn.ModuleList:
         """Build physics-aware lower expanded double-stream blocks.
 
         Args:
@@ -275,25 +277,25 @@ class JointBase(ModelMixin, ConfigMixin):
 
     def _build_expanded_single_blocks(
         self,
-        depth,
-        hidden_size,
-        p_dim,
-        num_heads,
-        head_dim,
-        dropout,
+        depth: int,
+        hidden_size: int,
+        p_dim: int,
+        num_heads: int,
+        head_dim: int,
+        dropout: float,
         activation_fn: str = "gelu",
-        attention_bias: bool = True,
+        attention_bias: bool = True,  # noqa: FBT001, FBT002
         norm_eps: float = 1e-6,
-        qk_norm="none",
-        use_swiglu=False,
-        mlp_ratio=4.0,
-        positional_embeddings=None,
-        max_seq_length=None,
-        temb_type="layerwise_mod",
-        remove_bias=False,
-        pre_norm="layer_norm",
-        post_norm="none",
-    ):
+        qk_norm: str = "none",
+        use_swiglu: bool = False,  # noqa: FBT001, FBT002
+        mlp_ratio: float = 4.0,
+        positional_embeddings: str | None = None,
+        max_seq_length: int | None = None,
+        temb_type: str = "layerwise_mod",
+        remove_bias: bool = False,  # noqa: FBT001, FBT002
+        pre_norm: str = "layer_norm",
+        post_norm: str = "none",
+    ) -> nn.ModuleList:
         """Build physics-aware upper expanded single-stream blocks.
 
         Args:
@@ -346,14 +348,14 @@ class JointBase(ModelMixin, ConfigMixin):
 
     def _forward_inner(
         self,
-        sa_embs,
-        vl_embs,
-        timesteps,
-        return_all_hidden_states=False,
-        encoder_attention_mask=None,
-        physics_embs=None,
-        physics_attention_mask=None,
-    ):
+        sa_embs: torch.Tensor,
+        vl_embs: torch.Tensor,
+        timesteps: torch.LongTensor | None,
+        return_all_hidden_states: bool = False,  # noqa: FBT001, FBT002
+        encoder_attention_mask: torch.Tensor | None = None,
+        physics_embs: torch.Tensor | None = None,
+        physics_attention_mask: torch.Tensor | None = None,
+    ) -> Any:
         """Run the internal MSAT forward pass.
 
         This method dispatches to the standard two-stream path or the
@@ -634,18 +636,18 @@ class JointBase(ModelMixin, ConfigMixin):
 
     def _forward_physics(
         self,
-        sa,
-        vl,
-        p_embs,
-        temb,
-        time_token,
-        has_time_token,
-        return_all_hidden_states,
-        shared_modulations,
-        shared_single_modulation,
-        encoder_attention_mask,
-        physics_attention_mask=None,
-    ):
+        sa: torch.Tensor,
+        vl: torch.Tensor,
+        p_embs: torch.Tensor,
+        temb: torch.Tensor,
+        time_token: torch.Tensor | None,
+        has_time_token: bool,  # noqa: FBT001
+        return_all_hidden_states: bool,  # noqa: FBT001
+        shared_modulations: dict[str, torch.Tensor] | None,
+        shared_single_modulation: ModulationOut | None,
+        encoder_attention_mask: torch.Tensor | None,
+        physics_attention_mask: torch.Tensor | None = None,
+    ) -> Any:
         """Run the physics-enabled MSAT forward path.
 
         The lower stage applies expanded double-stream blocks over
@@ -868,7 +870,7 @@ class JointBase(ModelMixin, ConfigMixin):
             return out, all_hidden
         return out
 
-    def _output_projection_physics(self, p, temb):
+    def _output_projection_physics(self, p: torch.Tensor, temb: torch.Tensor) -> torch.Tensor:
         """Project physics hidden states to output space.
 
         Args:
@@ -882,7 +884,7 @@ class JointBase(ModelMixin, ConfigMixin):
         p = self.norm_out_physics(p) * (1 + scale[:, None]) + shift[:, None]
         return self.proj_out_physics_2(p)
 
-    def _output_projection(self, sa, temb):
+    def _output_projection(self, sa: torch.Tensor, temb: torch.Tensor) -> torch.Tensor:
         """Project action hidden states to output space.
 
         Args:
@@ -915,7 +917,7 @@ class MSAT(JointBase):
         dropout: float = 0.1,
         attention_bias: bool | None = None,  # If None, defaults to True
         norm_eps: float = 1e-6,
-        compute_dtype=torch.float32,
+        compute_dtype: torch.dtype = torch.float32,
         positional_embeddings: str | None = "rope_sa_only",
         action_model_max_seq_len: int = 512,
         sa_dim: int = 1536,
@@ -924,13 +926,13 @@ class MSAT(JointBase):
         mlp_ratio: float = 4.0,
         vl_mlp_ratio: float | None = None,  # If None, use mlp_ratio. Set lower to reduce VL stream params.
         temb_type: str = "layerwise_mod",  # "layerwise_mod", "shared_mod", or "input_token"
-        remove_bias: bool = False,  # If True, remove bias from Modulation and projection layers
+        remove_bias: bool = False,  # If True, remove bias from Modulation and projection layers  # noqa: FBT001, FBT002
         pre_norm: str = "layer_norm",  # Pre-normalization type: "none", "layer_norm", or "rms_norm"
         post_norm: str = "none",  # Post-normalization type: "none", "layer_norm", or "rms_norm"
         rope_theta: float = 10000.0,  # Theta parameter for RoPE. Higher values result in slower rotation (smaller angles).
-        gradient_checkpointing: bool = False,
+        gradient_checkpointing: bool = False,  # noqa: FBT001, FBT002
         # Physics (tactile/torque) conditioning
-        use_physics: bool = False,
+        use_physics: bool = False,  # noqa: FBT001, FBT002
         physics_dim: int = 0,  # Total physics signal dimension (e.g. tactile_dim + torque_dim)
     ):
         """Initialize the Multi-Stream Action Transformer.
@@ -1210,11 +1212,11 @@ class MSAT(JointBase):
         hidden_states: torch.Tensor,  # SA tokens
         encoder_hidden_states: torch.Tensor,  # VL tokens
         timestep: torch.LongTensor | None = None,
-        return_all_hidden_states: bool = False,
+        return_all_hidden_states: bool = False,  # noqa: FBT001, FBT002
         encoder_attention_mask: torch.Tensor | None = None,  # [B, N_vl] VL attention mask (1=visible, 0=masked)
         physics_embs: torch.Tensor | None = None,  # [B, N_p, sa_dim] Physics tokens (when use_physics=True)
         physics_attention_mask: torch.Tensor | None = None,  # [B] per-sample physics mask (1=visible, 0=masked)
-    ):
+    ) -> Any:
         """Run a forward pass through MSAT.
 
         Args:

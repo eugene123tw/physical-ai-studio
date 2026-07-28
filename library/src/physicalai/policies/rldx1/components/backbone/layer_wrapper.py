@@ -2,13 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 
+"""Wrapper for transformer layers with image token compression."""
+
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from torch import nn
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 class LayerWrapper(nn.Module):
@@ -37,7 +41,7 @@ class LayerWrapper(nn.Module):
             motion_token: Number of motion tokens to insert during compression.
 
         Raises:
-            AssertionError: If ``motion_token`` is not 1.
+            ValueError: If ``motion_token`` is not 1.
         """
         super().__init__()
         self.layer = layer
@@ -45,7 +49,9 @@ class LayerWrapper(nn.Module):
         self.internal_projection = internal_projection
         self.motion_token = motion_token
         self.img_pattern = img_pattern
-        assert motion_token == 1
+        if motion_token != 1:
+            msg = f"motion_token must be 1, got {motion_token}"
+            raise ValueError(msg)
 
     def get_removing_indices(
         self,
@@ -89,7 +95,8 @@ class LayerWrapper(nn.Module):
 
         return begin_idx, end_idx
 
-    def left_pad_emb_list(self, emb_list: Sequence[torch.Tensor]) -> torch.Tensor:
+    @staticmethod
+    def left_pad_emb_list(emb_list: Sequence[torch.Tensor]) -> torch.Tensor:
         """Left-pad a list of embeddings to the same length.
 
         Args:
@@ -102,12 +109,12 @@ class LayerWrapper(nn.Module):
         padded_rev = torch.nn.utils.rnn.pad_sequence(rev, batch_first=True, padding_value=0)
         return padded_rev.flip(1)
 
-    def forward(
+    def forward(  # noqa: PLR0912, PLR0914, PLR0915
         self,
         hidden_states: torch.Tensor,
         input_ids: torch.Tensor | None = None,
         *args: object,
-        **kwargs: Any,
+        **kwargs: Any,  # noqa: ANN401
     ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Run the wrapped layer with optional image-token compression.
 
@@ -122,6 +129,10 @@ class LayerWrapper(nn.Module):
         Returns:
             A tuple ``(output, kwargs)`` where ``output`` is the wrapped layer
             result and ``kwargs`` contains any updated attention or position data.
+
+        Raises:
+            ValueError: If image-token compression is triggered but ``input_ids``
+                is not provided.
         """
         # The patched Qwen3VLTextModel.forward passes input_ids positionally.
         # Fall back to kwargs for any caller that routes it as a keyword.
@@ -135,10 +146,8 @@ class LayerWrapper(nn.Module):
                 kwargs["image_wise_encoding"] = bool(kwargs["image_wise_encoding"][0])
             else:
                 kwargs["image_wise_encoding"] = kwargs["image_wise_encoding"].bool().item()
-        if kwargs.get("image_wise_encoding"):
-            num_views = kwargs["num_views"]
-        else:
-            num_views = None
+
+        num_views = kwargs["num_views"] if kwargs.get("image_wise_encoding") else None
 
         bsz, seq_len, _dim = hidden_states.shape
 
@@ -147,7 +156,9 @@ class LayerWrapper(nn.Module):
             device = hidden_states.device
 
             token_indices = torch.arange(seq_len, device=device).view(1, -1).expand(bsz, -1)
-            assert input_ids is not None, "input_ids required for image-token compression"
+            if input_ids is None:
+                msg = "input_ids required for image-token compression"
+                raise ValueError(msg)
             begin_idx, end_idx = self.get_removing_indices(
                 hidden_states,
                 input_ids,
@@ -166,7 +177,7 @@ class LayerWrapper(nn.Module):
                 ms = motion_drop_info["start"]
                 mc = motion_drop_info["count"]
                 motion_drop_mask = (token_indices >= ms) & (token_indices < ms + mc)
-                keep_mask_front = keep_mask_front & ~motion_drop_mask
+                keep_mask_front = keep_mask_front & ~motion_drop_mask  # noqa: PLR6104
                 kwargs["motion_drop_info"] = None  # consumed
 
             # Old-frame image tokens to compress (exclude motion module)
@@ -243,7 +254,7 @@ class LayerWrapper(nn.Module):
 
             if "position_ids" in kwargs and kwargs["position_ids"] is not None:
                 position_ids = kwargs["position_ids"]
-                if position_ids.dim() == 2:
+                if position_ids.dim() == 2:  # noqa: PLR2004
                     pos_list = [
                         torch.cat(
                             [
@@ -257,7 +268,7 @@ class LayerWrapper(nn.Module):
                         for b in range(bsz)
                     ]
                     kwargs["position_ids"] = self.left_pad_emb_list(pos_list)
-                elif position_ids.dim() == 3:
+                elif position_ids.dim() == 3:  # noqa: PLR2004
                     # Keep the leading rotary dimension (e.g. 3) and compress on seq axis.
                     pos_list = [
                         torch.cat(
@@ -276,7 +287,8 @@ class LayerWrapper(nn.Module):
                     padded = self.left_pad_emb_list(pos_list_for_pad)  # [bs, max_seq, rope_dim]
                     kwargs["position_ids"] = padded.permute(2, 0, 1)  # [rope_dim, bs, max_seq]
                 else:
-                    raise ValueError(f"Unsupported position_ids shape: {position_ids.shape}")
+                    msg = f"Unsupported position_ids shape: {position_ids.shape}"
+                    raise ValueError(msg)
 
             if "position_embeddings" in kwargs and kwargs["position_embeddings"] is not None:
                 emb_x_list = [

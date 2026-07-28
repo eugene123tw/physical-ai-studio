@@ -1,9 +1,13 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
+# ruff: noqa: T201
+
+
+"""Physics stream components for RLDXActionModel: encoders, decoders, and init utilities."""
 
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812
 from torch import nn
 
 from physicalai.policies.rldx1.components.action_model.blocks import (
@@ -17,6 +21,13 @@ class PhysicalSignalEncoder(nn.Module):
     """Encode physics history tokens: (B, T_hist, input_dim) -> (B, T_hist, output_dim)."""
 
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
+        """Initialize PhysicalSignalEncoder.
+
+        Args:
+            input_dim: Dimensionality of the raw input physics signal.
+            hidden_dim: Intermediate projection dimensionality.
+            output_dim: Output token dimensionality.
+        """
         super().__init__()
         self.W1 = nn.Linear(input_dim, hidden_dim)
         self.W2 = nn.Linear(2 * hidden_dim, hidden_dim)
@@ -24,6 +35,14 @@ class PhysicalSignalEncoder(nn.Module):
         self.pos_encoding = SinusoidalPositionalEncoding(hidden_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Encode physics history tokens.
+
+        Args:
+            x: Input tensor of shape (B, T_hist, input_dim).
+
+        Returns:
+            Encoded tensor of shape (B, T_hist, output_dim).
+        """
         B, T, _ = x.shape
         h = self.W1(x)
         t_ids = torch.arange(T, device=x.device).float().unsqueeze(0).expand(B, -1)
@@ -36,6 +55,13 @@ class PhysicalSignalDecoder(nn.Module):
     """Decode physics predictions: (B, T, input_dim) -> (B, T, output_dim)."""
 
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
+        """Initialize PhysicalSignalDecoder.
+
+        Args:
+            input_dim: Dimensionality of the input token.
+            hidden_dim: Intermediate projection dimensionality.
+            output_dim: Output physics prediction dimensionality.
+        """
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -44,6 +70,14 @@ class PhysicalSignalDecoder(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Decode physics predictions.
+
+        Args:
+            x: Input tensor of shape (B, T, input_dim).
+
+        Returns:
+            Decoded tensor of shape (B, T, output_dim).
+        """
         return self.net(x)  # (B, T, output_dim)
 
 
@@ -53,6 +87,13 @@ class PhysicsNoiseEncoder(nn.Module):
     """
 
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
+        """Initialize PhysicsNoiseEncoder.
+
+        Args:
+            input_dim: Dimensionality of the noisy future physics input.
+            hidden_dim: Intermediate projection dimensionality.
+            output_dim: Output token dimensionality.
+        """
         super().__init__()
         self.W1 = nn.Linear(input_dim, hidden_dim)
         self.W2 = nn.Linear(2 * hidden_dim, hidden_dim)
@@ -60,12 +101,17 @@ class PhysicsNoiseEncoder(nn.Module):
         self.pos_encoding = SinusoidalPositionalEncoding(hidden_dim)
 
     def forward(self, x: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
-        """Args:
-            x: (B, T_fut, input_dim) - noisy future physics
-            timesteps: (B,) - diffusion timestep (scalar per sample)
+        """Encode noisy future physics tokens with diffusion timestep conditioning.
+
+        Args:
+            x: Noisy future physics tensor of shape (B, T_fut, input_dim).
+            timesteps: Diffusion timestep (scalar per sample) of shape (B,).
 
         Returns:
-            (B, T_fut, output_dim)
+            Encoded tensor of shape (B, T_fut, output_dim).
+
+        Raises:
+            ValueError: If ``timesteps`` does not have shape (B,).
         """
         B, T, _ = x.shape
         if timesteps.dim() == 1 and timesteps.shape[0] == B:
@@ -79,6 +125,14 @@ class PhysicsNoiseEncoder(nn.Module):
 
 
 def _xavier(m: nn.Module) -> None:
+    """Apply Xavier uniform initialization to a Linear layer's weight and zero its bias.
+
+    Args:
+        m: Module to initialize. Only ``nn.Linear`` instances are modified; others are skipped.
+
+    Returns:
+        None
+    """
     if isinstance(m, nn.Linear):
         nn.init.xavier_uniform_(m.weight)
         if m.bias is not None:
@@ -86,13 +140,30 @@ def _xavier(m: nn.Module) -> None:
 
 
 def _small_noise(m: nn.Linear, std: float) -> None:
+    """Initialize a Linear layer with near-zero Gaussian noise (exit-zero init).
+
+    Args:
+        m: Linear layer to initialize.
+        std: Standard deviation of the normal distribution used for the weight.
+
+    Returns:
+        None
+    """
     nn.init.normal_(m.weight, mean=0.0, std=std)
     if m.bias is not None:
         nn.init.zeros_(m.bias)
 
 
 def _reset_norm_identity(m: nn.Module) -> None:
-    """Reset LayerNorm or RMSNorm to identity (weight=1, bias=0)."""
+    """Reset LayerNorm or RMSNorm to identity (weight=1, bias=0).
+
+    Args:
+        m: Normalization module to reset. Handles ``nn.LayerNorm`` (weight + optional bias)
+           and RMSNorm-style modules that expose a ``weight`` ``nn.Parameter`` (weight only).
+
+    Returns:
+        None
+    """
     if isinstance(m, nn.LayerNorm):
         if m.weight is not None:
             nn.init.ones_(m.weight)
@@ -104,6 +175,15 @@ def _reset_norm_identity(m: nn.Module) -> None:
 
 
 def _last_linear(module: nn.Module) -> nn.Linear | None:
+    """Return the last ``nn.Linear`` sub-module in a module, or ``None`` if there are none.
+
+    Args:
+        module: Module to search (recursively via ``module.modules()``).
+
+    Returns:
+        The last ``nn.Linear`` instance found, or ``None`` if the module contains no
+        linear layers.
+    """
     linears = [m for m in module.modules() if isinstance(m, nn.Linear)]
     return linears[-1] if linears else None
 
@@ -111,9 +191,20 @@ def _last_linear(module: nn.Module) -> nn.Linear | None:
 def init_physics_params_near_zero(action_model: nn.Module) -> None:
     """Apply exit-zero initialization to all physics stream parameters.
 
-    Design: internal layers get Xavier (gradient flow), exit layers get near-zero
-    so that the physics stream outputs ~0 at Day-0 and does not disturb the
-    pretrained action stream.
+    Internal layers receive Xavier initialization for stable gradient flow; exit
+    (output) layers receive near-zero initialization so the physics stream outputs
+    approximately zero at the start of training and does not disturb the pretrained
+    action stream.
+
+    Args:
+        action_model: The action model whose physics stream parameters are to be
+            initialized. Must expose a ``.model`` attribute containing
+            ``double_blocks`` and ``single_blocks``, and either a top-level
+            ``physics_cond_encoder`` / ``physics_fut_encoder`` / ``physics_decoder``
+            or an equivalent ``.physics`` sub-module with those attributes.
+
+    Returns:
+        None
     """
     msat = action_model.model
 

@@ -276,7 +276,7 @@ class VTCQwen3VLBackbone(nn.Module):
             else:
                 raise
 
-    def set_trainable_parameters(
+    def set_trainable_parameters(  # noqa: PLR0912
         self,
         tune_llm: bool,  # noqa: FBT001
         tune_visual: bool,  # noqa: FBT001
@@ -304,23 +304,23 @@ class VTCQwen3VLBackbone(nn.Module):
         for p in self.parameters():
             p.requires_grad = True
         if not tune_llm:
-            self.qwen_model.model.language_model.requires_grad_(False)
-            self.qwen_model.lm_head.requires_grad_(False)
+            self.qwen_model.model.language_model.requires_grad_(False)  # noqa: FBT003
+            self.qwen_model.lm_head.requires_grad_(False)  # noqa: FBT003
         if not tune_visual:
-            self.qwen_model.model.visual.requires_grad_(False)
+            self.qwen_model.model.visual.requires_grad_(False)  # noqa: FBT003
             # Unfreeze motion module block even when visual is frozen
             if (
                 hasattr(self.qwen_model.model.visual, "motion_block")
                 and self.qwen_model.model.visual.motion_block is not None
             ):
-                self.qwen_model.model.visual.motion_block.requires_grad_(True)
+                self.qwen_model.model.visual.motion_block.requires_grad_(True)  # noqa: FBT003
 
         if tune_top_llm_layers > 0:
             for layer in self.qwen_model.model.language_model.layers[-tune_top_llm_layers:]:
                 for param in layer.parameters():
                     param.requires_grad = True
             # Unfreeze lm_head if top layers are trainable, since it depends on the last layer
-            self.qwen_model.lm_head.requires_grad_(True)
+            self.qwen_model.lm_head.requires_grad_(True)  # noqa: FBT003
 
         if print_params:
             print("=" * 50)
@@ -368,7 +368,7 @@ class VTCQwen3VLBackbone(nn.Module):
             if motion_block is not None:
                 motion_block.train()
 
-    def _process_moss_features(
+    def _process_moss_features(  # noqa: PLR0914
         self,
         moss_feats: torch.Tensor,
         moss_meta: tuple[int, int, int, int, int],
@@ -413,7 +413,8 @@ class VTCQwen3VLBackbone(nn.Module):
             raise RuntimeError(msg)
         return self.moss_proj(moss_feats)
 
-    def prepare_input(self, batch: dict[str, Any]) -> BatchFeature:
+    @staticmethod
+    def prepare_input(batch: dict[str, Any]) -> BatchFeature:
         """Wrap a raw dict of tensors in a :class:`~transformers.BatchFeature`.
 
         Args:
@@ -425,7 +426,7 @@ class VTCQwen3VLBackbone(nn.Module):
         """
         return BatchFeature(data=batch)
 
-    def _forward_qwen_with_cog_tokens(
+    def _forward_qwen_with_cog_tokens(  # noqa: C901, PLR0912, PLR0914, PLR0915
         self,
         qwen_input: dict[str, Any],
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -571,14 +572,14 @@ class VTCQwen3VLBackbone(nn.Module):
         motion_insert_pos = 0
         if self.moss_proj is not None:
             visual = self.qwen_model.model.visual
-            if visual._moss_features is not None:
+            if visual._moss_features is not None:  # noqa: SLF001
                 moss_tokens = self._process_moss_features(
-                    visual._moss_features,
-                    visual._moss_meta,
+                    visual._moss_features,  # noqa: SLF001
+                    visual._moss_meta,  # noqa: SLF001
                 ).to(inputs_embeds.dtype)
                 n_motion_tokens = moss_tokens.shape[1]
-                visual._moss_features = None
-                visual._moss_meta = None
+                visual._moss_features = None  # noqa: SLF001
+                visual._moss_meta = None  # noqa: SLF001
 
         bsz = inputs_embeds.size(0)
         placeholder_token_id = 248068
@@ -664,7 +665,7 @@ class VTCQwen3VLBackbone(nn.Module):
             attention_mask_tensor = (
                 full_att_mask if not isinstance(full_att_mask, dict) else full_att_mask["full_attention"]
             )
-            if attention_mask_tensor is not None and attention_mask_tensor.ndim == 4:
+            if attention_mask_tensor is not None and attention_mask_tensor.ndim == 4:  # noqa: PLR2004
                 attention_mask_tensor = torch.diagonal(attention_mask_tensor[:, 0], dim1=1, dim2=2)
                 if attention_mask_tensor.dtype.is_floating_point:
                     attention_mask_tensor /= torch.finfo(attention_mask_tensor.dtype).min
@@ -766,11 +767,11 @@ class VTCQwen3VLBackbone(nn.Module):
             - ``image_mask``: ``(B, L)`` boolean mask of image-token positions,
               or ``None`` when ``input_ids`` is absent.
         """
-        if "pixel_values" in vl_input and vl_input["pixel_values"].ndim == 3:
+        if "pixel_values" in vl_input and vl_input["pixel_values"].ndim == 3:  # noqa: PLR2004
             pv = vl_input["pixel_values"]
             vl_input["pixel_values"] = pv.reshape(-1, pv.shape[-1])
 
-        if "image_grid_thw" in vl_input and vl_input["image_grid_thw"].ndim == 3:
+        if "image_grid_thw" in vl_input and vl_input["image_grid_thw"].ndim == 3:  # noqa: PLR2004
             grid = vl_input["image_grid_thw"]
             vl_input["image_grid_thw"] = grid.reshape(-1, 3)
 

@@ -15,7 +15,7 @@ from transformers import AutoConfig
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.utils import is_torchdynamo_compiling
 
-from physicalai.policies.rldx1.components.backbone.modeling_vtc import LayerWrapper, VTC_Qwen3VL
+from physicalai.policies.rldx1.components.backbone.modeling_vtc import LayerWrapper, VTCQwen3Model
 from physicalai.policies.rldx1.components.backbone.text_model_forward import install_vtc_text_forward
 
 # Default attention implementation for the Qwen3-VL backbone load.
@@ -117,7 +117,7 @@ class VTCQwen3VLBackbone(nn.Module):
                     setattr(backbone_config.vision_config, k, v)
             backbone_config._attn_implementation = _DEFAULT_ATTN_IMPL  # noqa: SLF001
             print("Attention implementation:", backbone_config._attn_implementation)  # noqa: SLF001
-            self.qwen_model = VTC_Qwen3VL._from_config(backbone_config)  # noqa: SLF001
+            self.qwen_model = VTCQwen3Model._from_config(backbone_config)  # noqa: SLF001
             for layer_idx in range(len(self.qwen_model.model.language_model.layers)):
                 self.qwen_model.model.language_model.layers[layer_idx] = LayerWrapper(
                     self.qwen_model.model.language_model.layers[layer_idx],
@@ -133,7 +133,7 @@ class VTCQwen3VLBackbone(nn.Module):
                 self.qwen_model = self.qwen_model.to(torch.bfloat16)
         else:
             print(f"[i] Loading VTC-Qwen3-VL model from {model_name}")
-            self.qwen_model = VTC_Qwen3VL.from_pretrained(  # type: ignore[assignment]
+            self.qwen_model = VTCQwen3Model.from_pretrained(  # type: ignore[assignment]
                 model_name,
                 motion_config=motion_config,
                 attn_implementation=_DEFAULT_ATTN_IMPL,

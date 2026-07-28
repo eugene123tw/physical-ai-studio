@@ -1,24 +1,25 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
+# ruff: noqa: T201
 
 """VTC Qwen3-VL model with motion module support."""
 
-import glob
 import json
-import os
 import pathlib
 from typing import Any
 
 from accelerate import load_checkpoint_in_model
-from huggingface_hub import snapshot_download
+from huggingface_hub import hf_hub_download, snapshot_download
+from huggingface_hub.utils import EntryNotFoundError
+from safetensors import safe_open
 from transformers import AutoConfig, AutoProcessor, Qwen3VLForConditionalGeneration
 
 from .layer_wrapper import LayerWrapper
 from .text_model_forward import install_vtc_text_forward
 
 
-def _checkpoint_has_motion_weights(
+def _checkpoint_has_motion_weights(  # noqa: PLR0911
     path_or_name: str,
     revision: str | None = None,
 ) -> bool | None:
@@ -35,32 +36,21 @@ def _checkpoint_has_motion_weights(
     false-negative, because a false-negative here silently overwrites trained
     motion module weights via `motion_block.initialize_weights()`.
     """
-    from safetensors import safe_open
-
     if pathlib.Path(path_or_name).is_dir():
-        shards = sorted(glob.glob(os.path.join(path_or_name, "*.safetensors")))
+        shards = sorted(pathlib.Path(path_or_name).glob("*.safetensors"))
         if not shards:
             print(f"[w] motion module probe: no *.safetensors under {path_or_name}")
             return None
         try:
             for shard in shards:
                 with safe_open(shard, framework="pt") as f:
-                    if any("motion_block" in k for k in f.keys()):
+                    if any("motion_block" in k for k in f):
                         return True
-            return False
-        except Exception as exc:
+        except OSError as exc:
             print(f"[w] motion module probe: scan failed on {path_or_name}: {exc!r}")
             return None
-
-    # HF Hub path: try sharded index first (cheap), then fall back to the
-    # single-shard layout. EntryNotFoundError from the Hub means "file
-    # doesn't exist in the repo" — that's information, not an error.
-    try:
-        from huggingface_hub import hf_hub_download
-        from huggingface_hub.utils import EntryNotFoundError
-    except Exception as exc:
-        print(f"[w] motion module probe: huggingface_hub unavailable: {exc!r}")
-        return None
+        else:
+            return False
 
     try:
         index_path = hf_hub_download(
@@ -70,16 +60,16 @@ def _checkpoint_has_motion_weights(
         )
     except EntryNotFoundError:
         index_path = None
-    except Exception as exc:
+    except OSError as exc:
         print(f"[w] motion module probe: index.json download failed for {path_or_name}: {exc!r}")
         return None
 
     if index_path is not None:
         try:
-            with open(index_path) as f:
+            with pathlib.Path(index_path).open(encoding="utf-8") as f:
                 index = json.load(f)
             return any("motion_block" in k for k in index.get("weight_map", {}))
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             print(f"[w] motion module probe: index.json parse failed: {exc!r}")
             return None
 
@@ -94,9 +84,31 @@ def _checkpoint_has_motion_weights(
     return None
 
 
-class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
+class VTCQwen3Model(Qwen3VLForConditionalGeneration):
+    """VTC Qwen3-VL model with motion module support."""
+
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, motion_config=None, **kwargs):  # type: ignore[override]
+    def from_pretrained(  # noqa: PLR0912
+        cls,
+        pretrained_model_name_or_path: str,
+        motion_config: dict | None = None,
+        **kwargs: Any,  # noqa: ANN401
+    ) -> Qwen3VLForConditionalGeneration:  # type: ignore[override]
+        """Load a VTC_Qwen3VL model from a pretrained checkpoint.
+
+        Args:
+            pretrained_model_name_or_path: HuggingFace Hub repo ID or local
+                path to the pretrained model.
+            motion_config: Optional motion-module configuration dict injected
+                into the VTC architecture.
+            **kwargs: Additional keyword arguments forwarded to
+                ``Qwen3VLForConditionalGeneration.from_pretrained`` (e.g.
+                ``revision``, ``cache_dir``, ``token``).
+
+        Returns:
+            Loaded ``Qwen3VLForConditionalGeneration`` instance with VTC
+            weights applied.
+        """
         # Pop HF download kwargs out so they reach every snapshot_download /
         # *.from_pretrained call below that actually hits the Hub. Leaving
         # them in ``kwargs`` would route them only into
@@ -129,7 +141,7 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
             print(f"[i] motion module config injected into vision_config: {motion_config}")
 
         if "vtc" in pretrained_model_name_or_path.lower():
-            model = Qwen3VLForConditionalGeneration._from_config(base_config, **kwargs)
+            model = Qwen3VLForConditionalGeneration._from_config(base_config, **kwargs)  # noqa: SLF001
         else:
             # Only pass explicit config when motion module modifies it; otherwise use default loading
             extra: dict[str, Any] = {"config": base_config} if motion_config is not None else {}

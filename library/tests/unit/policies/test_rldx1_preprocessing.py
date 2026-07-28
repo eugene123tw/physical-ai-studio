@@ -38,6 +38,7 @@ from tests.unit.policies.rldx1_vendored.data_types import (
     ModalityConfig,
 )
 from tests.unit.policies.rldx1_vendored.state_action_processor import StateActionProcessor
+from typing import Literal
 
 MAX_STATE_DIM = 64
 MAX_ACTION_DIM = 64
@@ -359,7 +360,7 @@ def test_aspect_area_resize_crop_matches_vendored(height: int, width: int) -> No
 # ---------------------------------------------------------------------------- #
 
 _VLM_MODEL_NAME = "RLWRLD/RLDX-1-VLM"
-_VLM_MODEL_TYPE = "vtc_qwen3_vl"
+_VLM_MODEL_TYPE: Literal["qwen3_vl", "vtc_qwen3_vl"] = "vtc_qwen3_vl"
 _VLM_LOADING_KWARGS = {"trust_remote_code": False, "use_fast": True}
 
 

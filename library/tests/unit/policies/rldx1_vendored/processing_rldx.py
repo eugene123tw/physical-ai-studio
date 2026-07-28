@@ -65,7 +65,7 @@ class RLDXDataCollator:
         """Collate vlm_content from B samples into batched VLM inputs."""
         text_list = []
         image_inputs = []
-        video_inputs = []
+        video_inputs: list[Any] = []
         for v in values:
             text_list.append(v["text"])
             image_inputs += v["images"]
@@ -196,7 +196,7 @@ class RLDXProcessor(ProcessorMixin):
                             di = (
                                 mc.delta_indices
                                 if hasattr(mc, "delta_indices")
-                                else mc.get("delta_indices", [])
+                                else getattr(mc, "delta_indices", [])
                             )
                             if di:
                                 self._physics_t_len = len(di)
@@ -292,7 +292,7 @@ class RLDXProcessor(ProcessorMixin):
         self.training = False
         self.state_action_processor.eval()
 
-    def get_modality_configs(self) -> dict[str, dict[str, ModalityConfig]]:
+    def get_modality_configs(self) -> dict[str, ModalityConfig]:
         """Return the parsed modality configs (``[embodiment_tag][modality]``)."""
         return self.modality_configs
 
@@ -426,7 +426,7 @@ class RLDXProcessor(ProcessorMixin):
             action_mask[:, action_dim:] = 0
         else:
             assert not self.training, "Action is required in training mode"
-            normalized_actions = None
+            normalized_actions = None  # type: ignore[assignment]
             action_mask = None
 
         # Concatenate states
@@ -470,7 +470,7 @@ class RLDXProcessor(ProcessorMixin):
         if normalized_states is not None:
             transformed_inputs["state"] = normalized_states.to(torch.get_default_dtype())
         if normalized_actions is not None:
-            transformed_inputs["action"] = normalized_actions.to(torch.get_default_dtype())
+            transformed_inputs["action"] = normalized_actions.to(torch.get_default_dtype())  # type: ignore[union-attr]
         if action_mask is not None:
             transformed_inputs["action_mask"] = action_mask
 
@@ -548,7 +548,7 @@ class RLDXProcessor(ProcessorMixin):
     def _get_vlm_inputs(
         self,
         image_keys: list[str],
-        images: list[Image.Image],
+        images: dict[str, Any],
         image_transform: transforms.Compose | A.Compose,
         language: str,
         memory_length: int = 1,
@@ -613,7 +613,7 @@ class RLDXProcessor(ProcessorMixin):
 
     def save_pretrained(self, save_directory: str | Path) -> list[Path]:
         # dump modality configs to dict using the recursive function
-        save_directory.mkdir(parents=True, exist_ok=True)
+        Path(save_directory).mkdir(parents=True, exist_ok=True)
         main_config_file = Path(save_directory) / "processor_config.json"
         statistics_file = Path(save_directory) / "statistics.json"
 

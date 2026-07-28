@@ -105,7 +105,7 @@ class NoOpPhysicsHead(nn.Module):
             action_mask: Action mask tensor (unused).
             physics_attn_mask: Physics attention mask (unused).
         """
-        return
+        return None
 
     @staticmethod
     def prepare_inference(
@@ -138,7 +138,7 @@ class NoOpPhysicsHead(nn.Module):
             state: Current physics inference state (unused).
             timesteps_tensor: Timestep tensor (unused).
         """
-        return
+        return None
 
     @staticmethod
     def update_state(

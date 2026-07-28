@@ -212,7 +212,7 @@ class SingleStreamBlock(nn.Module):
             mod = shared_modulation
         else:
             if not hasattr(self, "modulation"):
-                msg = (f"modulation not found. temb_type={self.temb_type} may not create modulation modules.",)
+                msg = f"modulation not found. temb_type={self.temb_type} may not create modulation modules."
                 raise AttributeError(msg)
             mod, _ = self.modulation(temb)
         # Pre-norm (shared for parallel computation)
@@ -769,7 +769,7 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
 
         self.pos_embed_p = None
 
-    def forward(  # noqa: PLR0912, PLR0915, PLR0914
+    def forward(  # noqa: PLR0912, PLR0915, PLR0914  # type: ignore[override]
         self,
         sa_tokens: torch.Tensor,
         vl_tokens: torch.Tensor,

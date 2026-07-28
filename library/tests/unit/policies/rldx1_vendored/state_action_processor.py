@@ -69,11 +69,12 @@ class StateActionProcessor:
 
     def __init__(
         self,
-        modality_configs: dict[str, ModalityConfig],
-        statistics: dict[str, dict[str, dict[str, list[float]]]] | None = None,
+        modality_configs: dict[str, Any],
+        statistics: dict[str, Any] | None = None,
         use_percentiles: bool = False,
         clip_outliers: bool = True,
         apply_sincos_state_encoding: bool = False,
+        use_relative_action: bool = True,
     ):
         """
         Initialize unified state and action processor.
@@ -97,6 +98,7 @@ class StateActionProcessor:
         self.use_percentiles = use_percentiles
         self.clip_outliers = clip_outliers
         self.apply_sincos_state_encoding = apply_sincos_state_encoding
+        self.use_relative_action = use_relative_action
 
         # Normalization parameters computed from statistics
         self.norm_params: dict[str, dict[str, dict[str, np.ndarray]]] = {}
@@ -657,9 +659,9 @@ class StateActionProcessor:
         state_config = self.modality_configs["state"]
 
         # Get sin/cos embedding keys if enabled
-        sin_cos_keys = set()
+        sin_cos_keys: set[str] = set()
         if self.apply_sincos_state_encoding and hasattr(state_config, "sin_cos_embedding_keys"):
-            sin_cos_keys = set(state_config.sin_cos_embedding_keys)
+            sin_cos_keys = set(state_config.sin_cos_embedding_keys or [])
 
         for joint_group in state_config.modality_keys:
             base_dim = self.norm_params["state"][joint_group]["dim"].item()
@@ -700,13 +702,13 @@ class StateActionProcessor:
                 f"Expected action dim 9 (xyz + rot6d) for EEF, got {action.shape[1]}"
             )
 
-            action_chunking = EndEffectorActionChunk(
+            action_chunking: EndEffectorActionChunk | JointActionChunk = EndEffectorActionChunk(
                 [
                     EndEffectorPose(translation=m[:3], rotation=m[3:], rotation_type="rot6d")
                     for m in action
                 ]
             )
-            reference_frame = EndEffectorPose(
+            reference_frame: EndEffectorPose | JointPose = EndEffectorPose(
                 translation=reference_state[:3],
                 rotation=reference_state[3:],
                 rotation_type="rot6d",
@@ -743,13 +745,13 @@ class StateActionProcessor:
                 f"Expected action dim 9 (xyz + rot6d) for EEF, got {action.shape[1]}"
             )
 
-            rel_action = EndEffectorActionChunk(
+            rel_action: EndEffectorActionChunk | JointActionChunk = EndEffectorActionChunk(
                 [
                     EndEffectorPose(translation=m[:3], rotation=m[3:], rotation_type="rot6d")
                     for m in action
                 ]
             )
-            reference_frame = EndEffectorPose(
+            reference_frame: EndEffectorPose | JointPose = EndEffectorPose(
                 translation=reference_state[:3],
                 rotation=reference_state[3:],
                 rotation_type="rot6d",

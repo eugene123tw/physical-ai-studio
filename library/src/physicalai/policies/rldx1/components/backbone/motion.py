@@ -339,7 +339,7 @@ class STSSEncoder(nn.Module):
         d_out: int,
         window: tuple[int, int, int] = (7, 11, 11),
         ext_chnls: tuple[int, ...] = (256,),
-        int_chnls: tuple[int, ...] = (256, 256, 512),
+        int_chnls: tuple[int, int, int] = (256, 256, 512),
         corr_func: str = "cosine",
         use_layernorm: bool = False,  # noqa: FBT001, FBT002
         use_syncbn: bool = False,  # noqa: FBT001, FBT002

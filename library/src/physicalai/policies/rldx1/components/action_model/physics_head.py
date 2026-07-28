@@ -1,13 +1,14 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
+# ruff: noqa: T201
 
 """Physics conditioning + flow matching stream for RLDXActionModel."""
 
 from typing import NamedTuple
 
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812
 from torch import nn
 
 from .physics import (
@@ -43,6 +44,12 @@ def remap_physics_keys(state_dict: dict) -> dict:
     Keys already in the current ``physics.physics_*`` layout are left
     unchanged, including nested cases like
     ``action_model.physics.physics_cond_encoder.*``.
+
+    Args:
+        state_dict: The state dict whose keys should be remapped.
+
+    Returns:
+        A new state dict with all keys updated to the current layout.
     """
     remapped = {}
     renamed_count = 0
@@ -66,19 +73,71 @@ def remap_physics_keys(state_dict: dict) -> dict:
 class NoOpPhysicsHead(nn.Module):
     """No-op physics head. Used when use_physics=False."""
 
-    def prepare_train(self, action_input, t_raw):
+    @staticmethod
+    def prepare_train(action_input, t_raw):
+        """Return empty physics inputs for training (no-op).
+
+        Args:
+            action_input: Action input data (unused).
+            t_raw: Raw timestep tensor (unused).
+
+        Returns:
+            A tuple of (None, None, None) for physics_embs, physics_attn_mask, and
+            physics_velocity.
+        """
         return None, None, None
 
     def compute_loss(self, physics_model_output, physics_velocity, action_mask, physics_attn_mask):
-        return None
+        """Return no physics loss (no-op).
+
+        Args:
+            physics_model_output: Model output tensor (unused).
+            physics_velocity: Velocity tensor (unused).
+            action_mask: Action mask tensor (unused).
+            physics_attn_mask: Physics attention mask (unused).
+
+        Returns:
+            None always.
+        """
+        return
 
     def prepare_inference(self, action_input, batch_size, device, dtype) -> PhysicsInferenceState:
+        """Return an empty physics inference state (no-op).
+
+        Args:
+            action_input: Action input data (unused).
+            batch_size: Batch size (unused).
+            device: Target device (unused).
+            dtype: Target dtype (unused).
+
+        Returns:
+            PhysicsInferenceState with all fields set to None.
+        """
         return PhysicsInferenceState(embs=None, hist_tok=None, fut=None, attn_mask=None)
 
     def build_tokens(self, state: PhysicsInferenceState, timesteps_tensor):
-        return None
+        """Return no physics tokens (no-op).
+
+        Args:
+            state: Current physics inference state (unused).
+            timesteps_tensor: Timestep tensor (unused).
+
+        Returns:
+            None always.
+        """
+        return
 
     def update_state(self, state: PhysicsInferenceState, model_output, dt) -> PhysicsInferenceState:
+        """Return the unchanged state (no-op).
+
+        Args:
+            state: Current physics inference state.
+            model_output: Model output (unused).
+            dt: Euler step size (unused).
+
+        Returns:
+            The unchanged state.
+        """
         return state
 
 
@@ -99,6 +158,27 @@ class PhysicsHead(nn.Module):
         action_horizon: int,
         physics_dropout_prob: float = 0.0,
     ):
+        """Initialize PhysicsHead modules and validate configuration.
+
+        Args:
+            physics_dim: Dimensionality of the physics signal.
+            embed_dim: Embedding dimension used by the encoder and decoder.
+            msat_output_dim: Output dimension from MSAT consumed by the decoder.
+            physics_delta_indices: List of time delta indices; non-positive values
+                become history tokens, positive values become future tokens.
+                Pass None to disable both history and future streams.
+            physics_use_flow_matching: Whether to use flow matching for physics
+                prediction.
+            physics_loss_weight: Weight applied to the physics prediction loss.
+            action_horizon: Number of action steps; must equal ``physics_fut_len``
+                when flow matching is enabled.
+            physics_dropout_prob: Probability of dropping physics conditioning tokens
+                per sample during training.
+
+        Raises:
+            ValueError: If ``physics_use_flow_matching`` is True and
+                ``physics_fut_len`` does not equal ``action_horizon``.
+        """
         super().__init__()
 
         self.physics_dim = physics_dim
@@ -122,10 +202,11 @@ class PhysicsHead(nn.Module):
         )
 
         if self.physics_use_flow_matching:
-            assert self.physics_fut_len == action_horizon, (
-                f"physics_fut_len ({self.physics_fut_len}) must equal action_horizon "
-                f"({action_horizon}) so that action_mask can be reused for physics loss masking"
-            )
+            if self.physics_fut_len != action_horizon:
+                raise ValueError(
+                    f"physics_fut_len ({self.physics_fut_len}) must equal action_horizon "
+                    f"({action_horizon}) so that action_mask can be reused for physics loss masking",
+                )
         else:
             print(
                 "[Physics] Flow matching disabled. Physics used as conditioning only (no prediction loss)",
@@ -143,8 +224,18 @@ class PhysicsHead(nn.Module):
             print(f"[Physics] physics_dropout_prob={physics_dropout_prob} ({mode})")
 
     def _maybe_dropout(self, tokens: torch.Tensor) -> torch.Tensor:
-        """Per-sample dropout: replace a dropped sample's full token slice with
-        the learned `physics_mask_token`. Active only during training.
+        """Apply per-sample dropout by replacing dropped tokens with the learned mask token.
+
+        For each sample in the batch, independently draws a Bernoulli variable and,
+        if it fires, replaces the entire token slice with ``physics_mask_token``.
+        Only active during training when ``physics_dropout_prob > 0``.
+
+        Args:
+            tokens: Physics token tensor of shape ``(B, T, embed_dim)``.
+
+        Returns:
+            Tensor of the same shape with per-sample dropout applied, or the
+            original tensor unchanged when the conditions above are not met.
         """
         if not (
             self.training
@@ -158,7 +249,28 @@ class PhysicsHead(nn.Module):
         return tokens * (1 - do_dropout) + self.physics_mask_token * do_dropout
 
     def prepare_train(self, action_input, t_raw):
-        """Encode physics signal for training. Returns (physics_embs, physics_attn_mask, physics_velocity)."""
+        """Encode the physics signal and compute flow-matching targets for training.
+
+        Args:
+            action_input: Action input data; must expose a ``physics`` attribute
+                (and optionally ``physics_mask``) when physics conditioning is used.
+            t_raw: Raw timestep tensor of shape ``(B,)`` drawn from ``[0, 1]``.
+
+        Returns:
+            A tuple of:
+
+            - **physics_embs** (``torch.Tensor | None``): Encoded physics tokens of
+              shape ``(B, T, embed_dim)``, or ``None`` when no physics input is present.
+            - **physics_attn_mask** (``torch.Tensor | None``): Per-sample validity mask
+              of shape ``(B,)``, or ``None``.
+            - **physics_velocity** (``torch.Tensor | None``): Flow-matching velocity
+              targets of shape ``(B, F, physics_dim)``, or ``None`` when flow matching
+              is disabled.
+
+        Raises:
+            ValueError: If the physics dimension in the data does not match the
+                model's expected dimension.
+        """
         physics_embs = None
         physics_attn_mask = None
         physics_velocity = None
@@ -168,10 +280,11 @@ class PhysicsHead(nn.Module):
 
         data_dim = action_input.physics.shape[-1]
         expected_dim = self.physics_cond_encoder.W1.in_features
-        assert data_dim == expected_dim, (
-            f"Physics dim mismatch: data has {data_dim} but model expects {expected_dim} "
-            f"(from --physics-dims). Check that --physics-dims matches your dataset."
-        )
+        if data_dim != expected_dim:
+            raise ValueError(
+                f"Physics dim mismatch: data has {data_dim} but model expects {expected_dim} "
+                f"(from --physics-dims). Check that --physics-dims matches your dataset.",
+            )
 
         if hasattr(action_input, "physics_mask"):
             physics_attn_mask = action_input.physics_mask.view(-1)  # [B]
@@ -210,7 +323,24 @@ class PhysicsHead(nn.Module):
         return physics_embs, physics_attn_mask, physics_velocity
 
     def compute_loss(self, physics_model_output, physics_velocity, action_mask, physics_attn_mask):
-        """Compute physics prediction loss (flow matching only). Returns physics_loss or None."""
+        """Compute the physics prediction loss using flow matching.
+
+        Decodes the predicted velocity from the model's physics hidden states and
+        computes a masked MSE loss against the ground-truth flow-matching velocities.
+
+        Args:
+            physics_model_output: Hidden state output from the model for physics tokens,
+                shape ``(B, T, hidden_dim)``.
+            physics_velocity: Ground-truth flow-matching velocities,
+                shape ``(B, F, physics_dim)``.
+            action_mask: Boolean action validity mask, shape ``(B, T, action_dim)``.
+            physics_attn_mask: Per-sample physics validity mask of shape ``(B,)``,
+                or ``None``.
+
+        Returns:
+            Scalar physics MSE loss tensor, or ``None`` if flow matching is disabled
+            or required inputs are missing.
+        """
         if not (self.physics_use_flow_matching and physics_model_output is not None and physics_velocity is not None):
             return None
 
@@ -229,7 +359,22 @@ class PhysicsHead(nn.Module):
         return physics_loss
 
     def prepare_inference(self, action_input, batch_size, device, dtype) -> PhysicsInferenceState:
-        """Initialize physics state for inference."""
+        """Initialize the physics state for the Euler integration inference loop.
+
+        Encodes any available history tokens once (fixed across loop iterations) and
+        initialises the future state as standard Gaussian noise.
+
+        Args:
+            action_input: Action input data; may expose ``physics`` and
+                ``physics_mask`` attributes.
+            batch_size: Batch size used when creating noise tensors from scratch.
+            device: Target device for newly created tensors.
+            dtype: Target dtype for newly created tensors.
+
+        Returns:
+            PhysicsInferenceState with encoded history tokens, initial future noise,
+            and an optional per-sample attention mask ready for the Euler loop.
+        """
         embs = None
         hist_tok = None
         fut = None
@@ -268,14 +413,41 @@ class PhysicsHead(nn.Module):
         return PhysicsInferenceState(embs=embs, hist_tok=hist_tok, fut=fut, attn_mask=attn_mask)
 
     def build_tokens(self, state: PhysicsInferenceState, timesteps_tensor) -> torch.Tensor:
-        """Build physics tokens for one Euler step. Returns updated physics_embs."""
+        """Build physics token tensor for a single Euler integration step.
+
+        Concatenates noise-encoded future tokens with the fixed history tokens, or
+        returns the pre-computed conditioning embeddings when flow matching is disabled.
+
+        Args:
+            state: Current physics inference state holding history and future tensors.
+            timesteps_tensor: Current timestep tensor of shape ``(B,)``.
+
+        Returns:
+            Physics token tensor of shape ``(B, T, embed_dim)`` combining history and
+            noise-encoded future tokens, or the pre-computed conditioning embeddings.
+        """
         if state.hist_tok is not None and state.fut is not None:
             fut_tok = self.physics_fut_encoder(state.fut, timesteps_tensor)
             return torch.cat([state.hist_tok, fut_tok], dim=1)
         return state.embs
 
     def update_state(self, state: PhysicsInferenceState, model_output, dt) -> PhysicsInferenceState:
-        """Euler update for physics future state. Returns new state with updated fut."""
+        """Advance the physics future state by one Euler step.
+
+        Decodes the predicted velocity from the model output and integrates it into
+        the current future state tensor.
+
+        Args:
+            state: Current physics inference state.
+            model_output: Dict containing a ``"physics"`` key with hidden states of
+                shape ``(B, T, hidden_dim)``.  If not a dict or the key is absent,
+                the state is returned unchanged.
+            dt: Euler step size as a scalar float or zero-dimensional tensor.
+
+        Returns:
+            New PhysicsInferenceState with the future physics state advanced by one
+            Euler step, or the unchanged state if conditions are not met.
+        """
         if state.fut is not None and isinstance(model_output, dict) and "physics" in model_output:
             physics_hidden_fut = model_output["physics"][:, -self.physics_fut_len :, :]
             physics_pred_vel = self.physics_decoder(physics_hidden_fut)

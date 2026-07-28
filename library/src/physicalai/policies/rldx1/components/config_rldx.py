@@ -1,6 +1,7 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
+"""RLDX network configuration dataclass."""
 
 from dataclasses import MISSING, Field, field
 from typing import ClassVar
@@ -29,7 +30,7 @@ class RLDXNetworkConfig(PretrainedConfig):
     reproject_vision: bool = False
     use_flash_attention: bool = True
     load_bf16: bool = True  # Enable BF16 loading
-    # TODO(Eugene): upstream defaults this to True, but the fp32 copies of
+    # TODO @maintainer: upstream defaults this to True, but the fp32 copies of  # noqa: FIX002, TD003
     # trainable backbone params OOM on an A100. DeepSpeed ZeRO-Offload (CPU)
     # avoids the OOM but is very slow in practice. Explore a better way to
     # re-enable True by default.
@@ -227,8 +228,9 @@ class RLDXNetworkConfig(PretrainedConfig):
     # Multi-embodiment parameters
     max_num_embodiments: int = 36
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, **kwargs: object) -> None:
+        """Initialize RLDX network configuration with optional overrides."""
+        super().__init__(**kwargs)  # type: ignore[arg-type]
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -237,7 +239,7 @@ class RLDXNetworkConfig(PretrainedConfig):
         # (PretrainedConfig) interferes with normal default injection.
         self._fill_missing_defaults()
 
-    def _fill_missing_defaults(self):
+    def _fill_missing_defaults(self) -> None:
         """Set default values for any dataclass fields not yet on the instance."""
         fields_dict = getattr(type(self), "__dataclass_fields__", None)
         if fields_dict is not None:
@@ -259,9 +261,15 @@ class RLDXNetworkConfig(PretrainedConfig):
                     elif val.default_factory is not MISSING:  # type: ignore[misc]
                         setattr(self, name, val.default_factory())
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> object:
+        """Raise AttributeError for undeclared attributes.
+
+        Raises:
+            AttributeError: Always; undeclared attributes are not allowed.
+        """
         # Strict: no silent default fallback. Every declared dataclass
         # field is populated by `_fill_missing_defaults()` in __init__,
         # so reaching __getattr__ means the attribute was never declared
         # on this class — fail fast.
-        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+        msg = f"'{type(self).__name__}' object has no attribute '{name}'"
+        raise AttributeError(msg)

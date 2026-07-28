@@ -71,7 +71,10 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
 
 
 def apply_rotary_pos_emb(
-    q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
+    q: torch.Tensor,
+    k: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Apply rotary position embedding to query and key tensors.
 
@@ -94,6 +97,9 @@ class MultiHeadAttention(nn.Module):
         Args:
             config: LlamaConfig with hidden_size, attention heads, etc.
             layer_idx: Layer index (used for debugging).
+
+        Raises:
+            RuntimeError: If ``config.num_key_value_heads`` is ``None``.
         """
         super().__init__()
         self.config = config
@@ -103,7 +109,8 @@ class MultiHeadAttention(nn.Module):
         self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = config.num_key_value_heads
         if self.num_key_value_heads is None:
-            raise RuntimeError("num_key_value_heads must be set in LlamaConfig")
+            msg = "num_key_value_heads must be set in LlamaConfig"
+            raise RuntimeError(msg)
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
 
         self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
@@ -129,8 +136,13 @@ class MultiHeadAttention(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
         position_ids: torch.Tensor | None = None,
-        use_rope: bool = True,
+        use_rope: bool = True,  # noqa: FBT001, FBT002
     ) -> torch.Tensor:
+        """Apply multi-head attention to hidden states.
+
+        Returns:
+            Output tensor of shape ``(batch, seq_len, hidden_size)``.
+        """
         bsz, q_len, _ = hidden_states.size()
 
         query_states = self.q_proj(hidden_states)
@@ -306,7 +318,7 @@ class TransformerMemory(nn.Module):
     and produces a memory-augmented representation using causal self-attention.
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         hidden_size: int = 1536,
         intermediate_size: int = 6144,

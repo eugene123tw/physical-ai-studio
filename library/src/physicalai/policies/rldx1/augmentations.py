@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import warnings
 
-import albumentations as A
+import albumentations as A  # noqa: N812
 import cv2
 import numpy as np
 import torch
@@ -102,7 +102,7 @@ class AspectAreaResizeAndCrop(A.DualTransform):
         m: int = 32,
         interpolation: int = cv2.INTER_AREA,
         p: float = 1.0,
-        always_apply: bool | None = None,
+        always_apply: bool | None = None,  # noqa: FBT001
         min_area: int | None = None,
     ) -> None:
         """Store the area budget, alignment multiple, and interpolation mode."""
@@ -112,8 +112,12 @@ class AspectAreaResizeAndCrop(A.DualTransform):
         self.interpolation = interpolation
         self.min_area = min_area
 
-    def apply(self, img, resize_hw=(0, 0), crop_coords=(0, 0, 0, 0), **params):  # noqa: ANN001, ANN201, ARG002
-        """Resize to ``resize_hw`` then slice ``crop_coords`` (x_min, y_min, x_max, y_max)."""
+    def apply(self, img, resize_hw=(0, 0), crop_coords=(0, 0, 0, 0), **params):  # noqa: ANN001, ANN201, ANN003, ARG002
+        """Resize to ``resize_hw`` then slice ``crop_coords`` (x_min, y_min, x_max, y_max).
+
+        Returns:
+            Cropped image array.
+        """
         h_r, w_r = resize_hw
         h, w = img.shape[:2]
         # INTER_AREA is a decimation filter; use cubic when the target enlarges.
@@ -123,7 +127,11 @@ class AspectAreaResizeAndCrop(A.DualTransform):
         return resized[y_min:y_max, x_min:x_max]
 
     def get_params_dependent_on_data(self, params, data):  # noqa: ANN001, ANN201, ARG002
-        """Compute the resize target and centered crop box from the input shape."""
+        """Compute the resize target and centered crop box from the input shape.
+
+        Returns:
+            Dict with ``resize_hw`` and ``crop_coords`` keys.
+        """
         h, w = params["shape"][:2]
         (h_r, w_r), (h_c, w_c) = compute_aspect_area_resize_crop(
             h,
@@ -139,7 +147,7 @@ class AspectAreaResizeAndCrop(A.DualTransform):
             "crop_coords": (x_min, y_min, x_min + w_c, y_min + h_c),
         }
 
-    def get_transform_init_args_names(self):  # noqa: ANN201
+    def get_transform_init_args_names(self):  # noqa: ANN201, PLR6301
         """Return the ctor arg names albumentations serializes for replay."""
         return ("max_area", "m", "interpolation", "min_area")
 
@@ -156,9 +164,13 @@ class _FractionalCropAndResizeBase(A.DualTransform):
         crop_fraction: float = 0.95,
         interpolation: int = cv2.INTER_LINEAR,
         p: float = 1.0,
-        always_apply: bool | None = None,
+        always_apply: bool | None = None,  # noqa: FBT001
     ) -> None:
-        """Validate and store the crop fraction and interpolation mode."""
+        """Validate and store the crop fraction and interpolation mode.
+
+        Raises:
+            ValueError: If ``crop_fraction`` is not in ``(0.0, 1.0]``.
+        """
         super().__init__(p=p, always_apply=always_apply)
         if not 0.0 < crop_fraction <= 1.0:
             msg = "crop_fraction must be in (0.0, 1.0]"
@@ -166,8 +178,12 @@ class _FractionalCropAndResizeBase(A.DualTransform):
         self.crop_fraction = crop_fraction
         self.interpolation = interpolation
 
-    def apply(self, img, crop_coords=(0, 0, 0, 0), out_hw=(0, 0), **params):  # noqa: ANN001, ARG002
-        """Slice ``crop_coords`` then resize the crop back to ``out_hw``."""
+    def apply(self, img, crop_coords=(0, 0, 0, 0), out_hw=(0, 0), **params):  # noqa: ANN001, ANN202, ANN003, ARG002
+        """Slice ``crop_coords`` then resize the crop back to ``out_hw``.
+
+        Returns:
+            Resized crop array.
+        """
         x_min, y_min, x_max, y_max = crop_coords
         cropped = img[y_min:y_max, x_min:x_max]
         h_out, w_out = out_hw
@@ -177,8 +193,12 @@ class _FractionalCropAndResizeBase(A.DualTransform):
         """Return the (y, x) crop origin. Implemented by subclasses."""
         raise NotImplementedError
 
-    def get_params_dependent_on_data(self, params, data):  # noqa: ANN001, ARG002
-        """Compute the crop box (from the chosen origin) and the resize-back size."""
+    def get_params_dependent_on_data(self, params, data):  # noqa: ANN001, ANN202, ARG002
+        """Compute the crop box (from the chosen origin) and the resize-back size.
+
+        Returns:
+            Dict with ``crop_coords`` and ``out_hw`` keys.
+        """
         h, w = params["shape"][:2]
         ch = max(1, int(h * self.crop_fraction))
         cw = max(1, int(w * self.crop_fraction))
@@ -188,7 +208,7 @@ class _FractionalCropAndResizeBase(A.DualTransform):
             "out_hw": (h, w),
         }
 
-    def get_transform_init_args_names(self) -> tuple[str, ...]:
+    def get_transform_init_args_names(self) -> tuple[str, ...]:  # noqa: PLR6301
         """Return the ctor arg names albumentations serializes for replay."""
         return ("crop_fraction", "interpolation")
 
@@ -196,17 +216,17 @@ class _FractionalCropAndResizeBase(A.DualTransform):
 class FractionalRandomCropAndResize(_FractionalCropAndResizeBase):
     """Random-position fractional crop, then resize back to the pre-crop (H, W)."""
 
-    def _origin(self, max_y: int, max_x: int) -> tuple[int, int]:
+    def _origin(self, max_y: int, max_x: int) -> tuple[int, int]:  # noqa: PLR6301
         """Return a random (y, x) origin within the crop margin."""
-        y = int(np.random.randint(0, max_y + 1)) if max_y > 0 else 0
-        x = int(np.random.randint(0, max_x + 1)) if max_x > 0 else 0
+        y = int(np.random.randint(0, max_y + 1)) if max_y > 0 else 0  # noqa: NPY002
+        x = int(np.random.randint(0, max_x + 1)) if max_x > 0 else 0  # noqa: NPY002
         return y, x
 
 
 class FractionalCenterCropAndResize(_FractionalCropAndResizeBase):
     """Center fractional crop, then resize back to the pre-crop (H, W)."""
 
-    def _origin(self, max_y: int, max_x: int) -> tuple[int, int]:
+    def _origin(self, max_y: int, max_x: int) -> tuple[int, int]:  # noqa: PLR6301
         """Return the centered (y, x) origin."""
         return max_y // 2, max_x // 2
 

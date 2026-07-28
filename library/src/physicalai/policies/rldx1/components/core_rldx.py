@@ -240,9 +240,7 @@ class RLDXActionModel(nn.Module):
         if skipped:
             _print(f"[ActionModel LoRA] Skipping absent target modules: {skipped}")
         if not filtered:
-            msg = (
-                f"[ActionModel LoRA] None of the requested target modules {target_modules} exist in the MSAT."
-            )
+            msg = f"[ActionModel LoRA] None of the requested target modules {target_modules} exist in the MSAT."
             raise ValueError(msg)
 
         # Freeze the entire MSAT; LoRA weights will be marked trainable by PEFT.
@@ -645,11 +643,11 @@ class RLDX(PreTrainedModel):
     supports_gradient_checkpointing = True
 
     @classmethod
-    def from_pretrained(
+    def from_pretrained(  # type: ignore[override]
         cls,
         pretrained_model_name_or_path: str,
-        *model_args: object,
-        **kwargs: object,
+        *model_args: Any,  # noqa: ANN401
+        **kwargs: Any,  # noqa: ANN401
     ) -> "RLDX":
         """Skip the redundant VTC-Qwen3-VL backbone download on inference loads.
 
@@ -796,10 +794,7 @@ class RLDX(PreTrainedModel):
         self._memory_n_cog_tokens = raw_mem_nq if raw_mem_nq is not None else self._n_cog_tokens
 
         if self._memory_n_cog_tokens > self._n_cog_tokens:
-            msg = (
-                f"memory_n_cog_tokens ({self._memory_n_cog_tokens}) must be "
-                f"<= n_cog_tokens ({self._n_cog_tokens})"
-            )
+            msg = f"memory_n_cog_tokens ({self._memory_n_cog_tokens}) must be <= n_cog_tokens ({self._n_cog_tokens})"
             raise RuntimeError(msg)
 
         self._concat_memory = getattr(config, "concat_memory", False)
@@ -933,17 +928,7 @@ class RLDX(PreTrainedModel):
 
         Returns:
             Tuple of ``(backbone_inputs, action_inputs)`` :class:`~transformers.feature_extraction_utils.BatchFeature`.
-
-        Raises:
-            ValueError: If ``inputs`` contains ``'vlm_content'`` (un-collated).
         """
-        if "vlm_content" in inputs:
-            msg = (
-                "RLDX.prepare_input received raw 'vlm_content'. Studio does not "
-                "vendor the RLDXDataCollator runtime path; pre-collate inputs "
-                "with Rldx1Preprocessor before calling the model."
-            )
-            raise ValueError(msg)
 
         backbone_inputs = self.backbone.prepare_input(inputs)
         action_inputs = self.action_model.prepare_input(inputs)
@@ -953,8 +938,8 @@ class RLDX(PreTrainedModel):
             if not torch.is_tensor(x):
                 return x
             if torch.is_floating_point(x):  # type: ignore[arg-type]
-                return x.to(self.device, dtype=self.dtype)  # type: ignore[union-attr]
-            return x.to(self.device)  # type: ignore[union-attr]
+                return x.to(self.device, dtype=self.dtype)  # type: ignore[attr-defined]
+            return x.to(self.device)  # type: ignore[attr-defined]
 
         backbone_inputs = tree.map_structure(to_device_with_dtype, backbone_inputs)
         action_inputs = tree.map_structure(to_device_with_dtype, action_inputs)

@@ -10,11 +10,11 @@ try:
     import torch
 
     _HAS_TORCH = True
-except Exception:
+except ImportError:
     _HAS_TORCH = False
 
 
-def _env_rank(default=0):
+def _env_rank(default: int = 0) -> int:
     return int(os.environ.get("RANK", str(default)))
 
 
@@ -33,7 +33,7 @@ def is_global_zero() -> bool:
     return get_global_rank() == 0
 
 
-def rank_zero_print(*args, force: bool = False, **kwargs):
+def rank_zero_print(*args: object, force: bool = False, **kwargs: object) -> None:
     """Print only on global rank 0 (or if force=True)."""
     if force or is_global_zero():
-        return builtins.print(*args, **kwargs)
+        builtins.print(*args, **kwargs)  # type: ignore[call-overload]  # noqa: T201

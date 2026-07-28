@@ -13,8 +13,13 @@ These tests cover the buffer mechanics offline -- no model weights required.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import torch
+
+if TYPE_CHECKING:
+    from physicalai.policies.rldx1.model import Rldx1Model
 
 from physicalai.policies.rldx1 import Rldx1
 

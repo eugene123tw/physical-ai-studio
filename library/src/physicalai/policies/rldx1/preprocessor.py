@@ -78,10 +78,10 @@ def _module_device(module: nn.Module) -> torch.device:
     Inside ``training_step`` that exception is silently caught by Lightning's
     data-fetch loop and misread as end-of-epoch, skipping training entirely.
     """
-    for tensor in module.parameters():
-        return tensor.device
-    for tensor in module.buffers():
-        return tensor.device
+    for param in module.parameters():
+        return param.device
+    for buf in module.buffers():
+        return buf.device
     return torch.device("cpu")
 
 

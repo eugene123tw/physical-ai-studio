@@ -6,6 +6,7 @@ import glob
 import json
 import os
 import pathlib
+from typing import Any
 
 # from transformers.trainer_utils import load_sharded_checkpoint
 from accelerate import load_checkpoint_in_model
@@ -132,7 +133,7 @@ class VTC_Qwen3VL(Qwen3VLForConditionalGeneration):
             model = Qwen3VLForConditionalGeneration._from_config(base_config, **kwargs)
         else:
             # Only pass explicit config when motion module modifies it; otherwise use default loading
-            extra = {"config": base_config} if motion_config is not None else {}
+            extra: dict[str, Any] = {"config": base_config} if motion_config is not None else {}
             model = Qwen3VLForConditionalGeneration.from_pretrained(
                 pretrained_model_name_or_path,
                 **extra,

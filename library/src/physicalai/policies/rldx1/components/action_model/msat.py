@@ -3,13 +3,7 @@
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
 # ruff: noqa: T201
 
-"""MSAT: Multi-Stream Action Transformer (top-level orchestrator).
-
-Submodules:
-- attention.py: BasicTransformerBlock, SelfAttentionTransformer
-- ops.py: RoPE, SwiGLUFFN, head utilities
-- blocks.py: Modulation and stream blocks used by MSAT
-"""
+"""MSAT: Multi-Stream Action Transformer (top-level orchestrator)."""
 
 from collections.abc import Callable
 from typing import Any
@@ -391,7 +385,7 @@ class JointBase(ModelMixin, ConfigMixin):
             has_time_token = True
 
         # Track VL length for Single Stream Block RoPE calculation
-        N_vl_for_single = None
+        n_vl_for_single = None
 
         # Generate Shared Modulations
         shared_modulations = None
@@ -447,13 +441,13 @@ class JointBase(ModelMixin, ConfigMixin):
 
         pe = None
         if self.use_rope:
-            B, N_vl = vl.shape[0], vl.shape[1]
-            N_sa_total = sa.shape[1]
+            batch_size, n_vl = vl.shape[0], vl.shape[1]
+            n_sa_total = sa.shape[1]
             device = sa.device
 
-            total_len = N_vl + N_sa_total
-            ids = torch.zeros(B, total_len, 2, dtype=torch.long, device=device)
-            sa_stream_start_idx = N_vl
+            total_len = n_vl + n_sa_total
+            ids = torch.zeros(batch_size, total_len, 2, dtype=torch.long, device=device)
+            sa_stream_start_idx = n_vl
 
             if self.positional_embeddings == "rope_sa_only":
                 # Position ID assignment: (time_token) | S | A
@@ -461,30 +455,30 @@ class JointBase(ModelMixin, ConfigMixin):
                 if has_time_token:
                     # Time token: axis 1 = 0..num_temb_tokens-1
                     ids[:, current_idx : current_idx + self.num_temb_tokens, 1] = (
-                        torch.arange(self.num_temb_tokens, device=device).unsqueeze(0).expand(B, -1)
+                        torch.arange(self.num_temb_tokens, device=device).unsqueeze(0).expand(batch_size, -1)
                     )
                     current_idx += self.num_temb_tokens
                 # SA tokens (S | A): axis 1 = starting from (num_temb_tokens)
-                sa_len = N_sa_total - (self.num_temb_tokens if has_time_token else 0)
+                sa_len = n_sa_total - (self.num_temb_tokens if has_time_token else 0)
                 start_pos = self.num_temb_tokens if has_time_token else 0
                 ids[:, current_idx:, 1] = (
-                    torch.arange(start_pos, start_pos + sa_len, device=device).unsqueeze(0).expand(B, -1)
+                    torch.arange(start_pos, start_pos + sa_len, device=device).unsqueeze(0).expand(batch_size, -1)
                 )
             elif self.positional_embeddings == "rope_vl_sa":
-                ids[:, :N_vl, 0] = torch.arange(N_vl, device=device).unsqueeze(0).expand(B, -1)
+                ids[:, :n_vl, 0] = torch.arange(n_vl, device=device).unsqueeze(0).expand(batch_size, -1)
                 # Position ID assignment: (time_token) | S | A
                 current_idx = sa_stream_start_idx
                 if has_time_token:
                     # Time token: axis 1 = 0..num_temb_tokens-1
                     ids[:, current_idx : current_idx + self.num_temb_tokens, 1] = (
-                        torch.arange(self.num_temb_tokens, device=device).unsqueeze(0).expand(B, -1)
+                        torch.arange(self.num_temb_tokens, device=device).unsqueeze(0).expand(batch_size, -1)
                     )
                     current_idx += self.num_temb_tokens
                 # SA tokens (S | A): axis 1 = starting from (num_temb_tokens)
-                sa_len = N_sa_total - (self.num_temb_tokens if has_time_token else 0)
+                sa_len = n_sa_total - (self.num_temb_tokens if has_time_token else 0)
                 start_pos = (self.num_temb_tokens if has_time_token else 0) + 1
                 ids[:, current_idx:, 1] = (
-                    torch.arange(start_pos, start_pos + sa_len, device=device).unsqueeze(0).expand(B, -1)
+                    torch.arange(start_pos, start_pos + sa_len, device=device).unsqueeze(0).expand(batch_size, -1)
                 )
 
             pe = self.rope_embedder(ids)
@@ -496,9 +490,9 @@ class JointBase(ModelMixin, ConfigMixin):
             def _run_double(
                 sa_tokens: torch.Tensor,
                 vl_tokens: torch.Tensor,
-                _blk=blk,
-                _block_idx=block_idx,
-            ):
+                _blk: nn.Module = blk,
+                _block_idx: int = block_idx,
+            ) -> tuple[torch.Tensor, torch.Tensor]:
                 return _blk(
                     sa_tokens,
                     vl_tokens,
@@ -522,7 +516,7 @@ class JointBase(ModelMixin, ConfigMixin):
         if len(self.single_blocks) > 0:
             vl_projected = self.vl_proj_to_sa(vl)
             # Track VL length for Single Stream Block RoPE calculation
-            N_vl_for_single = vl.shape[1]
+            n_vl_for_single = vl.shape[1]
 
             # Re-concat with updated time_token: VL | (time_token) | S | A
             x = (
@@ -535,50 +529,50 @@ class JointBase(ModelMixin, ConfigMixin):
         if len(self.single_blocks) > 0:
             pe_single = None
             if self.use_rope:
-                B_single = x.shape[0]
-                N_total = x.shape[1]
+                b_single = x.shape[0]
+                n_total = x.shape[1]
                 device_single = x.device
 
-                N_action_pure = sa.shape[1]
-                action_start_idx_in_x = N_total - N_action_pure
+                n_action_pure = sa.shape[1]
+                action_start_idx_in_x = n_total - n_action_pure
 
                 # 2D RoPE
-                ids_single = torch.zeros(B_single, N_total, 2, dtype=torch.long, device=device_single)
+                ids_single = torch.zeros(b_single, n_total, 2, dtype=torch.long, device=device_single)
 
                 if self.positional_embeddings == "rope_sa_only":
-                    current_idx = N_vl_for_single
+                    current_idx = n_vl_for_single
                     if has_time_token:
                         # Time token: axis 1 = 0..num_temb_tokens-1
                         ids_single[:, current_idx : current_idx + self.num_temb_tokens, 1] = (
-                            torch.arange(self.num_temb_tokens, device=device_single).unsqueeze(0).expand(B_single, -1)
+                            torch.arange(self.num_temb_tokens, device=device_single).unsqueeze(0).expand(b_single, -1)
                         )
                         current_idx += self.num_temb_tokens
                     # Action positions: axis 1 = sequence position starting from (num_temb_tokens)
                     start_pos = (self.num_temb_tokens if has_time_token else 0) + 1
                     ids_single[:, action_start_idx_in_x:, 1] = (
-                        torch.arange(start_pos, start_pos + N_action_pure, device=device_single)
+                        torch.arange(start_pos, start_pos + n_action_pure, device=device_single)
                         .unsqueeze(0)
-                        .expand(B_single, -1)
+                        .expand(b_single, -1)
                     )
                 elif self.positional_embeddings == "rope_vl_sa":
                     # VL positions: axis 0 = sequence position
-                    ids_single[:, :N_vl_for_single, 0] = (
-                        torch.arange(N_vl_for_single, device=device_single).unsqueeze(0).expand(B_single, -1)
+                    ids_single[:, :n_vl_for_single, 0] = (
+                        torch.arange(n_vl_for_single, device=device_single).unsqueeze(0).expand(b_single, -1)
                     )
                     # Context tokens: (time_token) | S | A
-                    current_idx = N_vl_for_single
+                    current_idx = n_vl_for_single
                     if has_time_token:
                         # Time token: axis 1 = 0..num_temb_tokens-1
                         ids_single[:, current_idx : current_idx + self.num_temb_tokens, 1] = (
-                            torch.arange(self.num_temb_tokens, device=device_single).unsqueeze(0).expand(B_single, -1)
+                            torch.arange(self.num_temb_tokens, device=device_single).unsqueeze(0).expand(b_single, -1)
                         )
                         current_idx += self.num_temb_tokens
                     # Action positions: axis 1 = sequence position starting from (num_temb_tokens)
                     start_pos = (self.num_temb_tokens if has_time_token else 0) + 1
                     ids_single[:, action_start_idx_in_x:, 1] = (
-                        torch.arange(start_pos, start_pos + N_action_pure, device=device_single)
+                        torch.arange(start_pos, start_pos + n_action_pure, device=device_single)
                         .unsqueeze(0)
-                        .expand(B_single, -1)
+                        .expand(b_single, -1)
                     )
 
                 pe_single = self.rope_embedder(ids_single)
@@ -586,13 +580,13 @@ class JointBase(ModelMixin, ConfigMixin):
             # Build single-stream attention mask from encoder_attention_mask
             single_attn_mask = None
             if encoder_attention_mask is not None:
-                B_mask = x.shape[0]
-                N_x = x.shape[1]
-                N_vl_mask = N_vl_for_single
-                N_rest = N_x - N_vl_mask
+                b_mask = x.shape[0]
+                n_x = x.shape[1]
+                n_vl_mask = n_vl_for_single
+                n_rest = n_x - n_vl_mask
                 rest_mask = torch.ones(
-                    B_mask,
-                    N_rest,
+                    b_mask,
+                    n_rest,
                     device=x.device,
                     dtype=encoder_attention_mask.dtype,
                 )
@@ -609,9 +603,9 @@ class JointBase(ModelMixin, ConfigMixin):
 
                 def _run_single(
                     x_tokens: torch.Tensor,
-                    _blk=blk,
-                    _block_idx=block_idx,
-                ):
+                    _blk: nn.Module = blk,
+                    _block_idx: int = block_idx,
+                ) -> torch.Tensor:
                     return _blk(
                         x_tokens,
                         temb,
@@ -626,8 +620,8 @@ class JointBase(ModelMixin, ConfigMixin):
                 block_idx += 1
 
             # Extract Action Part
-            N_action_pure = sa.shape[1]
-            sa = x[:, -N_action_pure:, :]
+            n_action_pure = sa.shape[1]
+            sa = x[:, -n_action_pure:, :]
 
         out = self._output_projection(sa, temb)
 
@@ -635,7 +629,7 @@ class JointBase(ModelMixin, ConfigMixin):
             return out, all_hidden
         return out
 
-    def _forward_physics(
+    def _forward_physics(  # noqa: C901, PLR0912, PLR0914, PLR0915
         self,
         sa: torch.Tensor,
         vl: torch.Tensor,
@@ -683,52 +677,52 @@ class JointBase(ModelMixin, ConfigMixin):
         # ── RoPE for lower blocks: [VL | SA | P] ────────────────────────
         pe = None
         if self.use_rope:
-            B = sa.shape[0]
-            N_vl = vl.shape[1]
-            N_sa = sa.shape[1]
-            N_p = p.shape[1]
+            batch_size = sa.shape[0]
+            n_vl = vl.shape[1]
+            n_sa = sa.shape[1]
+            n_p = p.shape[1]
             device = sa.device
 
-            total_len = N_vl + N_sa + N_p
-            ids = torch.zeros(B, total_len, 2, dtype=torch.long, device=device)
-            sa_start = N_vl
+            total_len = n_vl + n_sa + n_p
+            ids = torch.zeros(batch_size, total_len, 2, dtype=torch.long, device=device)
+            sa_start = n_vl
 
             # Sequence layout: [VL (N_vl) | SA (N_sa) | P (N_p)]
-            p_start = N_vl + N_sa
+            p_start = n_vl + n_sa
 
             if self.positional_embeddings == "rope_sa_only":
                 # SA positions on axis1
                 current_idx = sa_start
                 if has_time_token:
                     ids[:, current_idx : current_idx + self.num_temb_tokens, 1] = (
-                        torch.arange(self.num_temb_tokens, device=device).unsqueeze(0).expand(B, -1)
+                        torch.arange(self.num_temb_tokens, device=device).unsqueeze(0).expand(batch_size, -1)
                     )
                     current_idx += self.num_temb_tokens
-                sa_len = N_sa - (self.num_temb_tokens if has_time_token else 0)
+                sa_len = n_sa - (self.num_temb_tokens if has_time_token else 0)
                 start_pos = self.num_temb_tokens if has_time_token else 0
                 ids[:, current_idx : current_idx + sa_len, 1] = (
-                    torch.arange(start_pos, start_pos + sa_len, device=device).unsqueeze(0).expand(B, -1)
+                    torch.arange(start_pos, start_pos + sa_len, device=device).unsqueeze(0).expand(batch_size, -1)
                 )
                 # P positions: axis0=1 (distinguish from SA), axis1=sequential
                 ids[:, p_start:, 0] = 1
-                ids[:, p_start:, 1] = torch.arange(N_p, device=device).unsqueeze(0).expand(B, -1)
+                ids[:, p_start:, 1] = torch.arange(n_p, device=device).unsqueeze(0).expand(batch_size, -1)
             elif self.positional_embeddings == "rope_vl_sa":
-                ids[:, :N_vl, 0] = torch.arange(N_vl, device=device).unsqueeze(0).expand(B, -1)
+                ids[:, :n_vl, 0] = torch.arange(n_vl, device=device).unsqueeze(0).expand(batch_size, -1)
                 # SA positions on axis1
                 current_idx = sa_start
                 if has_time_token:
                     ids[:, current_idx : current_idx + self.num_temb_tokens, 1] = (
-                        torch.arange(self.num_temb_tokens, device=device).unsqueeze(0).expand(B, -1)
+                        torch.arange(self.num_temb_tokens, device=device).unsqueeze(0).expand(batch_size, -1)
                     )
                     current_idx += self.num_temb_tokens
-                sa_len = N_sa - (self.num_temb_tokens if has_time_token else 0)
+                sa_len = n_sa - (self.num_temb_tokens if has_time_token else 0)
                 start_pos = (self.num_temb_tokens if has_time_token else 0) + 1
                 ids[:, current_idx : current_idx + sa_len, 1] = (
-                    torch.arange(start_pos, start_pos + sa_len, device=device).unsqueeze(0).expand(B, -1)
+                    torch.arange(start_pos, start_pos + sa_len, device=device).unsqueeze(0).expand(batch_size, -1)
                 )
                 # P positions: axis0=1 (distinguish from SA/VL), axis1=sequential
                 ids[:, p_start:, 0] = 1
-                ids[:, p_start:, 1] = torch.arange(N_p, device=device).unsqueeze(0).expand(B, -1)
+                ids[:, p_start:, 1] = torch.arange(n_p, device=device).unsqueeze(0).expand(batch_size, -1)
 
             pe = self.rope_embedder(ids)
 
@@ -740,9 +734,9 @@ class JointBase(ModelMixin, ConfigMixin):
                 sa_tokens: torch.Tensor,
                 vl_tokens: torch.Tensor,
                 p_tokens: torch.Tensor,
-                _blk=blk,
-                _block_idx=block_idx,
-            ):
+                _blk: nn.Module = blk,
+                _block_idx: int = block_idx,
+            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
                 return _blk(
                     sa_tokens,
                     vl_tokens,
@@ -768,7 +762,7 @@ class JointBase(ModelMixin, ConfigMixin):
         # ── Upper: ExpandedSingleStreamBlocks with p_tokens ───────────────
         if len(self.single_blocks) > 0:
             vl_projected = self.vl_proj_to_sa(vl)
-            N_vl_for_single = vl.shape[1]
+            n_vl_for_single = vl.shape[1]
             if has_time_token:
                 x = torch.cat([vl_projected, time_token, sa], dim=1)
             else:
@@ -777,59 +771,63 @@ class JointBase(ModelMixin, ConfigMixin):
             # RoPE for upper blocks: [SA+VL (N_x) | P (N_p)]
             pe_single = None
             if self.use_rope:
-                B_s = x.shape[0]
-                N_x = x.shape[1]
-                N_p = p.shape[1]
-                ids_s = torch.zeros(B_s, N_x + N_p, 2, dtype=torch.long, device=x.device)
+                batch_size = x.shape[0]
+                n_x = x.shape[1]
+                n_p = p.shape[1]
+                ids_s = torch.zeros(batch_size, n_x + n_p, 2, dtype=torch.long, device=x.device)
 
-                if self.positional_embeddings in ("rope_sa_only", "rope_vl_sa"):
+                if self.positional_embeddings in {"rope_sa_only", "rope_vl_sa"}:
                     # SA+VL stream positions (same as standard SingleStreamBlock RoPE)
                     if self.positional_embeddings == "rope_vl_sa":
-                        ids_s[:, :N_vl_for_single, 0] = (
-                            torch.arange(N_vl_for_single, device=x.device).unsqueeze(0).expand(B_s, -1)
+                        ids_s[:, :n_vl_for_single, 0] = (
+                            torch.arange(n_vl_for_single, device=x.device).unsqueeze(0).expand(batch_size, -1)
                         )
-                    current_idx = N_vl_for_single
+                    current_idx = n_vl_for_single
                     if has_time_token:
                         ids_s[:, current_idx : current_idx + self.num_temb_tokens, 1] = (
-                            torch.arange(self.num_temb_tokens, device=x.device).unsqueeze(0).expand(B_s, -1)
+                            torch.arange(self.num_temb_tokens, device=x.device).unsqueeze(0).expand(batch_size, -1)
                         )
                         current_idx += self.num_temb_tokens
                     sa_pure_len = sa.shape[1]
                     start_pos = (self.num_temb_tokens if has_time_token else 0) + 1
                     ids_s[:, current_idx : current_idx + sa_pure_len, 1] = (
-                        torch.arange(start_pos, start_pos + sa_pure_len, device=x.device).unsqueeze(0).expand(B_s, -1)
+                        torch.arange(start_pos, start_pos + sa_pure_len, device=x.device)
+                        .unsqueeze(0)
+                        .expand(batch_size, -1)
                     )
 
                     # P stream positions: axis0=1 (distinguish from SA+VL), axis1=sequential
-                    p_section_start = N_x
+                    p_section_start = n_x
                     ids_s[:, p_section_start:, 0] = 1
-                    ids_s[:, p_section_start:, 1] = torch.arange(N_p, device=x.device).unsqueeze(0).expand(B_s, -1)
+                    ids_s[:, p_section_start:, 1] = (
+                        torch.arange(n_p, device=x.device).unsqueeze(0).expand(batch_size, -1)
+                    )
 
                 pe_single = self.rope_embedder(ids_s)
 
             # Build single-stream attention mask covering [VL+SA | P]
             single_attn_mask = None
             if encoder_attention_mask is not None or physics_attention_mask is not None:
-                B_mask = x.shape[0]
-                N_x_mask = x.shape[1]
-                N_p_mask = p.shape[1]
+                b_mask = x.shape[0]
+                n_x_mask = x.shape[1]
+                n_p_mask = p.shape[1]
                 # VL+SA part
                 if encoder_attention_mask is not None:
-                    N_vl_mask = N_vl_for_single
+                    n_vl_mask = n_vl_for_single
                     rest_mask_x = torch.ones(
-                        B_mask,
-                        N_x_mask - N_vl_mask,
+                        b_mask,
+                        n_x_mask - n_vl_mask,
                         device=x.device,
                         dtype=encoder_attention_mask.dtype,
                     )
                     x_mask = torch.cat([encoder_attention_mask, rest_mask_x], dim=1)
                 else:
-                    x_mask = torch.ones(B_mask, N_x_mask, device=x.device, dtype=x.dtype)
+                    x_mask = torch.ones(b_mask, n_x_mask, device=x.device, dtype=x.dtype)
                 # P part
                 if physics_attention_mask is not None:
-                    p_mask = physics_attention_mask[:, None].expand(-1, N_p_mask).to(dtype=x_mask.dtype)
+                    p_mask = physics_attention_mask[:, None].expand(-1, n_p_mask).to(dtype=x_mask.dtype)
                 else:
-                    p_mask = torch.ones(B_mask, N_p_mask, device=x.device, dtype=x_mask.dtype)
+                    p_mask = torch.ones(b_mask, n_p_mask, device=x.device, dtype=x_mask.dtype)
                 kv_mask = torch.cat([x_mask, p_mask], dim=1)
                 single_attn_mask = kv_mask[:, None, None, :]
                 single_attn_mask = torch.where(
@@ -843,9 +841,9 @@ class JointBase(ModelMixin, ConfigMixin):
                 def _run_expanded_single(
                     x_tokens: torch.Tensor,
                     p_tokens: torch.Tensor,
-                    _blk=blk,
-                    _block_idx=block_idx,
-                ):
+                    _blk: nn.Module = blk,
+                    _block_idx: int = block_idx,
+                ) -> tuple[torch.Tensor, torch.Tensor]:
                     return _blk(
                         x_tokens,
                         temb,
@@ -908,15 +906,15 @@ class MSAT(JointBase):
     """
 
     @register_to_config
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, PLR0912, PLR0915, PLR0917
         self,
         num_attention_heads: int = 8,
         attention_head_dim: int = 64,
         output_dim: int = 26,
-        depth_multi_stream: int = 12,  # Number of lower multi-stream blocks
-        depth_single_stream: int = 0,  # Number of SingleStreamBlocks (Flux style)
+        depth_multi_stream: int = 12,
+        depth_single_stream: int = 0,
         dropout: float = 0.1,
-        attention_bias: bool | None = None,  # If None, defaults to True
+        attention_bias: bool | None = None,  # noqa: FBT001
         norm_eps: float = 1e-6,
         compute_dtype: torch.dtype = torch.float32,
         positional_embeddings: str | None = "rope_sa_only",
@@ -932,10 +930,9 @@ class MSAT(JointBase):
         post_norm: str = "none",
         rope_theta: float = 10000.0,
         gradient_checkpointing: bool = False,  # noqa: FBT001, FBT002
-        # Physics (tactile/torque) conditioning
         use_physics: bool = False,  # noqa: FBT001, FBT002
-        physics_dim: int = 0,  # Total physics signal dimension (e.g. tactile_dim + torque_dim)
-    ):
+        physics_dim: int = 0,
+    ) -> None:
         """Initialize the Multi-Stream Action Transformer.
 
         Args:

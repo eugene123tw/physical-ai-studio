@@ -50,6 +50,47 @@ def _vtc_qwen3vl_text_forward(
     input/embeds XOR check, forwards ``input_ids`` positionally to every
     (wrapped) decoder layer, and propagates the ``(hidden_states, kwargs)``
     tuple that :class:`LayerWrapper` returns.
+
+    Args:
+        self: The ``Qwen3VLTextModel`` instance this method is bound to.
+        input_ids: Token-id tensor of shape ``(B, S)`` passed to each
+            :class:`LayerWrapper` for image-token span detection.  May be
+            ``None`` when ``inputs_embeds`` is supplied without token ids.
+        attention_mask: Boolean or float padding mask of shape ``(B, S)``.
+            Converted internally to a causal 4-D mask; ``None`` lets the
+            model build a full causal mask.
+        position_ids: Position indices of shape ``(4, B, S)`` (text,
+            temporal, height, width) or ``(B, S)`` (expanded to 4-D
+            internally).  ``None`` derives positions from ``cache_position``.
+        past_key_values: A :class:`~transformers.cache_utils.DynamicCache`
+            (or compatible object) carrying cached key/value states for
+            generation.  Initialized to an empty ``DynamicCache`` when
+            ``use_cache=True`` and ``None`` is provided.
+        inputs_embeds: Pre-computed token embeddings of shape ``(B, S, D)``.
+            If ``None``, embeddings are derived from ``input_ids`` via
+            ``self.embed_tokens``.
+        use_cache: Whether to populate ``past_key_values`` during the
+            forward pass.  Defaults to the model config when ``None``.
+        cache_position: Absolute position indices for the current tokens,
+            shape ``(S,)``.  Inferred from ``past_key_values`` sequence
+            length when ``None``.
+        visual_pos_masks: Boolean mask identifying visual-token positions,
+            shape ``(B, S)``.  Required when ``deepstack_visual_embeds`` is
+            provided.
+        deepstack_visual_embeds: Per-layer visual feature tensors injected
+            via DeepStack fusion.  Element ``i`` is added to ``hidden_states``
+            after decoder layer ``i``.  ``None`` disables DeepStack fusion.
+        **kwargs: Additional keyword arguments forwarded verbatim to each
+            decoder layer (e.g. ``output_attentions``).
+
+    Returns:
+        A :class:`~transformers.modeling_outputs.BaseModelOutputWithPast`
+        containing:
+
+        - ``last_hidden_state`` — final decoder hidden states, shape
+          ``(B, S', D)`` where ``S'`` may be smaller than ``S`` if VTC
+          token compression was applied.
+        - ``past_key_values`` — updated key/value cache after all layers.
     """
     # XOR check intentionally omitted: the adapter passes both `input_ids`
     # (for LayerWrapper image-token detection) and `inputs_embeds`.

@@ -31,14 +31,14 @@ from transformers.masking_utils import create_causal_mask
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 
-def _vtc_qwen3vl_text_forward(
-    self,
+def _vtc_qwen3vl_text_forward(  # noqa: PLR0912
+    self,  # noqa: ANN001
     input_ids: torch.LongTensor | None = None,
     attention_mask: torch.Tensor | None = None,
     position_ids: torch.Tensor | None = None,
     past_key_values=None,
     inputs_embeds: torch.FloatTensor | None = None,
-    use_cache: bool | None = None,
+    use_cache: bool | None = None,  # noqa: FBT001
     cache_position: torch.Tensor | None = None,
     visual_pos_masks: torch.Tensor | None = None,
     deepstack_visual_embeds: list[torch.Tensor] | None = None,
@@ -111,10 +111,10 @@ def _vtc_qwen3vl_text_forward(
     # The hard-coded `4` is for text, temporal, height and width.
     if position_ids is None:
         position_ids = cache_position.view(1, 1, -1).expand(4, inputs_embeds.shape[0], -1)
-    elif position_ids.ndim == 2:
+    elif position_ids.ndim == 2:  # noqa: PLR2004
         position_ids = position_ids[None, ...].expand(4, position_ids.shape[0], -1)
 
-    if position_ids.ndim == 3 and position_ids.shape[0] == 4:
+    if position_ids.ndim == 3 and position_ids.shape[0] == 4:  # noqa: PLR2004
         text_position_ids = position_ids[0]
         position_ids = position_ids[1:]
     else:

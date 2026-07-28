@@ -36,7 +36,7 @@ def _vtc_qwen3vl_text_forward(  # noqa: PLR0912
     input_ids: torch.LongTensor | None = None,
     attention_mask: torch.Tensor | None = None,
     position_ids: torch.Tensor | None = None,
-    past_key_values=None,
+    past_key_values: DynamicCache | None = None,
     inputs_embeds: torch.FloatTensor | None = None,
     use_cache: bool | None = None,  # noqa: FBT001
     cache_position: torch.Tensor | None = None,

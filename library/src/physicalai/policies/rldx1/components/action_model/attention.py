@@ -17,27 +17,27 @@ class BasicTransformerBlock(nn.Module):
     then feed-forward + residual connection.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         dim: int,
         num_attention_heads: int,
         attention_head_dim: int,
-        dropout=0.0,
+        dropout: float = 0.0,
         cross_attention_dim: int | None = None,
         activation_fn: str = "geglu",
-        attention_bias: bool = False,
-        upcast_attention: bool = False,
-        norm_elementwise_affine: bool = True,
+        attention_bias: bool = False,  # noqa: FBT001, FBT002
+        upcast_attention: bool = False,  # noqa: FBT001, FBT002
+        norm_elementwise_affine: bool = True,  # noqa: FBT001, FBT002
         norm_type: str = "layer_norm",
         norm_eps: float = 1e-5,
-        final_dropout: bool = False,
-        attention_type: str = "default",
+        final_dropout: bool = False,  # noqa: FBT001, FBT002
+        attention_type: str = "default",  # noqa: ARG002
         positional_embeddings: str | None = None,
         max_seq_length: int | None = None,
         ff_inner_dim: int | None = None,
-        ff_bias: bool = True,
-        attention_out_bias: bool = True,
-    ):
+        ff_bias: bool = True,  # noqa: FBT001, FBT002
+        attention_out_bias: bool = True,  # noqa: FBT001, FBT002
+    ) -> None:
         """Initialize the transformer block.
 
         Args:
@@ -60,8 +60,9 @@ class BasicTransformerBlock(nn.Module):
             ff_bias: Whether feed-forward linear layers use bias.
             attention_out_bias: Whether attention output projection uses bias.
 
-        Returns:
-            None.
+        Raises:
+            ValueError: If ``positional_embeddings`` is set without ``max_seq_length``,
+                or if an unsupported ``positional_embeddings`` type is given.
         """
         super().__init__()
         self.dim = dim
@@ -77,18 +78,16 @@ class BasicTransformerBlock(nn.Module):
         self.norm_type = norm_type
 
         if positional_embeddings and (max_seq_length is None):
-            raise ValueError(
-                "If `positional_embedding` type is defined, `max_seq_length` must also be defined.",
-            )
+            msg = "If `positional_embedding` type is defined, `max_seq_length` must also be defined."
+            raise ValueError(msg)
 
         if positional_embeddings == "sinusoidal":
             self.pos_embed = SinusoidalPositionalEmbedding(dim, max_seq_length=max_seq_length)
         elif positional_embeddings is None:
             self.pos_embed = None
         else:
-            raise ValueError(
-                "Invalid positional embedding type: `positional_embeddings` must be 'sinusoidal' or None.",
-            )
+            msg = "Invalid positional embedding type: `positional_embeddings` must be 'sinusoidal' or None."
+            raise ValueError(msg)
 
         # 1. Self-Attn
         self.norm1 = nn.LayerNorm(dim, elementwise_affine=norm_elementwise_affine, eps=norm_eps)
@@ -124,7 +123,7 @@ class BasicTransformerBlock(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
         encoder_hidden_states: torch.Tensor | None = None,
-        temb: torch.LongTensor | None = None,
+        temb: torch.LongTensor | None = None,  # noqa: ARG002
     ) -> torch.Tensor:
         """Run one transformer block pass.
 
@@ -154,7 +153,7 @@ class BasicTransformerBlock(nn.Module):
             attn_output = self.final_dropout(attn_output)
 
         hidden_states = attn_output + hidden_states
-        if hidden_states.ndim == 4:
+        if hidden_states.ndim == 4:  # noqa: PLR2004
             hidden_states = hidden_states.squeeze(1)
 
         # 4. Feed-forward
@@ -162,6 +161,6 @@ class BasicTransformerBlock(nn.Module):
         ff_output = self.ff(norm_hidden_states)
 
         hidden_states = ff_output + hidden_states
-        if hidden_states.ndim == 4:
+        if hidden_states.ndim == 4:  # noqa: PLR2004
             hidden_states = hidden_states.squeeze(1)
         return hidden_states

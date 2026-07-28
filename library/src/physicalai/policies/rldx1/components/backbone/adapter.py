@@ -7,12 +7,12 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
+from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 from torch import nn
 from transformers import AutoConfig
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.utils import is_torchdynamo_compiling
 
-from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 from physicalai.policies.rldx1.components.backbone.modeling_vtc import LayerWrapper, VTC_Qwen3VL
 from physicalai.policies.rldx1.components.backbone.text_model_forward import install_vtc_text_forward
 

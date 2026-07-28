@@ -1,6 +1,7 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
+# ruff: noqa: T201
 
 """MSAT: Multi-Stream Action Transformer (top-level orchestrator).
 
@@ -14,12 +15,11 @@ from collections.abc import Callable
 from typing import Any
 
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812
 from diffusers import ConfigMixin, ModelMixin
 from diffusers.configuration_utils import register_to_config
 from torch import nn
 
-from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 from physicalai.policies.rldx1.components.action_model.blocks import (
     DoubleStreamBlock,
     ExpandedDoubleStreamBlock,
@@ -31,13 +31,6 @@ from physicalai.policies.rldx1.components.action_model.blocks import (
 from physicalai.policies.rldx1.components.action_model.ops import RoPEEmbedder1D
 from physicalai.policies.shared.components.nn import TimestepEncoder
 
-__all__ = [
-    "MSAT",
-    "BasicTransformerBlock",
-    "JointBase",
-    "SelfAttentionTransformer",
-]
-
 
 class JointBase(ModelMixin, ConfigMixin):
     """Shared MSAT building and forward utilities.
@@ -48,8 +41,16 @@ class JointBase(ModelMixin, ConfigMixin):
 
     _supports_gradient_checkpointing = True
 
-    def _apply_checkpoint(self, func: Callable[..., Any], *args: Any) -> Any:
-        """Apply gradient checkpointing if enabled, matching Pi05Model's convention."""
+    def _apply_checkpoint(self, func: Callable[..., Any], *args: Any) -> Any:  # noqa: ANN401
+        """Apply gradient checkpointing if enabled, matching Pi05Model's convention.
+
+        Args:
+            func: The function to apply checkpointing to.
+            args: Arguments to pass to the function.
+
+        Returns:
+            The output of the function, with checkpointing applied if enabled.
+        """
         if self.gradient_checkpointing and self.training:
             return torch.utils.checkpoint.checkpoint(
                 func,
@@ -59,8 +60,8 @@ class JointBase(ModelMixin, ConfigMixin):
             )
         return func(*args)
 
-    def _build_double_blocks(
-        self,
+    @staticmethod
+    def _build_double_blocks(  # noqa: PLR0913, PLR0917
         depth: int,
         sa_dim: int,
         vl_dim: int,
@@ -127,8 +128,8 @@ class JointBase(ModelMixin, ConfigMixin):
             ],
         )
 
-    def _build_single_blocks(
-        self,
+    @staticmethod
+    def _build_single_blocks(  # noqa: PLR0913, PLR0917
         depth: int,
         hidden_size: int,
         num_heads: int,
@@ -195,8 +196,8 @@ class JointBase(ModelMixin, ConfigMixin):
             ],
         )
 
-    def _build_expanded_double_blocks(
-        self,
+    @staticmethod
+    def _build_expanded_double_blocks(  # noqa: PLR0913, PLR0917
         depth: int,
         sa_dim: int,
         vl_dim: int,
@@ -275,8 +276,8 @@ class JointBase(ModelMixin, ConfigMixin):
             ],
         )
 
-    def _build_expanded_single_blocks(
-        self,
+    @staticmethod
+    def _build_expanded_single_blocks(  # noqa: PLR0913, PLR0917
         depth: int,
         hidden_size: int,
         p_dim: int,
@@ -346,7 +347,7 @@ class JointBase(ModelMixin, ConfigMixin):
             ],
         )
 
-    def _forward_inner(
+    def _forward_inner(  # noqa: C901, PLR0912, PLR0914, PLR0915
         self,
         sa_embs: torch.Tensor,
         vl_embs: torch.Tensor,
@@ -355,7 +356,7 @@ class JointBase(ModelMixin, ConfigMixin):
         encoder_attention_mask: torch.Tensor | None = None,
         physics_embs: torch.Tensor | None = None,
         physics_attention_mask: torch.Tensor | None = None,
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Run the internal MSAT forward pass.
 
         This method dispatches to the standard two-stream path or the
@@ -647,7 +648,7 @@ class JointBase(ModelMixin, ConfigMixin):
         shared_single_modulation: ModulationOut | None,
         encoder_attention_mask: torch.Tensor | None,
         physics_attention_mask: torch.Tensor | None = None,
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Run the physics-enabled MSAT forward path.
 
         The lower stage applies expanded double-stream blocks over
@@ -907,7 +908,7 @@ class MSAT(JointBase):
     """
 
     @register_to_config
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         num_attention_heads: int = 8,
         attention_head_dim: int = 64,
@@ -924,12 +925,12 @@ class MSAT(JointBase):
         vl_dim: int = 1536,
         qk_norm: str = "none",
         mlp_ratio: float = 4.0,
-        vl_mlp_ratio: float | None = None,  # If None, use mlp_ratio. Set lower to reduce VL stream params.
-        temb_type: str = "layerwise_mod",  # "layerwise_mod", "shared_mod", or "input_token"
-        remove_bias: bool = False,  # If True, remove bias from Modulation and projection layers  # noqa: FBT001, FBT002
-        pre_norm: str = "layer_norm",  # Pre-normalization type: "none", "layer_norm", or "rms_norm"
-        post_norm: str = "none",  # Post-normalization type: "none", "layer_norm", or "rms_norm"
-        rope_theta: float = 10000.0,  # Theta parameter for RoPE. Higher values result in slower rotation (smaller angles).
+        vl_mlp_ratio: float | None = None,
+        temb_type: str = "layerwise_mod",
+        remove_bias: bool = False,  # noqa: FBT001, FBT002
+        pre_norm: str = "layer_norm",
+        post_norm: str = "none",
+        rope_theta: float = 10000.0,
         gradient_checkpointing: bool = False,  # noqa: FBT001, FBT002
         # Physics (tactile/torque) conditioning
         use_physics: bool = False,  # noqa: FBT001, FBT002
@@ -968,14 +969,13 @@ class MSAT(JointBase):
             use_physics: Enables physics-conditioned architecture when True.
             physics_dim: Total physics signal dimension.
 
-        Returns:
-            None.
+        Raises:
+            NotImplementedError: If ``positional_embeddings`` is not one of the supported values.
         """
         super().__init__()
         if positional_embeddings not in {"rope_sa_only", "rope_vl_sa", None}:
-            raise NotImplementedError(
-                "Unsupported positional_embeddings. Use 'rope_sa_only', 'rope_vl_sa', or None.",
-            )
+            msg = ("Unsupported positional_embeddings. Use 'rope_sa_only', 'rope_vl_sa', or None.",)
+            raise NotImplementedError(msg)
         self.use_physics = use_physics
         self.physics_dim = physics_dim
         self.inner_dim = num_attention_heads * attention_head_dim
@@ -996,7 +996,7 @@ class MSAT(JointBase):
         # If remove_bias=True, override attention_bias to False
         if remove_bias:
             attention_bias = False
-            _print(
+            print(
                 "[MSAT] remove_bias=True: overriding attention_bias to False for all attention layers",
             )
 
@@ -1039,14 +1039,14 @@ class MSAT(JointBase):
             else:
                 self.shared_single_mod_proj = nn.Identity()
 
-        _print("\nInitializing MSAT...")
+        print("\nInitializing MSAT...")
 
         # Initialize RoPE embedder if needed
         if positional_embeddings == "rope_sa_only":
             # RoPE for SA stream only (attention_head_dim assumed to be 64 below)
             # Axis 0 (dim=16): 0 (unused)
             # Axis 1 (dim=48): SA sequence position
-            _print(f"[MSAT] RoPE theta: {rope_theta}")
+            print(f"[MSAT] RoPE theta: {rope_theta}")
             self.rope_embedder = RoPEEmbedder1D(
                 head_dim=attention_head_dim,
                 axes_dim=[attention_head_dim // 4, attention_head_dim - attention_head_dim // 4],
@@ -1070,7 +1070,7 @@ class MSAT(JointBase):
             self.use_rope = False
 
         use_pos_emb = self.use_rope
-        _print(
+        print(
             f"[MSAT] 'positional_embeddings' of MSAT: {positional_embeddings}, "
             f"action_model_max_seq_len: {action_model_max_seq_len}, enabled: {use_pos_emb}",
         )
@@ -1081,7 +1081,7 @@ class MSAT(JointBase):
         # VL→SA projection (used by both physics and non-physics paths)
         if sa_dim != vl_dim:
             self.vl_proj_to_sa = nn.Linear(vl_dim, sa_dim, bias=not remove_bias)
-            _print(f"[MSAT] Projecting VL dimension from {vl_dim} to {sa_dim}")
+            print(f"[MSAT] Projecting VL dimension from {vl_dim} to {sa_dim}")
         else:
             self.vl_proj_to_sa = nn.Identity()
 
@@ -1090,9 +1090,9 @@ class MSAT(JointBase):
             # Lower: ExpandedDoubleStreamBlocks [VL | SA | P] — extends DoubleStreamBlock with P stream
             # Upper: ExpandedSingleStreamBlocks [VL+SA | P]  — extends SingleStreamBlock with P stream
             # Pretrained weights load directly (same attribute names as base blocks).
-            _print(f"\n[MSAT] Physics mode: use_physics=True, physics_dim={physics_dim}")
-            _print(f"[MSAT] Lower: {depth_multi_stream} ExpandedDoubleStreamBlocks [VL | SA | P]")
-            _print(f"[MSAT] Upper: {depth_single_stream} ExpandedSingleStreamBlocks [VL+SA | P]")
+            print(f"\n[MSAT] Physics mode: use_physics=True, physics_dim={physics_dim}")
+            print(f"[MSAT] Lower: {depth_multi_stream} ExpandedDoubleStreamBlocks [VL | SA | P]")
+            print(f"[MSAT] Upper: {depth_single_stream} ExpandedSingleStreamBlocks [VL+SA | P]")
 
             self.double_blocks = self._build_expanded_double_blocks(
                 depth=depth_multi_stream,
@@ -1146,9 +1146,6 @@ class MSAT(JointBase):
 
         else:
             # ── Standard architecture (no physics) ────────────────────────────────
-            # Lower: DoubleStreamBlocks [VL | SA]
-            # Upper: SingleStreamBlocks [VL_proj | time_token | SA]
-
             self.double_blocks = self._build_double_blocks(
                 depth=depth_multi_stream,
                 sa_dim=sa_dim,
@@ -1196,16 +1193,11 @@ class MSAT(JointBase):
         self.norm_out = nn.LayerNorm(sa_hidden_dim, elementwise_affine=False, eps=1e-6)
         self.proj_out_1 = nn.Linear(self.inner_dim, 2 * sa_hidden_dim, bias=not remove_bias)
         self.proj_out_2 = nn.Linear(sa_hidden_dim, output_dim, bias=not remove_bias)
-        _print(
-            f"[MSAT] Output projection: sa_hidden_dim={sa_hidden_dim} -> output_dim={output_dim}",
-        )
+        print(f"[MSAT] Output projection: sa_hidden_dim={sa_hidden_dim} -> output_dim={output_dim}")
 
         self._remove_bias = remove_bias
 
-        _print(
-            "[MSAT] Total number of MSAT parameters: ",
-            sum(p.numel() for p in self.parameters() if p.requires_grad),
-        )
+        print("[MSAT] Total number of MSAT parameters: ", sum(p.numel() for p in self.parameters() if p.requires_grad))
 
     def forward(
         self,
@@ -1216,7 +1208,7 @@ class MSAT(JointBase):
         encoder_attention_mask: torch.Tensor | None = None,  # [B, N_vl] VL attention mask (1=visible, 0=masked)
         physics_embs: torch.Tensor | None = None,  # [B, N_p, sa_dim] Physics tokens (when use_physics=True)
         physics_attention_mask: torch.Tensor | None = None,  # [B] per-sample physics mask (1=visible, 0=masked)
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Run a forward pass through MSAT.
 
         Args:

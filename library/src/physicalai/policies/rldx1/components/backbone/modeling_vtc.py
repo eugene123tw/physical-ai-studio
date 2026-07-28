@@ -11,9 +11,8 @@ from typing import Any
 # from transformers.trainer_utils import load_sharded_checkpoint
 from accelerate import load_checkpoint_in_model
 from huggingface_hub import snapshot_download
-from transformers import AutoConfig, AutoProcessor, Qwen3VLForConditionalGeneration
-
 from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
+from transformers import AutoConfig, AutoProcessor, Qwen3VLForConditionalGeneration
 
 from .layer_wrapper import LayerWrapper
 from .text_model_forward import install_vtc_text_forward

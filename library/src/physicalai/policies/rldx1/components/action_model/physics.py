@@ -4,9 +4,9 @@
 
 import torch
 import torch.nn.functional as F
+from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 from torch import nn
 
-from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 from physicalai.policies.rldx1.components.action_model.blocks import (
     ExpandedDoubleStreamBlock,
     ExpandedSingleStreamBlock,

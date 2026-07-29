@@ -17,6 +17,9 @@ class BasicTransformerBlock(nn.Module):
     then feed-forward + residual connection.
     """
 
+    pos_embed: SinusoidalPositionalEmbedding | None
+    final_dropout: nn.Dropout | None
+
     def __init__(  # noqa: PLR0913, PLR0917
         self,
         dim: int,
@@ -82,6 +85,9 @@ class BasicTransformerBlock(nn.Module):
             raise ValueError(msg)
 
         if positional_embeddings == "sinusoidal":
+            if max_seq_length is None:
+                msg = "If `positional_embedding` type is 'sinusoidal', `max_seq_length` must be defined."
+                raise ValueError(msg)
             self.pos_embed = SinusoidalPositionalEmbedding(dim, max_seq_length=max_seq_length)
         elif positional_embeddings is None:
             self.pos_embed = None

@@ -447,6 +447,9 @@ class RLDXActionModel(nn.Module):
             physics_attn_mask,
         )
         if physics_loss is not None:
+            if not isinstance(self.physics, PhysicsHead):
+                msg = "Physics loss is not None but self.physics is not a PhysicsHead."
+                raise RuntimeError(msg)
             loss = loss + self.physics.physics_loss_weight * physics_loss  # noqa: PLR6104
             results["loss"] = loss
             results["physics_loss"] = physics_loss

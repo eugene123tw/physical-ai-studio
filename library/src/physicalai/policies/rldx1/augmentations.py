@@ -69,7 +69,7 @@ def apply_with_replay(
             else:
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=UserWarning)
-                    augmented = transform.replay(image=np.array(img), saved_augmentations=current_replay)
+                    augmented = transform.replay(image=np.array(img), saved_augmentations=current_replay)  # type: ignore[attr-defined]
             img_array = augmented["image"]
         else:
             augmented = transform(image=np.array(img))
@@ -102,11 +102,10 @@ class AspectAreaResizeAndCrop(A.DualTransform):
         m: int = 32,
         interpolation: int = cv2.INTER_AREA,
         p: float = 1.0,
-        always_apply: bool | None = None,  # noqa: FBT001
         min_area: int | None = None,
     ) -> None:
         """Store the area budget, alignment multiple, and interpolation mode."""
-        super().__init__(p=p, always_apply=always_apply)
+        super().__init__(p=p)
         self.max_area = max_area
         self.m = m
         self.interpolation = interpolation
@@ -164,14 +163,13 @@ class _FractionalCropAndResizeBase(A.DualTransform):
         crop_fraction: float = 0.95,
         interpolation: int = cv2.INTER_LINEAR,
         p: float = 1.0,
-        always_apply: bool | None = None,  # noqa: FBT001
     ) -> None:
         """Validate and store the crop fraction and interpolation mode.
 
         Raises:
             ValueError: If ``crop_fraction`` is not in ``(0.0, 1.0]``.
         """
-        super().__init__(p=p, always_apply=always_apply)
+        super().__init__(p=p)
         if not 0.0 < crop_fraction <= 1.0:
             msg = "crop_fraction must be in (0.0, 1.0]"
             raise ValueError(msg)

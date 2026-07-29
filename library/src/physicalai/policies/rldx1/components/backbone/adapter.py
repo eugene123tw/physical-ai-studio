@@ -782,7 +782,7 @@ class VTCQwen3VLBackbone(nn.Module):
             image_mask = vl_input["input_ids"] == image_token_id  # [B, L]
 
         if self.use_cog_tokens:
-            last_hs, attn_mask = self._forward_qwen_with_cog_tokens(vl_input)
+            last_hs, attn_mask = self._forward_qwen_with_cog_tokens(dict(vl_input))
 
             if self.cog_mode == "cog_only":
                 features = last_hs[:, -self.n_cog_tokens :, :]

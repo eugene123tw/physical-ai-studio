@@ -26,7 +26,7 @@ from physicalai.policies.rldx1.components.action_model.ops import RoPEEmbedder1D
 from physicalai.policies.shared.components.nn import TimestepEncoder
 
 
-class JointBase(ModelMixin, ConfigMixin):
+class JointBase(ModelMixin, ConfigMixin):  # type: ignore[misc]
     """Shared MSAT building and forward utilities.
 
     This mixin hosts block-construction helpers and the internal forward paths
@@ -370,6 +370,9 @@ class JointBase(ModelMixin, ConfigMixin):
             If physics is disabled: action tensor ``[B, N_action, output_dim]``.
             If physics is enabled: dict with ``"action"`` and ``"physics"`` outputs.
             If ``return_all_hidden_states`` is True, returns ``(output, hidden_states)``.
+
+        Raises:
+            ValueError: If ``has_time_token`` is True but ``time_token`` is None.
         """
         temb = self.timestep_encoder(timesteps)
 
@@ -435,6 +438,9 @@ class JointBase(ModelMixin, ConfigMixin):
 
         # Prepend time_token to SA: [time_token | S | A]
         if has_time_token:
+            if time_token is None:
+                msg = "Time token is None while has_time_token is True."
+                raise ValueError(msg)
             sa = torch.cat([time_token, sa], dim=1)
 
         all_hidden = [sa]
@@ -519,14 +525,15 @@ class JointBase(ModelMixin, ConfigMixin):
             n_vl_for_single = vl.shape[1]
 
             # Re-concat with updated time_token: VL | (time_token) | S | A
-            x = (
-                torch.cat([vl_projected, time_token, sa], dim=1)
-                if has_time_token
-                else torch.cat([vl_projected, sa], dim=1)
-            )
+            if has_time_token:
+                if time_token is None:
+                    msg = "Time token is None while has_time_token is True."
+                    raise ValueError(msg)
+                x = torch.cat([vl_projected, time_token, sa], dim=1)
+            else:
+                x = torch.cat([vl_projected, sa], dim=1)
 
-        # Single Stream Blocks
-        if len(self.single_blocks) > 0:
+            # Single Stream Blocks
             pe_single = None
             if self.use_rope:
                 b_single = x.shape[0]
@@ -665,11 +672,17 @@ class JointBase(ModelMixin, ConfigMixin):
         Returns:
             Dict with ``"action"`` and ``"physics"`` outputs, or
             ``(output_dict, hidden_states)`` when ``return_all_hidden_states=True``.
+
+        Raises:
+            ValueError: If ``has_time_token`` is True but ``time_token`` is None.
         """
         p = p_embs.contiguous()
 
         # Prepend time_token to SA only (physics stream is not diffusion-based)
         if has_time_token:
+            if time_token is None:
+                msg = "Time token is None while has_time_token is True."
+                raise ValueError(msg)
             sa = torch.cat([time_token, sa], dim=1)
 
         all_hidden = [sa]
@@ -764,6 +777,9 @@ class JointBase(ModelMixin, ConfigMixin):
             vl_projected = self.vl_proj_to_sa(vl)
             n_vl_for_single = vl.shape[1]
             if has_time_token:
+                if time_token is None:
+                    msg = "Time token is None while has_time_token is True."
+                    raise ValueError(msg)
                 x = torch.cat([vl_projected, time_token, sa], dim=1)
             else:
                 x = torch.cat([vl_projected, sa], dim=1)
@@ -904,6 +920,11 @@ class MSAT(JointBase):
     The model stacks lower multi-stream blocks followed by optional upper
     single-stream blocks, with optional physics conditioning support.
     """
+
+    time_token_proj: nn.Linear | nn.Identity | None
+    shared_single_mod_proj: nn.Linear | nn.Identity
+    rope_embedder: RoPEEmbedder1D | None
+    vl_proj_to_sa: nn.Linear | nn.Identity
 
     @register_to_config
     def __init__(  # noqa: PLR0913, PLR0912, PLR0915, PLR0917

@@ -88,12 +88,12 @@ class VTCQwen3Model(Qwen3VLForConditionalGeneration):
     """VTC Qwen3-VL model with motion module support."""
 
     @classmethod
-    def from_pretrained(  # noqa: PLR0912
+    def from_pretrained(  # type: ignore[override]  # noqa: PLR0912
         cls,
         pretrained_model_name_or_path: str,
         motion_config: dict | None = None,
         **kwargs: Any,  # noqa: ANN401
-    ) -> Qwen3VLForConditionalGeneration:  # type: ignore[override]
+    ) -> Qwen3VLForConditionalGeneration:
         """Load a VTC_Qwen3VL model from a pretrained checkpoint.
 
         Args:

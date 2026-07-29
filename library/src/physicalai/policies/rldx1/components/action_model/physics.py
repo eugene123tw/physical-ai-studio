@@ -5,6 +5,8 @@
 
 """Physics stream components for RLDXActionModel: encoders, decoders, and init utilities."""
 
+from typing import TYPE_CHECKING, cast
+
 import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import nn
@@ -14,6 +16,9 @@ from physicalai.policies.rldx1.components.action_model.blocks import (
     ExpandedSingleStreamBlock,
 )
 from physicalai.policies.shared.components.nn import SinusoidalPositionalEncoding
+
+if TYPE_CHECKING:
+    from physicalai.policies.rldx1.components.action_model.msat import MSAT
 
 
 class PhysicalSignalEncoder(nn.Module):
@@ -192,11 +197,11 @@ def init_physics_params_near_zero(action_model: nn.Module) -> None:  # noqa: PLR
             ``physics_cond_encoder`` / ``physics_fut_encoder`` / ``physics_decoder``
             or an equivalent ``.physics`` sub-module with those attributes.
     """
-    msat = action_model.model
+    msat = cast("MSAT", action_model.model)
 
     # Support both old layout (action_model.physics_cond_encoder)
     # and new layout (action_model.physics.physics_cond_encoder)
-    physics_owner = getattr(action_model, "physics", None) or action_model
+    physics_owner = cast("nn.Module", getattr(action_model, "physics", None) or action_model)
 
     # ── (A) Encoder: W1,W2 = Xavier, W3 = near-zero (exit) ──
     # Note: physics_fut_encoder also gets near-zero init (unlike reference which uses
@@ -212,7 +217,8 @@ def init_physics_params_near_zero(action_model: nn.Module) -> None:  # noqa: PLR
 
     # ── (A) Decoder: first Linear = Kaiming (keep), last = near-zero (exit) ──
     if hasattr(physics_owner, "physics_decoder"):
-        last = _last_linear(physics_owner.physics_decoder.net)
+        decoder = cast("PhysicalSignalDecoder", physics_owner.physics_decoder)
+        last = _last_linear(decoder.net)
         if last is not None:
             _small_noise(last, std=1e-4)
         print("   [Physics init] decoder: last_linear=near-zero(1e-4)")
@@ -292,8 +298,8 @@ def init_physics_params_near_zero(action_model: nn.Module) -> None:  # noqa: PLR
 
     # ── (D) MSAT physics output projection ──
     if hasattr(msat, "proj_out_physics_1"):
-        _small_noise(msat.proj_out_physics_1, std=1e-5)
+        _small_noise(cast("nn.Linear", msat.proj_out_physics_1), std=1e-5)
         print("   [Physics init] proj_out_physics_1=near-zero(1e-5)")
     if hasattr(msat, "proj_out_physics_2"):
-        _small_noise(msat.proj_out_physics_2, std=1e-4)
+        _small_noise(cast("nn.Linear", msat.proj_out_physics_2), std=1e-4)
         print("   [Physics init] proj_out_physics_2=near-zero(1e-4)")

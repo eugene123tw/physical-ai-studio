@@ -264,7 +264,10 @@ class SingleStreamBlock(nn.Module):
 class DoubleStreamBlock(nn.Module):
     """Flux-style DoubleStreamBlock."""
 
-    def __init__(  # noqa: PLR0913, PLR0917, PLR0912, PLR0915
+    sa_mod_proj: nn.Linear | nn.Identity
+    vl_mod_proj: nn.Linear | nn.Identity
+
+    def __init__(  # noqa: PLR0913, PLR0917, PLR0915
         self,
         sa_dim: int,
         vl_dim: int,
@@ -327,13 +330,10 @@ class DoubleStreamBlock(nn.Module):
         if temb_type not in {"shared_mod", "input_token"}:
             self.sa_mod = Modulation(self.inner_dim, double=True, remove_bias=remove_bias)
         # Project modulation output to sa_dim if needed (not needed for input_token)
-        if temb_type != "input_token":
-            if self.inner_dim != sa_dim:
-                self.sa_mod_proj = nn.Linear(self.inner_dim, sa_dim, bias=True)
-            else:
-                self.sa_mod_proj = nn.Identity()
+        if temb_type != "input_token" and self.inner_dim != sa_dim:
+            self.sa_mod_proj = nn.Linear(self.inner_dim, sa_dim, bias=True)
         else:
-            self.sa_mod_proj = None
+            self.sa_mod_proj = nn.Identity()
 
         # SA stream normalization layers
         self.sa_norm1 = create_norm_layer(pre_norm, sa_dim, eps=norm_eps)  # Pre-attention
@@ -351,13 +351,10 @@ class DoubleStreamBlock(nn.Module):
         if temb_type not in {"shared_mod", "input_token"}:
             self.vl_mod = Modulation(self.inner_dim, double=True, remove_bias=remove_bias)
         # Project modulation output to vl_dim if needed (not needed for input_token)
-        if temb_type != "input_token":
-            if self.inner_dim != vl_dim:
-                self.vl_mod_proj = nn.Linear(self.inner_dim, vl_dim, bias=True)
-            else:
-                self.vl_mod_proj = nn.Identity()
+        if temb_type != "input_token" and self.inner_dim != vl_dim:
+            self.vl_mod_proj = nn.Linear(self.inner_dim, vl_dim, bias=True)
         else:
-            self.vl_mod_proj = None
+            self.vl_mod_proj = nn.Identity()
 
         # VL stream normalization layers
         self.vl_norm1 = create_norm_layer(pre_norm, vl_dim, eps=norm_eps)  # Pre-attention
@@ -678,6 +675,8 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
     When p_tokens is given, performs 3-way joint attention [VL | SA | P].
     """
 
+    p_mod_proj: nn.Identity | nn.Linear
+
     def __init__(  # noqa: PLR0913, PLR0917
         self,
         sa_dim: int,
@@ -689,9 +688,11 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
         vl_mlp_ratio: float | None = None,
         p_mlp_ratio: float | None = None,
         dropout: float = 0.0,
+        activation_fn: str = "gelu",  # noqa: ARG002
         attention_bias: bool = True,  # noqa: FBT001, FBT002
         norm_eps: float = 1e-6,
         qk_norm: str = "none",
+        use_swiglu: bool = False,  # noqa: FBT001, FBT002, ARG002
         positional_embeddings: str | None = None,
         max_seq_length: int | None = None,
         temb_type: str = "layerwise_mod",
@@ -725,6 +726,8 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
             remove_bias: If ``True``, removes bias from modulation. Default ``False``.
             pre_norm: Pre-normalization layer type. Default ``"layer_norm"``.
             post_norm: Post-normalization layer type. Default ``"none"``.
+            activation_fn: Activation function for MLP. Default ``"gelu"`` (ignored, always SwiGLU).
+            use_swiglu: If ``True``, uses SwiGLU for MLP. Default ``False`` (ignored, always SwiGLU).
         """
         super().__init__(
             sa_dim=sa_dim,
@@ -750,10 +753,11 @@ class ExpandedDoubleStreamBlock(DoubleStreamBlock):
 
         if temb_type not in {"shared_mod", "input_token"}:
             self.p_mod = Modulation(self.inner_dim, double=True, remove_bias=remove_bias)
-        if temb_type != "input_token":
-            self.p_mod_proj = nn.Linear(self.inner_dim, p_dim, bias=True) if self.inner_dim != p_dim else nn.Identity()
+
+        if temb_type != "input_token" and self.inner_dim != p_dim:
+            self.p_mod_proj = nn.Linear(self.inner_dim, p_dim, bias=True)
         else:
-            self.p_mod_proj = None
+            self.p_mod_proj = nn.Identity()
 
         self.p_norm1 = create_norm_layer(pre_norm, p_dim, eps=norm_eps)
         self.p_norm2_attn = create_norm_layer(post_norm, p_dim, eps=norm_eps)
@@ -1143,7 +1147,7 @@ class ExpandedSingleStreamBlock(SingleStreamBlock):
         self.p_pre_norm = create_norm_layer(pre_norm, p_dim, eps=norm_eps)
         self.p_post_norm = create_norm_layer(post_norm, p_dim, eps=norm_eps)
 
-    def forward(  # noqa: PLR0914
+    def forward(  # type: ignore[override]  # noqa: PLR0914
         self,
         x: torch.Tensor,
         temb: torch.Tensor,

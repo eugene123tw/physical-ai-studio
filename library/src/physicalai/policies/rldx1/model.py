@@ -217,7 +217,7 @@ class Rldx1Model(Model):
         self.net: RLDX | None = None
 
     @classmethod
-    def from_pretrained(  # noqa: PLR0913, PLR0915, PLR0914
+    def from_pretrained(  # noqa: PLR0913, PLR0915, PLR0914, C901, PLR0912
         cls,
         base_model_path: str = DEFAULT_BASE_MODEL_PATH,
         *,
@@ -448,6 +448,14 @@ class Rldx1Model(Model):
                 want_backbone_lora,
                 want_action_lora,
             )
+
+        if use_bf16:
+            net.to(torch.bfloat16)
+
+            if backbone_trainable_params_fp32:
+                for _, p in net.backbone.named_parameters():
+                    if p.requires_grad:
+                        p.data = p.data.to(torch.float32)
 
         # Re-assert the fp32 contract on LoRA adapter params: the ``net.to(dtype)``
         # above cast the base network to bf16, so adapters injected afterwards

@@ -777,6 +777,3 @@ def test_multiframe_forward_matches_vendored() -> None:
     assert int(out["num_views"][0]) == _NUM_VIEWS
     torch.testing.assert_close(out["image_grid_thw"], gold["image_grid_thw"], atol=0, rtol=0)
     torch.testing.assert_close(out["pixel_values"], gold["pixel_values"], atol=0.0, rtol=0.0)
-
-
-

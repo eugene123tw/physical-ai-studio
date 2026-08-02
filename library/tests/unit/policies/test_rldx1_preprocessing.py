@@ -21,6 +21,7 @@ from physicalai.data.observation import ACTION, STATE
 from physicalai.policies.rldx1.preprocessing import (
     ACTION_MASK,
     build_qwen_conversation,
+    build_state_action_degenerate_masks,
     build_state_action_features,
     build_state_action_norm_map,
     clip_state_action,
@@ -28,6 +29,7 @@ from physicalai.policies.rldx1.preprocessing import (
     formalize_language,
     pad_state_action,
     tokenize_vlm_batch,
+    zero_degenerate_state_action,
 )
 from physicalai.policies.utils.normalization import FeatureNormalizeTransform
 from tests.unit.policies.rldx1_vendored.data_types import (
@@ -54,13 +56,18 @@ def _native_normalize(
     *,
     use_percentiles: bool,
 ) -> dict[str, torch.Tensor]:
-    """Apply the PAS-native normalization (transform + clip) to ``batch``."""
+    """Apply the PAS-native normalization (transform + clip + degenerate zeroing).
+
+    Mirrors the preprocessor pipeline: constant channels (``q99 == q01``) are
+    zeroed to match the vendored ``normalize_values_minmax`` mask path.
+    """
     features = build_state_action_features(stats)
     norm_map = build_state_action_norm_map(use_percentiles=use_percentiles)
     normalizer = FeatureNormalizeTransform(features, norm_map)
     normalizer.eval()
+    masks = build_state_action_degenerate_masks(features, use_percentiles=use_percentiles)
     with torch.no_grad():
-        return clip_state_action(normalizer(batch))
+        return zero_degenerate_state_action(clip_state_action(normalizer(batch)), masks)
 
 
 def _stat(dim: int, *, seed: int) -> dict[str, list[float]]:
@@ -147,6 +154,37 @@ def test_native_normalizer_matches_vendored(use_percentiles: bool, seed: int) ->
 
     np.testing.assert_allclose(out[STATE].numpy(), gold_state, atol=1e-5, rtol=0.0)
     np.testing.assert_allclose(out[ACTION].numpy(), gold_action, atol=1e-5, rtol=0.0)
+
+
+@pytest.mark.parametrize("use_percentiles", [False, True])
+def test_native_normalizer_zeros_degenerate_channels(use_percentiles: bool) -> None:
+    """Degenerate (constant) channels normalize to 0, matching the vendored path.
+
+    Without the zeroing step PAS maps a constant channel to -1 (``2*0/1e-8 - 1``,
+    clipped); the vendored ``normalize_values_minmax`` mask leaves it at 0. This
+    caused the RoboCasa ``base_rotation`` state drift.
+    """
+    state_stat = _stat(STATE_DIM, seed=3)
+    # Force channels 2 and 4 to be degenerate (min==max and q01==q99).
+    for idx in (2, 4):
+        for lo_key, hi_key in (("min", "max"), ("q01", "q99")):
+            state_stat[lo_key][idx] = 0.0
+            state_stat[hi_key][idx] = 0.0
+    action_stat = _stat(ACTION_DIM, seed=103)
+
+    raw_state = np.zeros((1, STATE_DIM), dtype=np.float32)  # constant channels sit at 0
+    raw_action = np.random.default_rng(3).uniform(-4.0, 4.0, size=(ACTION_HORIZON, ACTION_DIM)).astype(np.float32)
+
+    vendored = _vendored_normalizer(state_stat, action_stat, use_percentiles=use_percentiles)
+    gold_state = vendored.apply_state({"state": raw_state})["state"]
+
+    stats = {"observation.state": state_stat, "action": action_stat}
+    batch = {STATE: torch.from_numpy(raw_state), ACTION: torch.from_numpy(raw_action)}
+    out = _native_normalize(batch, stats, use_percentiles=use_percentiles)
+
+    assert out[STATE][0, 2].item() == 0.0
+    assert out[STATE][0, 4].item() == 0.0
+    np.testing.assert_allclose(out[STATE].numpy(), gold_state, atol=1e-5, rtol=0.0)
 
 
 def test_build_features_present_keys() -> None:
@@ -587,48 +625,39 @@ def test_denormalize_action_matches_vendored(use_percentiles: bool) -> None:
 # VTC multi-frame: delta timestamps + frame stacking parity                    #
 # ---------------------------------------------------------------------------- #
 
-_FPS = 10
 _VIDEO_LENGTH = 4
 _VIDEO_STRIDE = 2
 _NUM_VIEWS = 2
 
 
-def test_rldx1_delta_timestamps_video_window() -> None:
-    """The RLDX-1 video window is [-6, -4, -2, 0] / fps for L=4, S=2."""
-    from physicalai.data.lerobot.utils.delta_timestamps import get_rldx1_delta_timestamps
+def test_rldx1_observation_delta_indices_video_window() -> None:
+    """``observation_delta_indices`` is the VTC window [-6, -4, -2, 0] for L=4, S=2."""
+    from physicalai.policies.rldx1.model import Rldx1Model
 
-    delta = get_rldx1_delta_timestamps(
-        fps=_FPS,
-        obs_image_key="observation.images.top",
-        video_length=_VIDEO_LENGTH,
-        video_stride=_VIDEO_STRIDE,
-        action_horizon=ACTION_HORIZON,
-    )
-
-    assert delta["observation.images.top"] == [-6 / _FPS, -4 / _FPS, -2 / _FPS, 0.0]
-    assert delta["observation.state"] == [0.0]
-    assert delta["action"] == [i / _FPS for i in range(ACTION_HORIZON)]
+    model = Rldx1Model(video_length=_VIDEO_LENGTH, video_stride=_VIDEO_STRIDE)
+    assert model.observation_delta_indices == [-6, -4, -2, 0]
+    assert model.action_delta_indices == list(range(model._chunk_size))  # noqa: SLF001
 
 
-def test_rldx1_delta_timestamps_multi_camera() -> None:
-    """Every camera key gets the full video window."""
-    from physicalai.data.lerobot.utils.delta_timestamps import get_rldx1_delta_timestamps
+@pytest.mark.parametrize(
+    ("video_length", "video_stride", "expected"),
+    [
+        (4, 2, [-6, -4, -2, 0]),
+        (4, 1, [-3, -2, -1, 0]),
+        (1, 2, [0]),
+        (3, 3, [-6, -3, 0]),
+    ],
+)
+def test_rldx1_observation_delta_indices_parametrized(
+    video_length: int,
+    video_stride: int,
+    expected: list[int],
+) -> None:
+    """The video-window offsets scale with ``video_length`` / ``video_stride``."""
+    from physicalai.policies.rldx1.model import Rldx1Model
 
-    cams = ["observation.images.left", "observation.images.right", "observation.images.wrist"]
-    delta = get_rldx1_delta_timestamps(fps=_FPS, obs_image_key=cams)
-
-    window = [-6 / _FPS, -4 / _FPS, -2 / _FPS, 0.0]
-    for cam in cams:
-        assert delta[cam] == window
-
-
-def test_rldx1_delta_timestamps_via_policy_router() -> None:
-    """``get_delta_timestamps_from_policy('rldx1')`` routes to the video window."""
-    from physicalai.data.lerobot.utils.delta_timestamps import get_delta_timestamps_from_policy
-
-    delta = get_delta_timestamps_from_policy("rldx1", fps=_FPS)
-    assert delta["observation.images.top"] == [-6 / _FPS, -4 / _FPS, -2 / _FPS, 0.0]
-    assert len(delta["action"]) == ACTION_HORIZON
+    model = Rldx1Model(video_length=video_length, video_stride=video_stride)
+    assert model.observation_delta_indices == expected
 
 
 @pytest.mark.parametrize(

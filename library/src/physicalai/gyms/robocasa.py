@@ -127,7 +127,7 @@ DEFAULT_CAMERAS: tuple[str, ...] = (
 # (~30 GB) and not on disk in our setup; sampling from a registry whose
 # category has zero candidates crashes with `Probabilities contain NaN`
 # (0/0 in the normalization). Restrict to lightwheel only.
-DEFAULT_OBJ_REGISTRIES: tuple[str, ...] = ("lightwheel",)
+DEFAULT_OBJ_REGISTRIES: tuple[str, ...] = ("objaverse", "lightwheel")
 
 # Task-group shortcuts accepted as `task=`. Single task names (or a
 # comma-separated list) take precedence; this only triggers on an exact
@@ -467,7 +467,7 @@ class RoboCasaGym(Gym):
         self._ensure_env()
 
         if isinstance(action, torch.Tensor):
-            action = action.detach().cpu().numpy()
+            action = action.detach().float().cpu().numpy()
 
         if action.ndim != 1 or action.shape[0] != ACTION_DIM:
             msg = f"Expected 1-D action shape ({ACTION_DIM},), got shape {action.shape}"

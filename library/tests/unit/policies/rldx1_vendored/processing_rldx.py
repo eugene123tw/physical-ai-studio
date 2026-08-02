@@ -11,7 +11,6 @@ import warnings
 import albumentations as A
 import numpy as np
 from PIL import Image
-from physicalai.policies.rldx1.components._dist import rank_zero_print as _print
 from physicalai.policies.rldx1.components.embodiments import GENERAL_EMBODIMENT_ID
 from tests.unit.policies.rldx1_vendored.augmentations import (
     apply_with_replay,
@@ -71,7 +70,7 @@ class RLDXDataCollator:
             image_inputs += v["images"]
 
         if "qwen" in self.model_type:
-            image_inputs, _ = qwen_process_vision_info(
+            image_inputs = qwen_process_vision_info(
                 [v["conversation"] for v in values], image_patch_size=16
             )
 

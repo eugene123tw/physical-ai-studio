@@ -112,6 +112,9 @@ class RoboCasaBenchmark(Benchmark):
             record_mode=record_mode,
         )
 
+        # RoboCasa keys images by raw camera name, not the base "image" default.
+        self.frame_key = "robot0_agentview_left"
+
     def _create_gyms(self) -> list:
         """Create RoboCasaGym instances for the task group.
 

@@ -91,4 +91,4 @@ skips = ["B101"]
 exclude_dirs = ["tests"]
 
 [tool.uv]
-exclude-newer = "2026-07-29T00:00:00Z"
+exclude-newer = "7 days"

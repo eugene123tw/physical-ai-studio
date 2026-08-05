@@ -39,7 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from physicalai.config import Config
+from physicalai.training_config import Config
 
 # Size of the per-embodiment projector bank in RLDX-1-PT (``W.shape[0]`` of each
 # CategorySpecificLinear). Valid ``embodiment_id`` slots are ``[0, 36)``.

@@ -23,7 +23,6 @@ from physicalai.policies.rldx1.components.backbone.text_model_forward import ins
 # Production stays on FlashAttention-2 for throughput; environments that
 # cannot build flash-attn (e.g. brand-new toolchains, CI runners with no
 # nvcc) can opt out via ``RLDX_ATTN_IMPL=sdpa`` without touching code.
-_DEFAULT_ATTN_IMPL = os.environ.get("RLDX_ATTN_IMPL", "sdpa")
 
 
 class VTCQwen3VLBackbone(nn.Module):
@@ -108,6 +107,8 @@ class VTCQwen3VLBackbone(nn.Module):
         transformers_loading_kwargs = dict(transformers_loading_kwargs or {})
         transformers_loading_kwargs.setdefault("trust_remote_code", True)
 
+        attn_implementation = os.environ.get("RLDX_ATTN_IMPL", "sdpa")
+
         skip_pretrained_weights = kwargs.pop("skip_pretrained_weights", False)
         if skip_pretrained_weights:
             print("[i] Creating VTC-Qwen3-VL architecture only (weights from checkpoint)")
@@ -116,7 +117,7 @@ class VTCQwen3VLBackbone(nn.Module):
             if motion_config is not None:
                 for k, v in motion_config.items():
                     setattr(backbone_config.vision_config, k, v)
-            backbone_config._attn_implementation = _DEFAULT_ATTN_IMPL  # noqa: SLF001
+            backbone_config._attn_implementation = attn_implementation  # noqa: SLF001
             print("Attention implementation:", backbone_config._attn_implementation)  # noqa: SLF001
             # The checkpoint state dict below replaces every backbone tensor.
             # Avoid spending time initializing weights that are immediately discarded.
@@ -142,7 +143,7 @@ class VTCQwen3VLBackbone(nn.Module):
                 self.qwen_model = VTCQwen3Model.from_pretrained(  # type: ignore[assignment]
                     model_name,
                     motion_config=motion_config,
-                    attn_implementation=_DEFAULT_ATTN_IMPL,
+                    attn_implementation=attn_implementation,
                     torch_dtype=torch.bfloat16,
                     **transformers_loading_kwargs,
                 )

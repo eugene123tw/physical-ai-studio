@@ -262,7 +262,7 @@ def _assert_exported_model_runs_inference(export_dir: Path, dataset_id: str) -> 
     assert action.shape[-1] == 2
 
 
-def test_submit_training_job_for_missing_project_returns_404() -> None:
+def test_submit_training_job_for_missing_project_returns_404(migrated_db: None) -> None:
     """Submitting against a project that doesn't exist is a clean 404, not a crash."""
     client = TestClient(app)
 

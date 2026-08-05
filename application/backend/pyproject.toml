@@ -11,7 +11,7 @@ dependencies = [
   'harvesters; sys_platform != "darwin"',
   "fastapi[standard]<1",
   "physicalai[robots, capture, transport]",
-  "physicalai-train[pi0,smolvla]",
+  "physicalai-train[pi0,smolvla,rldx1]",
   "lerobot[dataset,feetech]==0.6.0",
   "torchcodec==0.11.1",
   "numpy",

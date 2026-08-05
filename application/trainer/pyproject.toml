@@ -22,7 +22,7 @@ dependencies = [
   "loguru>=0.7.3",
   "huggingface-hub>=0.27",
   # Training stack (torch resolved via the extras below).
-  "physicalai-train[pi0,smolvla]",
+  "physicalai-train[pi0,smolvla,rldx1]",
   "torchcodec==0.11.1",
   "click>=8.3.0",
 ]

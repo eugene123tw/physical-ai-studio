@@ -3001,7 +3001,6 @@ requires-dist = [
     { name = "diffusers", marker = "extra == 'groot'", specifier = ">=0.38.0" },
     { name = "diffusers", marker = "extra == 'tests'", specifier = ">=0.38.0" },
     { name = "dm-tree", marker = "extra == 'groot'", specifier = ">=0.1.8,<1.0.0" },
-    { name = "dm-tree", marker = "extra == 'rldx1'", specifier = ">=0.1.8,<1.0.0" },
     { name = "executorch", marker = "extra == 'executorch'", specifier = ">=1.1.0" },
     { name = "executorch", marker = "extra == 'executorch-openvino'", specifier = ">=1.1.0" },
     { name = "gym-pusht", specifier = ">=0.1.5" },

@@ -9,7 +9,6 @@ import json
 import pathlib
 from typing import Any
 
-from accelerate import load_checkpoint_in_model
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError
 from safetensors import safe_open
@@ -188,6 +187,8 @@ class VTCQwen3Model(Qwen3VLForConditionalGeneration):
         # expects a bare-tensor layer return; the wrapped stack needs both.
         install_vtc_text_forward(model.model.language_model)
         if "vtc" in pretrained_model_name_or_path.lower():
+            from accelerate import load_checkpoint_in_model  # noqa: PLC0415
+
             if pathlib.Path(pretrained_model_name_or_path).is_dir():
                 local_dir = pretrained_model_name_or_path
             else:

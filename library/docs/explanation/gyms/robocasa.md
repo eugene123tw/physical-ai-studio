@@ -75,6 +75,8 @@ RoboCasaGym(
    split: RoboCasaSplit | None,        # overrides auto-resolved split
    episode_length: int | None,         # MuJoCo horizon
    obj_registries: Sequence[str],      # default ("objaverse", "lightwheel")
+   state_order: FieldOrder | None,     # default: DEFAULT_STATE_ORDER
+   action_order: FieldOrder | None,    # default: DEFAULT_ACTION_ORDER
 )
 ```
 
@@ -99,20 +101,64 @@ Task-group keywords are expanded by `create_robocasa_gyms(...)`, not by `RoboCas
 
 `reset()` and `step()` return `physicalai.data.observation.Observation`:
 
-| Field                              | Shape                | dtype     | Notes                                                            |
-| ---------------------------------- | -------------------- | --------- | ---------------------------------------------------------------- |
-| `images["robot0_agentview_left"]`  | `(1, 3, H, W)`       | `float32` | normalized to `[0, 1]`                                           |
-| `images["robot0_agentview_right"]` | `(1, 3, H, W)`       | `float32` |                                                                  |
-| `images["robot0_eye_in_hand"]`     | `(1, 3, H, W)`       | `float32` |                                                                  |
-| `state`                            | `(1, 16)`            | `float32` | base_pos(3)+base_quat(4)+ee_pos_rel(3)+ee_quat_rel(4)+gripper(2) |
-| `task`                             | `list[str]` length 1 |           | language description                                             |
+| Field                              | Shape                | dtype     | Notes                                                                                                                                                      |
+| ---------------------------------- | -------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `images["robot0_agentview_left"]`  | `(1, 3, H, W)`       | `float32` | normalized to `[0, 1]`                                                                                                                                     |
+| `images["robot0_agentview_right"]` | `(1, 3, H, W)`       | `float32` |                                                                                                                                                            |
+| `images["robot0_eye_in_hand"]`     | `(1, 3, H, W)`       | `float32` |                                                                                                                                                            |
+| `state`                            | `(1, 16)`            | `float32` | `end_effector_position_relative(3) + end_effector_rotation_relative(4) + gripper_qpos(2) + base_position(3) + base_rotation(4)`, per `DEFAULT_STATE_ORDER` |
+| `task`                             | `list[str]` length 1 |           | language description                                                                                                                                       |
 
 Camera names are raw RoboCasa v1.0 names. Per-policy renames go through a policy-side adapter, not here.
 
 **Action:**
 
-Flat `(12,)` `torch.Tensor`: `base_motion(4) + control_mode(1) + ee_pos(3) + ee_rot(3) + gripper(1)`.
-`step()` splits it internally via `convert_action()`.
+Flat `(12,)` `torch.Tensor`: `end_effector_position(3) + end_effector_rotation(3) + gripper_close(1) + base_motion(4) + control_mode(1)`,
+per `DEFAULT_ACTION_ORDER`. `step()` splits it internally via `convert_action()`.
+
+**Field order is checkpoint-configurable, not hardcoded:**
+
+`state`/action field order is a real training-time contract -- a different checkpoint can be trained with a
+different field order for the same robot. Rather than hardcode one order, `RoboCasaGym`/`create_robocasa_gyms`/
+`RoboCasaBenchmark` accept `state_order`/`action_order`: ordered `FieldOrder = tuple[tuple[str, int], ...]`
+`(name, dim)` pairs. Both default to the native PandaOmron order (`DEFAULT_STATE_ORDER`/`DEFAULT_ACTION_ORDER`)
+but can be overridden to match a specific checkpoint, e.g. built directly from that checkpoint's own
+`statistics.json` field names/widths instead of a hand-transcribed constant:
+
+```python
+from physicalai.gyms.robocasa import RoboCasaGym
+
+stats = checkpoint_stats["general_embodiment"]["state"]  # dict preserving training-time field order
+state_order = tuple((name, len(v["mean"])) for name, v in stats.items())
+
+gym = RoboCasaGym(task="CloseFridge", state_order=state_order)
+```
+
+`state_order`/`action_order` can also be written out by hand -- e.g. a checkpoint trained with
+`base_motion`/`control_mode` first in the action vector instead of last:
+
+```python
+from physicalai.gyms.robocasa import RoboCasaGym
+
+state_order = (
+    ("base_position", 3),
+    ("base_rotation", 4),
+    ("end_effector_position_relative", 3),
+    ("end_effector_rotation_relative", 4),
+    ("gripper_qpos", 2),
+)
+action_order = (
+    ("base_motion", 4),
+    ("control_mode", 1),
+    ("end_effector_position", 3),
+    ("end_effector_rotation", 3),
+    ("gripper_close", 1),
+)
+
+gym = RoboCasaGym(task="CloseFridge", state_order=state_order, action_order=action_order)
+```
+
+Same params on `create_robocasa_gyms(...)` and `RoboCasaBenchmark(...)`, forwarded to every gym they create.
 
 ### `create_robocasa_gyms`
 
@@ -135,6 +181,8 @@ pass a `RoboCasaTaskGroup` member for groups, or a list even for a single explic
 | `ACTION_DIM`             | `12`                                                                        | flat action dimension                                  |
 | `DEFAULT_CAMERAS`        | `("robot0_agentview_left", "robot0_eye_in_hand", "robot0_agentview_right")` |                                                        |
 | `DEFAULT_OBJ_REGISTRIES` | `("objaverse", "lightwheel")`                                               | pass `("lightwheel",)` if objaverse assets are missing |
+| `DEFAULT_STATE_ORDER`    | see above                                                                   | native PandaOmron `agent_pos` field order              |
+| `DEFAULT_ACTION_ORDER`   | see above                                                                   | native PandaOmron action field order                   |
 
 ## Known upstream gotchas
 

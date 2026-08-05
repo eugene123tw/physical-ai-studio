@@ -26,6 +26,8 @@ from physicalai.benchmark.gyms.benchmark import Benchmark
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from physicalai.gyms.robocasa import FieldOrder
+
 
 class RoboCasaBenchmark(Benchmark):
     """Specialized benchmark for RoboCasa task groups.
@@ -56,6 +58,13 @@ class RoboCasaBenchmark(Benchmark):
             explicit task name rather than a group keyword -- group keywords
             already imply their natural split (e.g. ``"atomic_seen"`` implies
             ``"target"``) unless overridden here.
+        state_order: Forwarded to each ``RoboCasaGym``. Ordered
+            ``(name, dim)`` schema for the flat ``agent_pos`` vector;
+            defaults to the native PandaOmron order. Pass a
+            checkpoint-derived order to match a policy trained with a
+            different field order.
+        action_order: Forwarded to each ``RoboCasaGym``, analogous to
+            `state_order` but for the flat action vector.
 
     Example:
         >>> # Full atomic_seen benchmark
@@ -81,12 +90,16 @@ class RoboCasaBenchmark(Benchmark):
         video_dir: str | Path | None = None,
         record_mode: str = "failures",
         split: str | None = None,
+        state_order: FieldOrder | None = None,
+        action_order: FieldOrder | None = None,
     ) -> None:
         """Initialize RoboCasa benchmark with task group configuration."""
         self.task = task
         self.observation_height = observation_height
         self.observation_width = observation_width
         self.split = split
+        self.state_order = state_order
+        self.action_order = action_order
 
         # Create gyms for the task group
         gyms = self._create_gyms()
@@ -136,6 +149,8 @@ class RoboCasaBenchmark(Benchmark):
             observation_height=self.observation_height,
             observation_width=self.observation_width,
             split=RoboCasaSplit(self.split) if self.split is not None else None,
+            state_order=self.state_order,
+            action_order=self.action_order,
         )
         for gym in gyms:
             gym.task_id = gym.task  # type: ignore[attr-defined]

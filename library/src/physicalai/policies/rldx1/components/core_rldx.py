@@ -9,7 +9,6 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F  # noqa: N812
-import tree
 from peft import LoraConfig, inject_adapter_in_model
 from torch import nn
 from torch.distributions import Beta
@@ -944,8 +943,8 @@ class RLDX(PreTrainedModel):
                 return x.to(self.device, dtype=self.dtype)  # type: ignore[attr-defined]
             return x.to(self.device)  # type: ignore[attr-defined]
 
-        backbone_inputs = tree.map_structure(to_device_with_dtype, backbone_inputs)
-        action_inputs = tree.map_structure(to_device_with_dtype, action_inputs)
+        backbone_inputs = BatchFeature(data={k: to_device_with_dtype(v) for k, v in backbone_inputs.items()})
+        action_inputs = BatchFeature(data={k: to_device_with_dtype(v) for k, v in action_inputs.items()})
 
         return backbone_inputs, action_inputs
 

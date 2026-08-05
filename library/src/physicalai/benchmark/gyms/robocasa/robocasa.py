@@ -19,30 +19,12 @@ Example:
 
 from __future__ import annotations
 
-from enum import IntEnum
 from typing import TYPE_CHECKING
 
 from physicalai.benchmark.gyms.benchmark import Benchmark
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-class RoboCasaMaxSteps(IntEnum):
-    """Maximum steps per episode for each RoboCasa task group.
-
-    Used to resolve the default ``max_steps`` when none is provided;
-    falls back to ``DEFAULT`` for unrecognised group or task names.
-    """
-
-    atomic_seen = 1000
-    composite_seen = 1000
-    composite_unseen = 1000
-    pretrain50 = 1000
-    pretrain100 = 1000
-    pretrain200 = 1000
-    pretrain300 = 1000
-    DEFAULT = 1000
 
 
 class RoboCasaBenchmark(Benchmark):
@@ -60,12 +42,20 @@ class RoboCasaBenchmark(Benchmark):
             - "pretrain50" / "pretrain100" / "pretrain200" / "pretrain300"
               (pretrain splits of increasing size)
         num_episodes: Number of episodes per task (default: 20).
-        max_steps: Maximum steps per episode (default: 1000).
+        max_steps: Maximum steps per episode. When ``None`` (default), each
+            task uses its own official horizon from robocasa's dataset_registry
+            (horizons vary per task, roughly 200-4800 steps). Pass an explicit
+            value to apply the same cap to every task instead.
         seed: Random seed for reproducibility (default: 42).
         observation_height: Height of observation images (default: 256).
         observation_width: Width of observation images (default: 256).
         video_dir: Directory to save videos. None disables recording.
         record_mode: Video recording mode - "all", "successes", "failures", "none".
+        split: RoboCasa dataset split override (``None``/``"all"``/
+            ``"pretrain"``/``"target"``). Only meaningful when ``task`` is an
+            explicit task name rather than a group keyword -- group keywords
+            already imply their natural split (e.g. ``"atomic_seen"`` implies
+            ``"target"``) unless overridden here.
 
     Example:
         >>> # Full atomic_seen benchmark
@@ -90,15 +80,13 @@ class RoboCasaBenchmark(Benchmark):
         observation_width: int = 256,
         video_dir: str | Path | None = None,
         record_mode: str = "failures",
+        split: str | None = None,
     ) -> None:
         """Initialize RoboCasa benchmark with task group configuration."""
         self.task = task
         self.observation_height = observation_height
         self.observation_width = observation_width
-
-        # Use RoboCasa default max_steps if not specified
-        if max_steps is None:
-            max_steps = getattr(RoboCasaMaxSteps, task, RoboCasaMaxSteps.DEFAULT).value
+        self.split = split
 
         # Create gyms for the task group
         gyms = self._create_gyms()
@@ -113,24 +101,41 @@ class RoboCasaBenchmark(Benchmark):
         )
 
         # RoboCasa keys images by raw camera name, not the base "image" default.
-        self.frame_key = "robot0_agentview_left"
+        # Stack all 3 default views (left, right, wrist) horizontally in recorded videos.
+        self.frame_key = ["robot0_agentview_left", "robot0_agentview_right", "robot0_eye_in_hand"]
 
     def _create_gyms(self) -> list:
         """Create RoboCasaGym instances for the task group.
 
-        Sets ``task_id`` and ``task_suite_name`` on each gym so the base
-        class ``_get_task_id``/``_get_task_name`` protocol can build
-        per-task result keys.
+        Bridges this class's human-friendly ``str`` ``task``/``split`` to the
+        typed ``RoboCasaTaskGroup``/``RoboCasaSplit`` API that
+        ``create_robocasa_gyms`` requires. Sets ``task_id`` and
+        ``task_suite_name`` on each gym so the base class
+        ``_get_task_id``/``_get_task_name`` protocol can build per-task
+        result keys.
 
         Returns:
             List of RoboCasaGym instances.
+
+        Raises:
+            ValueError: If ``self.task`` is empty.
         """
-        from physicalai.gyms import create_robocasa_gyms  # noqa: PLC0415
+        from physicalai.gyms import RoboCasaSplit, RoboCasaTaskGroup, create_robocasa_gyms  # noqa: PLC0415
+
+        tasks: RoboCasaTaskGroup | list[str]
+        try:
+            tasks = RoboCasaTaskGroup(self.task)
+        except ValueError:
+            tasks = [t.strip() for t in self.task.split(",") if t.strip()]
+            if not tasks:
+                msg = "`task` must contain at least one RoboCasa task name."
+                raise ValueError(msg) from None
 
         gyms = create_robocasa_gyms(
-            tasks=self.task,
+            tasks=tasks,
             observation_height=self.observation_height,
             observation_width=self.observation_width,
+            split=RoboCasaSplit(self.split) if self.split is not None else None,
         )
         for gym in gyms:
             gym.task_id = gym.task  # type: ignore[attr-defined]

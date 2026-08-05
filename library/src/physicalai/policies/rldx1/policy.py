@@ -156,6 +156,7 @@ class Rldx1(Policy):
         backbone_trainable_params_fp32: bool = False,
         tune_visual: bool = True,
         tune_projector: bool = True,
+        use_vlln: bool = False,
         tune_diffusion_model: bool = True,
         tune_vlln: bool = True,
         num_inference_timesteps: int = 4,
@@ -180,7 +181,7 @@ class Rldx1(Policy):
         # Normalization
         clip_outliers: bool = True,
         # Eager initialization (optional)
-        env_action_dim: int | None = None,
+        env_action_dim: int = 0,
         dataset_stats: dict[str, dict[str, list[float] | str | tuple]] | None = None,
     ) -> None:
         """Initialize the RLDX-1 policy and save hyperparameters."""
@@ -202,6 +203,7 @@ class Rldx1(Policy):
             backbone_trainable_params_fp32=backbone_trainable_params_fp32,
             tune_visual=tune_visual,
             tune_projector=tune_projector,
+            use_vlln=use_vlln,
             tune_diffusion_model=tune_diffusion_model,
             tune_vlln=tune_vlln,
             num_inference_timesteps=num_inference_timesteps,
@@ -238,7 +240,7 @@ class Rldx1(Policy):
             video_stride=self.config.video_stride,
         )
 
-        if env_action_dim is not None:
+        if dataset_stats is not None:
             self._initialize_model(env_action_dim, dataset_stats)
 
     @classmethod
@@ -267,6 +269,7 @@ class Rldx1(Policy):
             backbone_trainable_params_fp32=config.backbone_trainable_params_fp32,
             tune_visual=config.tune_visual,
             tune_projector=config.tune_projector,
+            use_vlln=config.use_vlln,
             tune_diffusion_model=config.tune_diffusion_model,
             tune_vlln=config.tune_vlln,
             num_inference_timesteps=config.num_inference_timesteps,
@@ -592,10 +595,6 @@ class Rldx1(Policy):
         window from the correct env-step strides, then delegates to the base
         action-chunking logic.
 
-        During the warmup phase (buffer not yet full), returns zero actions to
-        allow the frame history to accumulate. This matches training conditions
-        where observations have complete temporal structure from delta_timestamps.
-
         Args:
             batch: Input observation batch.
 
@@ -604,11 +603,8 @@ class Rldx1(Policy):
         """
         self._vtc_buffer.record(batch)
 
-        # Warmup phase: delay inference until the buffer is full so the temporal
-        # window is stable. During training, delta_timestamps ensures complete
-        # temporal structure from the first step. During eval rollout, we build
-        # frame history incrementally, so we hold until the window matches
-        # training conditions.
+        # A malformed or externally managed history may be incomplete. Normal
+        # rollout histories are seeded with their first frame and skip this path.
         if self._vtc_buffer.is_warming_up:
             env_action_dim = self.hparams.get("env_action_dim", self.config.max_action_dim)
             return self._get_warmup_hold_action(batch, env_action_dim)

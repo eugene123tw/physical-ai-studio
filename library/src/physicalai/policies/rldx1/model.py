@@ -232,7 +232,7 @@ class Rldx1Model(Model):
         backbone_trainable_params_fp32: bool = True,
         tune_visual: bool = False,
         tune_projector: bool = True,
-        use_vlln: bool = True,
+        use_vlln: bool = False,
         tune_diffusion_model: bool = True,
         tune_vlln: bool = True,
         backbone_lora_rank: int = 64,

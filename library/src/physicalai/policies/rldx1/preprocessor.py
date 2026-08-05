@@ -40,7 +40,7 @@ streams.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import torch
@@ -54,12 +54,14 @@ from physicalai.policies.utils.normalization import FeatureNormalizeTransform
 from .augmentations import apply_with_replay, build_image_transformations_albumentations
 from .preprocessing import (
     build_qwen_conversation,
+    build_state_action_degenerate_masks,
     build_state_action_features,
     build_state_action_norm_map,
     clip_state_action,
     formalize_language,
     pad_state_action,
     tokenize_vlm_batch,
+    zero_degenerate_state_action,
 )
 
 if TYPE_CHECKING:
@@ -255,6 +257,13 @@ class Rldx1Preprocessor(nn.Module):
         else:
             self._state_action_normalizer = nn.Identity()
 
+        # Degenerate (constant) channel masks. Upstream masks q99==q01 channels to
+        # 0; PAS QUANTILES/MIN_MAX map them to -1. Zero them post-normalize for
+        # parity. persistent=False: derived from stats, recomputed on reload.
+        degenerate = build_state_action_degenerate_masks(sa_features, use_percentiles=use_percentiles)
+        self.register_buffer("_degenerate_mask_state", degenerate.get(STATE), persistent=False)
+        self.register_buffer("_degenerate_mask_action", degenerate.get(ACTION), persistent=False)
+
         # Lazily-loaded HF Qwen processor for the PAS-native VLM path (Stage 4).
         self._vlm_processor_cache: ProcessorMixin | None = None
 
@@ -362,6 +371,15 @@ class Rldx1Preprocessor(nn.Module):
         sa_batch = self._state_action_normalizer(sa_batch)
         if self._has_sa_features and self.clip_outliers:
             sa_batch = clip_state_action(sa_batch)
+        if self._has_sa_features:
+            # Match upstream: constant (q99==q01) channels normalize to 0, not -1.
+            sa_batch = zero_degenerate_state_action(
+                sa_batch,
+                {
+                    STATE: cast("torch.Tensor", self._degenerate_mask_state),
+                    ACTION: cast("torch.Tensor", self._degenerate_mask_action),
+                },
+            )
         sa_batch = pad_state_action(
             sa_batch,
             max_state_dim=self.max_state_dim,
@@ -513,7 +531,12 @@ class Rldx1Preprocessor(nn.Module):
         if value is None:
             return None
         if isinstance(value, torch.Tensor):
-            return value[index].detach().cpu().float().numpy()
+            sample = value[index].detach().cpu()
+            # Upcast only floating tensors (numpy has no bf16); keep uint8 as
+            # uint8 so _to_hwc_uint8 doesn't misread it as float [0, 1].
+            if sample.is_floating_point():
+                sample = sample.to(torch.float32)
+            return sample.numpy()
         return np.asarray(value)[index]
 
     @staticmethod

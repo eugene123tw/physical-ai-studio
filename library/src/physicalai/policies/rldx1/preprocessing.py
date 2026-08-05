@@ -209,16 +209,80 @@ def clip_state_action(batch: dict[str, Any]) -> dict[str, Any]:
         The same batch dict with state/action clipped.
 
     Note:
-        For degenerate dimensions where ``max == min`` (a constant channel), the
-        vendored pipeline emits ``0`` while :class:`FeatureNormalizeTransform`
-        emits the ``+1e-8``-floored linear value. The two agree for all
-        non-degenerate dimensions; constant-channel parity is a deferred
-        follow-up.
+        Degenerate dimensions (``max == min``, a constant channel) need
+        :func:`zero_degenerate_state_action` to reach parity: the vendored
+        pipeline masks them out and emits ``0`` while
+        :class:`FeatureNormalizeTransform` emits ``2*(x-lo)/1e-8 - 1 == -1``
+        (then clipped to ``-1``). Non-degenerate dimensions agree exactly.
     """
     for key in (STATE, ACTION):
         value = batch.get(key)
         if isinstance(value, torch.Tensor):
             batch[key] = value.clamp(-1.0, 1.0)
+    return batch
+
+
+def build_state_action_degenerate_masks(
+    features: dict[str, Feature],
+    *,
+    use_percentiles: bool,
+) -> dict[str, torch.Tensor]:
+    """Build boolean masks marking degenerate (constant) state/action channels.
+
+    A channel is degenerate when its normalization bounds collapse
+    (``q99 == q01`` for percentiles, else ``max == min``). The vendored
+    ``normalize_values_minmax`` masks these with ``~np.isclose(max, min)`` and
+    leaves them at ``0``; PAS's :class:`FeatureNormalizeTransform` instead maps
+    them to ``-1``. Feed the returned masks to
+    :func:`zero_degenerate_state_action` to restore upstream parity.
+
+    Args:
+        features: State/action feature map (see
+            :func:`build_state_action_features`).
+        use_percentiles: Match the paired normalizer -- compare ``q01``/``q99``
+            when ``True``, else ``min``/``max``.
+
+    Returns:
+        ``{name: bool mask}`` of shape ``(feature_dim,)``; ``True`` marks a
+        degenerate channel. Features whose bounds are missing are omitted.
+    """
+    masks: dict[str, torch.Tensor] = {}
+    for name, feature in features.items():
+        norm = feature.normalization_data
+        if norm is None:
+            continue
+        lo, hi = (norm.q01, norm.q99) if use_percentiles else (norm.min, norm.max)
+        if lo is None or hi is None:
+            continue
+        lo_arr = np.asarray(lo, dtype=np.float64)
+        hi_arr = np.asarray(hi, dtype=np.float64)
+        masks[name] = torch.from_numpy(np.isclose(hi_arr, lo_arr))
+    return masks
+
+
+def zero_degenerate_state_action(
+    batch: dict[str, Any],
+    masks: dict[str, torch.Tensor],
+) -> dict[str, Any]:
+    """Zero degenerate (constant) state/action channels in-place.
+
+    Restores parity with the vendored ``normalize_values_minmax`` mask path,
+    which leaves constant channels at ``0`` (see
+    :func:`build_state_action_degenerate_masks`). Apply after
+    :func:`clip_state_action`.
+
+    Args:
+        batch: Batch dict with normalized state/action tensors.
+        masks: Degenerate-channel masks keyed by ``state`` / ``action``.
+
+    Returns:
+        The same batch dict with degenerate channels set to ``0``.
+    """
+    for key in (STATE, ACTION):
+        mask = masks.get(key)
+        value = batch.get(key)
+        if mask is not None and isinstance(value, torch.Tensor):
+            value[..., mask.to(value.device)] = 0.0
     return batch
 
 

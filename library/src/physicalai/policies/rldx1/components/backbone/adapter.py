@@ -13,6 +13,7 @@ import torch.nn.functional as F  # noqa: N812
 from torch import nn
 from transformers import AutoConfig
 from transformers.feature_extraction_utils import BatchFeature
+from transformers.initialization import no_init_weights
 from transformers.utils import is_torchdynamo_compiling
 
 from physicalai.policies.rldx1.components.backbone.modeling_vtc import LayerWrapper, VTCQwen3Model
@@ -117,7 +118,11 @@ class VTCQwen3VLBackbone(nn.Module):
                     setattr(backbone_config.vision_config, k, v)
             backbone_config._attn_implementation = _DEFAULT_ATTN_IMPL  # noqa: SLF001
             print("Attention implementation:", backbone_config._attn_implementation)  # noqa: SLF001
-            self.qwen_model = VTCQwen3Model._from_config(backbone_config)  # noqa: SLF001
+            # The checkpoint state dict below replaces every backbone tensor.
+            # Avoid spending time initializing weights that are immediately discarded.
+            with no_init_weights():
+                self.qwen_model = VTCQwen3Model._from_config(backbone_config)  # noqa: SLF001
+
             for layer_idx in range(len(self.qwen_model.model.language_model.layers)):
                 self.qwen_model.model.language_model.layers[layer_idx] = LayerWrapper(
                     self.qwen_model.model.language_model.layers[layer_idx],
@@ -133,13 +138,14 @@ class VTCQwen3VLBackbone(nn.Module):
                 self.qwen_model = self.qwen_model.to(torch.bfloat16)
         else:
             print(f"[i] Loading VTC-Qwen3-VL model from {model_name}")
-            self.qwen_model = VTCQwen3Model.from_pretrained(  # type: ignore[assignment]
-                model_name,
-                motion_config=motion_config,
-                attn_implementation=_DEFAULT_ATTN_IMPL,
-                torch_dtype=torch.bfloat16,
-                **transformers_loading_kwargs,
-            )
+            with no_init_weights():
+                self.qwen_model = VTCQwen3Model.from_pretrained(  # type: ignore[assignment]
+                    model_name,
+                    motion_config=motion_config,
+                    attn_implementation=_DEFAULT_ATTN_IMPL,
+                    torch_dtype=torch.bfloat16,
+                    **transformers_loading_kwargs,
+                )
         # Keep BatchNorm running stats in float32 for bf16 compatibility
         motion_block = getattr(self.qwen_model.model.visual, "motion_block", None)
         if motion_block is not None:
@@ -468,7 +474,6 @@ class VTCQwen3VLBackbone(nn.Module):
         past_key_values = qwen_input.get("past_key_values")
         inputs_embeds = qwen_input.get("inputs_embeds")
         pixel_values = qwen_input.get("pixel_values")
-        pixel_values_videos = qwen_input.get("pixel_values_videos")
         image_grid_thw = qwen_input.get("image_grid_thw")
         video_grid_thw = qwen_input.get("video_grid_thw")
         cache_position = qwen_input.get("cache_position")
@@ -512,22 +517,6 @@ class VTCQwen3VLBackbone(nn.Module):
                 image_features=image_embeds,
             )
             inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
-
-        if pixel_values_videos is not None:
-            video_outputs = self.qwen_model.model.get_video_features(
-                pixel_values_videos,
-                video_grid_thw,
-                return_dict=True,
-            )
-            video_embeds = video_outputs.pooler_output
-            deepstack_video_embeds = video_outputs.deepstack_features
-            video_embeds = torch.cat(video_embeds, dim=0).to(device, inputs_embeds.dtype)
-            _, video_mask = self.qwen_model.model.get_placeholder_mask(
-                input_ids,
-                inputs_embeds=inputs_embeds,
-                video_features=video_embeds,
-            )
-            inputs_embeds = inputs_embeds.masked_scatter(video_mask, video_embeds)
 
         visual_pos_masks = None
         deepstack_visual_embeds = None

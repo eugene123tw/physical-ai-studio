@@ -62,7 +62,7 @@ class RLDXNetworkConfig(PretrainedConfig):
     # Global parameters from YAML
     add_pos_embed: bool = True
     attn_dropout: float = 0.2
-    use_vlln: bool = True
+    use_vlln: bool = False
     max_seq_len: int = 1024
 
     # MSAT configuration

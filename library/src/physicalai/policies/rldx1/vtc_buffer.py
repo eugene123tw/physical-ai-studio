@@ -94,6 +94,9 @@ class VtcWindowBuffer:
 
         Args:
             batch: Current single-frame observation.
+
+        Raises:
+            RuntimeError: If the buffer is not initialized by ``_ensure_history``
         """
         if self._video_length <= 1:
             return
@@ -102,9 +105,17 @@ class VtcWindowBuffer:
         if not view_keys or _is_multiframe(batch_dict, view_keys):
             return
         self._ensure_history(view_keys)
-        assert self._history is not None  # noqa: S101
+        if self._history is None:
+            msg = "History should have been initialized by _ensure_history"
+            raise RuntimeError(msg)
         for key in view_keys:
-            self._history[key].append(_as_frame_tensor(batch_dict[key]))
+            history = self._history[key]
+            frame = _as_frame_tensor(batch_dict[key])
+            if not history:
+                window_size = (self._video_length - 1) * self._video_stride + 1
+                history.extend([frame] * window_size)
+            else:
+                history.append(frame)
 
     def prepare(self, batch: Observation | dict[str, Any]) -> Observation | dict[str, Any]:
         """Return the batch with the VTC window applied.

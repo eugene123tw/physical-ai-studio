@@ -37,7 +37,6 @@ Example:
 """
 
 from physicalai.benchmark.gyms.robocasa.robocasa import RoboCasaBenchmark
+from physicalai.gyms import RoboCasaSplit, RoboCasaTaskGroup
 
-__all__ = [
-    "RoboCasaBenchmark",
-]
+__all__ = ["RoboCasaBenchmark", "RoboCasaSplit", "RoboCasaTaskGroup"]

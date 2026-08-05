@@ -236,13 +236,13 @@ class RLDXProcessor(ProcessorMixin):
         # int, so coerce here and warn loudly instead of crashing later inside
         # albumentations.
         if image_max_area is None:
-            _print(
+            print(
                 f"[!] processor: image_max_area=None in checkpoint; "
                 f"falling back to default {65536}. Set it explicitly to silence."
             )
             image_max_area = 65536
         if image_resize_m is None:
-            _print(
+            print(
                 f"[!] processor: image_resize_m=None in checkpoint; "
                 f"falling back to default {32}. Set it explicitly to silence."
             )
@@ -683,7 +683,7 @@ class RLDXProcessor(ProcessorMixin):
         processor_kwargs["statistics"] = statistics
 
         memory_length = processor_kwargs.get("memory_length", 1)
-        _print(f"[i] Loaded memory_length={memory_length} from checkpoint\n")
+        print(f"[i] Loaded memory_length={memory_length} from checkpoint\n")
 
         # Directly override other processor kwargs
         if kwargs:

@@ -55,9 +55,9 @@ next_obs, reward, terminated, truncated, info = gym.step(action)
 gym.close()
 
 # Task-group keyword (18 atomic tasks in robocasa v1.0)
-from physicalai.gyms import create_robocasa_gyms
+from physicalai.gyms import RoboCasaTaskGroup, create_robocasa_gyms
 
-gyms = create_robocasa_gyms(tasks="atomic_seen")
+gyms = create_robocasa_gyms(tasks=RoboCasaTaskGroup.ATOMIC_SEEN)
 ```
 
 ## API
@@ -72,28 +72,28 @@ RoboCasaGym(
    render_mode: str,                   # "rgb_array" (default)
    observation_height: int,            # default 256
    observation_width: int,             # default 256
-   split: str | None,                  # overrides auto-resolved split
+   split: RoboCasaSplit | None,        # overrides auto-resolved split
    episode_length: int | None,         # MuJoCo horizon
-   obj_registries: Sequence[str],      # default ("lightwheel",)
+   obj_registries: Sequence[str],      # default ("objaverse", "lightwheel")
 )
 ```
 
 **`task` values for `RoboCasaGym`:**
 
-| Value                     | Resolves to                                   |
-| ------------------------- | --------------------------------------------- |
-| `"TaskName"` or `"T1,T2"` | explicit names, split `None` (auto = `"all"`) |
+| Value        | Resolves to                                              |
+| ------------ | -------------------------------------------------------- |
+| `"TaskName"` | explicit name, split `None` (auto = `RoboCasaSplit.ALL`) |
 
 Task-group keywords are expanded by `create_robocasa_gyms(...)`, not by `RoboCasaGym(...)`.
 
-**task-group values for `create_robocasa_gyms(tasks=...)`:**
+**`RoboCasaTaskGroup` values for `create_robocasa_gyms(tasks=...)`:**
 
-| Value                            | Resolves to                            |
-| -------------------------------- | -------------------------------------- |
-| `"atomic_seen"`                  | 18 v1.0 atomic tasks, split `"target"` |
-| `"composite_seen"`               | composite tasks, split `"target"`      |
-| `"composite_unseen"`             | composite tasks, split `"target"`      |
-| `"pretrain50"` … `"pretrain300"` | pretrain partition, split `"pretrain"` |
+| Value                                          | Resolves to                                        |
+| ---------------------------------------------- | -------------------------------------------------- |
+| `RoboCasaTaskGroup.ATOMIC_SEEN`                | 18 v1.0 atomic tasks, split `RoboCasaSplit.TARGET` |
+| `RoboCasaTaskGroup.COMPOSITE_SEEN`             | composite tasks, split `RoboCasaSplit.TARGET`      |
+| `RoboCasaTaskGroup.COMPOSITE_UNSEEN`           | composite tasks, split `RoboCasaSplit.TARGET`      |
+| `RoboCasaTaskGroup.PRETRAIN50` … `PRETRAIN300` | pretrain partition, split `RoboCasaSplit.PRETRAIN` |
 
 **Observation:**
 
@@ -118,21 +118,23 @@ Flat `(12,)` `torch.Tensor`: `base_motion(4) + control_mode(1) + ee_pos(3) + ee_
 
 ```python
 create_robocasa_gyms(
-    tasks: str | list[str],   # group keyword or list of task names
+    tasks: RoboCasaTaskGroup | list[str],   # group keyword or list of explicit task names
+    split: RoboCasaSplit | None = None,
     **gym_kwargs,             # forwarded to RoboCasaGym
 ) -> list[RoboCasaGym]
 ```
 
-Returns one `RoboCasaGym` per task name.
+Returns one `RoboCasaGym` per task name. Bare strings (e.g. `"atomic_seen"`) are rejected —
+pass a `RoboCasaTaskGroup` member for groups, or a list even for a single explicit task name.
 
 ### Module-level constants
 
-| Name                     | Value                                                                       | Notes                          |
-| ------------------------ | --------------------------------------------------------------------------- | ------------------------------ |
-| `OBS_STATE_DIM`          | `16`                                                                        | proprioceptive state dimension |
-| `ACTION_DIM`             | `12`                                                                        | flat action dimension          |
-| `DEFAULT_CAMERAS`        | `("robot0_agentview_left", "robot0_eye_in_hand", "robot0_agentview_right")` |                                |
-| `DEFAULT_OBJ_REGISTRIES` | `("lightwheel",)`                                                           | avoids objaverse NaN crash     |
+| Name                     | Value                                                                       | Notes                                                  |
+| ------------------------ | --------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `OBS_STATE_DIM`          | `16`                                                                        | proprioceptive state dimension                         |
+| `ACTION_DIM`             | `12`                                                                        | flat action dimension                                  |
+| `DEFAULT_CAMERAS`        | `("robot0_agentview_left", "robot0_eye_in_hand", "robot0_agentview_right")` |                                                        |
+| `DEFAULT_OBJ_REGISTRIES` | `("objaverse", "lightwheel")`                                               | pass `("lightwheel",)` if objaverse assets are missing |
 
 ## Known upstream gotchas
 
@@ -142,8 +144,9 @@ Three bugs from the lerobot port are already encoded as workarounds:
    `create_env` rejects. The wrapper always passes `split="all"` when no split is set.
 
 2. **objaverse NaN crash** — sampling from a registry with zero objects causes
-   `Probabilities contain NaN`. Fixed by defaulting to `obj_registries=("lightwheel",)`.
-   If you see this error at `reset()`, re-run the asset download with `--type objs_lw`.
+   `Probabilities contain NaN`. If you hit this at `reset()`, either re-run the
+   asset download with `--type objs_lw` or pass `obj_registries=("lightwheel",)`
+   explicitly to drop objaverse from the default.
 
 3. **`atomic_seen` → `split="target"`** — robocasa's own group maps to `split="target"`,
    not `"all"`. `_TASK_GROUP_SPLITS` encodes this mapping for all group keywords.

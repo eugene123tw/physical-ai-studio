@@ -57,6 +57,16 @@ def test_window_samples_expected_strides() -> None:
     assert sampled == [3, 5, 7, 9]
 
 
+def test_vlln_defaults_to_upstream_checkpoint_architecture() -> None:
+    """Released RLDX-1 checkpoints omit VLLN, so it must stay disabled by default."""
+    assert not _bare_policy().config.use_vlln
+
+
+def test_vlln_can_be_enabled_explicitly() -> None:
+    """Fine-tuning configurations may opt into the additional VLLN layer."""
+    assert Rldx1(use_vlln=True).config.use_vlln
+
+
 def test_window_clamps_when_history_short() -> None:
     """Before the window span fills, offsets clamp to the oldest frame."""
     policy = _bare_policy()
@@ -67,6 +77,17 @@ def test_window_clamps_when_history_short() -> None:
     sampled = [int(windowed[_VIEW][0, t, 0, 0, 0].item()) for t in range(_VIDEO_LENGTH)]
     # -6, -4, -2 clamp to the first frame (0); 0 is the latest (2).
     assert sampled == [0, 0, 0, 2]
+
+
+def test_first_frame_fills_history_without_warmup() -> None:
+    """The first rollout frame populates every missing temporal offset."""
+    policy = _bare_policy()
+    policy._record_video_frames({_VIEW: _frame(5)})  # noqa: SLF001
+
+    assert not policy._vtc_buffer.is_warming_up  # noqa: SLF001
+    windowed = policy._apply_video_window({_VIEW: _frame(5)}, [_VIEW])  # noqa: SLF001
+    sampled = [int(windowed[_VIEW][0, t, 0, 0, 0].item()) for t in range(_VIDEO_LENGTH)]
+    assert sampled == [5, 5, 5, 5]
 
 
 def test_history_buffer_bounded_to_span() -> None:

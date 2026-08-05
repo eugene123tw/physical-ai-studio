@@ -1,9 +1,9 @@
 {
   "errors": [
     {
-      "line": 300,
+      "line": 304,
       "column": 40,
-      "stop_line": 300,
+      "stop_line": 304,
       "stop_column": 46,
       "path": "src/physicalai/benchmark/gyms/benchmark.py",
       "code": -2,
@@ -13,9 +13,9 @@
       "severity": "error"
     },
     {
-      "line": 429,
+      "line": 434,
       "column": 13,
-      "stop_line": 429,
+      "stop_line": 434,
       "stop_column": 26,
       "path": "src/physicalai/benchmark/gyms/benchmark.py",
       "code": -2,
@@ -361,9 +361,9 @@
       "severity": "error"
     },
     {
-      "line": 564,
+      "line": 594,
       "column": 13,
-      "stop_line": 564,
+      "stop_line": 594,
       "stop_column": 68,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -373,9 +373,9 @@
       "severity": "error"
     },
     {
-      "line": 578,
+      "line": 608,
       "column": 17,
-      "stop_line": 578,
+      "stop_line": 608,
       "stop_column": 89,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -385,9 +385,9 @@
       "severity": "error"
     },
     {
-      "line": 579,
+      "line": 609,
       "column": 17,
-      "stop_line": 579,
+      "stop_line": 609,
       "stop_column": 80,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -397,9 +397,9 @@
       "severity": "error"
     },
     {
-      "line": 584,
+      "line": 614,
       "column": 17,
-      "stop_line": 586,
+      "stop_line": 616,
       "stop_column": 18,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -409,9 +409,9 @@
       "severity": "error"
     },
     {
-      "line": 657,
+      "line": 687,
       "column": 59,
-      "stop_line": 657,
+      "stop_line": 687,
       "stop_column": 74,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -421,9 +421,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -433,9 +433,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -445,9 +445,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -457,9 +457,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -469,9 +469,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -481,9 +481,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -493,9 +493,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -505,9 +505,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -517,9 +517,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -529,9 +529,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -541,9 +541,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -553,9 +553,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -565,9 +565,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -577,9 +577,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -589,9 +589,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -601,9 +601,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -613,9 +613,9 @@
       "severity": "error"
     },
     {
-      "line": 685,
+      "line": 716,
       "column": 13,
-      "stop_line": 685,
+      "stop_line": 716,
       "stop_column": 28,
       "path": "src/physicalai/export/mixin_policy.py",
       "code": -2,
@@ -646,6 +646,66 @@
       "name": "bad-return",
       "description": "Returned type `tuple[Observation, SupportsFloat | Unknown, bool | Unknown, bool | Unknown, dict[str, Any]]` is not assignable to declared return type `tuple[Observation, SingleOrBatch, SingleOrBatch, SingleOrBatch, dict[str, Any] | list[dict[str, Any]]]`",
       "concise_description": "Returned type `tuple[Observation, SupportsFloat | Unknown, bool | Unknown, bool | Unknown, dict[str, Any]]` is not assignable to declared return type `tuple[Observation, SingleOrBatch, SingleOrBatch, SingleOrBatch, dict[str, Any] | list[dict[str, Any]]]`",
+      "severity": "error"
+    },
+    {
+      "line": 79,
+      "column": 5,
+      "stop_line": 79,
+      "stop_column": 50,
+      "path": "src/physicalai/gyms/libero.py",
+      "code": -2,
+      "name": "missing-import",
+      "description": "Cannot find module `libero.libero.benchmark`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
+      "concise_description": "Cannot find module `libero.libero.benchmark`",
+      "severity": "error"
+    },
+    {
+      "line": 88,
+      "column": 5,
+      "stop_line": 88,
+      "stop_column": 60,
+      "path": "src/physicalai/gyms/libero.py",
+      "code": -2,
+      "name": "missing-import",
+      "description": "Cannot find module `libero.libero`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
+      "concise_description": "Cannot find module `libero.libero`",
+      "severity": "error"
+    },
+    {
+      "line": 89,
+      "column": 5,
+      "stop_line": 89,
+      "stop_column": 46,
+      "path": "src/physicalai/gyms/libero.py",
+      "code": -2,
+      "name": "missing-import",
+      "description": "Cannot find module `libero.libero`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
+      "concise_description": "Cannot find module `libero.libero`",
+      "severity": "error"
+    },
+    {
+      "line": 90,
+      "column": 5,
+      "stop_line": 90,
+      "stop_column": 54,
+      "path": "src/physicalai/gyms/libero.py",
+      "code": -2,
+      "name": "missing-import",
+      "description": "Cannot find module `libero.libero.envs`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
+      "concise_description": "Cannot find module `libero.libero.envs`",
+      "severity": "error"
+    },
+    {
+      "line": 91,
+      "column": 5,
+      "stop_line": 91,
+      "stop_column": 63,
+      "path": "src/physicalai/gyms/libero.py",
+      "code": -2,
+      "name": "missing-import",
+      "description": "Cannot find module `robosuite.utils.transform_utils`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
+      "concise_description": "Cannot find module `robosuite.utils.transform_utils`",
       "severity": "error"
     },
     {
@@ -973,9 +1033,9 @@
       "severity": "error"
     },
     {
-      "line": 164,
+      "line": 233,
       "column": 14,
-      "stop_line": 164,
+      "stop_line": 233,
       "stop_column": 19,
       "path": "src/physicalai/policies/act/policy.py",
       "code": -2,
@@ -985,9 +1045,9 @@
       "severity": "error"
     },
     {
-      "line": 164,
+      "line": 233,
       "column": 14,
-      "stop_line": 164,
+      "stop_line": 233,
       "stop_column": 19,
       "path": "src/physicalai/policies/act/policy.py",
       "code": -2,
@@ -997,9 +1057,9 @@
       "severity": "error"
     },
     {
-      "line": 368,
+      "line": 529,
       "column": 9,
-      "stop_line": 368,
+      "stop_line": 529,
       "stop_column": 29,
       "path": "src/physicalai/policies/act/policy.py",
       "code": -2,
@@ -1306,6 +1366,18 @@
       "name": "bad-return",
       "description": "Returned type `PreTrainedConfig | None` is not assignable to declared return type `PreTrainedConfig`\n  The declared type does not allow `None`. Consider narrowing the value with an `is not None` check or changing the declared type to `PreTrainedConfig | None`.",
       "concise_description": "Returned type `PreTrainedConfig | None` is not assignable to declared return type `PreTrainedConfig`",
+      "severity": "error"
+    },
+    {
+      "line": 40,
+      "column": 9,
+      "stop_line": 40,
+      "stop_column": 52,
+      "path": "src/physicalai/policies/pi0/components/lora.py",
+      "code": -2,
+      "name": "missing-import",
+      "description": "Cannot find module `peft`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
+      "concise_description": "Cannot find module `peft`",
       "severity": "error"
     },
     {
@@ -1837,45 +1909,45 @@
       "severity": "error"
     },
     {
-      "line": 216,
-      "column": 45,
-      "stop_line": 216,
-      "stop_column": 59,
-      "path": "src/physicalai/policies/smolvla/model.py",
+      "line": 28,
+      "column": 8,
+      "stop_line": 28,
+      "stop_column": 27,
+      "path": "src/physicalai/policies/rldx1/augmentations.py",
       "code": -2,
-      "name": "unsupported-operation",
-      "description": "Cannot set item in `dict[str, float]`\n  Argument `Tensor` is not assignable to parameter `value` with type `float` in function `dict.__setitem__`",
-      "concise_description": "Cannot set item in `dict[str, float]`",
+      "name": "missing-import",
+      "description": "Cannot find module `albumentations`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
+      "concise_description": "Cannot find module `albumentations`",
       "severity": "error"
     },
     {
-      "line": 221,
-      "column": 53,
-      "stop_line": 221,
-      "stop_column": 67,
-      "path": "src/physicalai/policies/smolvla/model.py",
+      "line": 190,
+      "column": 13,
+      "stop_line": 190,
+      "stop_column": 60,
+      "path": "src/physicalai/policies/rldx1/components/backbone/modeling_vtc.py",
       "code": -2,
-      "name": "unsupported-operation",
-      "description": "Cannot set item in `dict[str, float]`\n  Argument `Tensor` is not assignable to parameter `value` with type `float` in function `dict.__setitem__`",
-      "concise_description": "Cannot set item in `dict[str, float]`",
+      "name": "missing-import",
+      "description": "Cannot find module `accelerate`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
+      "concise_description": "Cannot find module `accelerate`",
       "severity": "error"
     },
     {
-      "line": 226,
-      "column": 48,
-      "stop_line": 226,
-      "stop_column": 62,
-      "path": "src/physicalai/policies/smolvla/model.py",
+      "line": 12,
+      "column": 1,
+      "stop_line": 12,
+      "stop_column": 53,
+      "path": "src/physicalai/policies/rldx1/components/core_rldx.py",
       "code": -2,
-      "name": "unsupported-operation",
-      "description": "Cannot set item in `dict[str, float]`\n  Argument `Tensor` is not assignable to parameter `value` with type `float` in function `dict.__setitem__`",
-      "concise_description": "Cannot set item in `dict[str, float]`",
+      "name": "missing-import",
+      "description": "Cannot find module `peft`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
+      "concise_description": "Cannot find module `peft`",
       "severity": "error"
     },
     {
-      "line": 1967,
+      "line": 1972,
       "column": 43,
-      "stop_line": 1967,
+      "stop_line": 1972,
       "stop_column": 47,
       "path": "src/physicalai/policies/smolvla/model.py",
       "code": -2,
@@ -1885,9 +1957,9 @@
       "severity": "error"
     },
     {
-      "line": 1969,
+      "line": 1974,
       "column": 29,
-      "stop_line": 1969,
+      "stop_line": 1974,
       "stop_column": 43,
       "path": "src/physicalai/policies/smolvla/model.py",
       "code": -2,

@@ -31,7 +31,7 @@ policy = Rldx1(base_model_path="RLWRLD/RLDX-1-PT")
 policy = Rldx1(
     base_model_path="RLWRLD/RLDX-1-PT",
     backbone_use_lora=False,  # Full fine-tune top-4 LLM layers
-    action_use_lora=True,     # LoRA on MSAT (r=64)
+    action_model_use_lora=True,     # LoRA on MSAT (r=64)
 )
 
 datamodule = LeRobotDataModule(repo_id="<user dataset>", train_batch_size=4)
@@ -42,14 +42,20 @@ trainer.fit(policy, datamodule)
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import torch
+from huggingface_hub import hf_hub_download
 from transformers.optimization import Adafactor
 
 from physicalai.data import Dataset, Observation
 from physicalai.policies.base import Policy
+from physicalai.policies.rldx1.config import RLDX1Config
+from physicalai.policies.rldx1.model import Rldx1Model
+from physicalai.policies.rldx1.pretrained_utils import extract_dataset_stats, retrieve_safetensors_shards
 from physicalai.train.schedulers import cosine_decay_with_warmup_scheduler
 from physicalai.train.utils import reformat_dataset_to_match_policy
 
@@ -58,8 +64,6 @@ try:
 except ImportError:
     OptimizerLRScheduler = Any  # type: ignore[assignment, misc]
 
-from .config import Rldx1Config
-from .model import Rldx1Model
 from .preprocessor import make_rldx1_transforms
 from .vtc_buffer import VtcWindowBuffer
 
@@ -137,18 +141,14 @@ class Rldx1(Policy):
     def __init__(  # noqa: PLR0913
         self,
         # Model architecture
-        chunk_size: int = 16,
         n_action_steps: int = 16,
         max_state_dim: int = 64,
         max_action_dim: int = 64,
         # Model source
-        base_model_path: str = "RLWRLD/RLDX-1-PT",
+        pretrained_name_or_path: str | None = "RLWRLD/RLDX-1-PT",
         revision: str | None = None,
-        model_name: str = "Qwen/Qwen3-VL-8B-Instruct",
         # Backbone
-        select_layer: int = 18,
-        attn_implementation: str = "sdpa",
-        n_cog_tokens: int = 64,
+        attn_implementation: Literal["sdpa", "flash_attention_2"] = "sdpa",
         # Fine-tuning control
         *,
         tune_top_llm_layers: int = 6,
@@ -161,7 +161,7 @@ class Rldx1(Policy):
         tune_vlln: bool = True,
         num_inference_timesteps: int = 4,
         backbone_use_lora: bool = False,
-        action_use_lora: bool = False,
+        action_model_use_lora: bool = False,
         # Optimizer
         optim: Literal["adamw_torch", "adamw_torch_fused", "adafactor"] = "adamw_torch",
         learning_rate: float = 1e-4,
@@ -180,53 +180,96 @@ class Rldx1(Policy):
         image_min_area: int | None = None,
         # Normalization
         clip_outliers: bool = True,
-        # Eager initialization (optional)
-        env_action_dim: int = 0,
         dataset_stats: dict[str, dict[str, list[float] | str | tuple]] | None = None,
+        embodiment_tag: str = "general_embodiment",
     ) -> None:
         """Initialize the RLDX-1 policy and save hyperparameters."""
         super().__init__(n_action_steps=n_action_steps)
 
-        self.config = Rldx1Config(
-            chunk_size=chunk_size,
-            n_action_steps=n_action_steps,
-            max_state_dim=max_state_dim,
-            max_action_dim=max_action_dim,
-            base_model_path=base_model_path,
-            revision=revision,
-            model_name=model_name,
-            select_layer=select_layer,
-            attn_implementation=attn_implementation,
-            n_cog_tokens=n_cog_tokens,
-            tune_top_llm_layers=tune_top_llm_layers,
-            tune_llm=tune_llm,
-            backbone_trainable_params_fp32=backbone_trainable_params_fp32,
-            tune_visual=tune_visual,
-            tune_projector=tune_projector,
-            use_vlln=use_vlln,
-            tune_diffusion_model=tune_diffusion_model,
-            tune_vlln=tune_vlln,
-            num_inference_timesteps=num_inference_timesteps,
-            backbone_use_lora=backbone_use_lora,
-            action_use_lora=action_use_lora,
-            optim=optim,
-            learning_rate=learning_rate,
-            weight_decay=weight_decay,
-            warmup_ratio=warmup_ratio,
-            scheduler_decay_lr=scheduler_decay_lr,
-            use_bf16=use_bf16,
-            compile_model=compile_model,
-            gradient_checkpointing=gradient_checkpointing,
-            video_length=video_length,
-            video_stride=video_stride,
-            color_jitter_params=color_jitter_params,
-            image_min_area=image_min_area,
-            clip_outliers=clip_outliers,
-        )
+        shard_files = None
+        if pretrained_name_or_path is not None:
+            self.config, dataset_stats, shard_files = self._from_hf(
+                pretrained_name_or_path,
+                revision=revision,
+                max_state_dim=max_state_dim,
+                max_action_dim=max_action_dim,
+                attn_implementation=attn_implementation,
+                # Fine-tuning
+                tune_diffusion_model=tune_diffusion_model,
+                use_vlln=use_vlln,
+                tune_vlln=tune_vlln,
+                tune_top_llm_layers=tune_top_llm_layers,
+                tune_llm=tune_llm,
+                backbone_trainable_params_fp32=backbone_trainable_params_fp32,
+                tune_visual=tune_visual,
+                tune_projector=tune_projector,
+                num_inference_timesteps=num_inference_timesteps,
+                backbone_use_lora=backbone_use_lora,
+                action_model_use_lora=action_model_use_lora,
+                # optimizer
+                optim=optim,
+                learning_rate=learning_rate,
+                weight_decay=weight_decay,
+                warmup_ratio=warmup_ratio,
+                scheduler_decay_lr=scheduler_decay_lr,
+                # Precision / compilation
+                use_bf16=use_bf16,
+                compile_model=compile_model,
+                gradient_checkpointing=gradient_checkpointing,
+                # VTC video window
+                video_length=video_length,
+                video_stride=video_stride,
+                # Image augmentation (train only)
+                color_jitter_params=color_jitter_params,
+                image_min_area=image_min_area,
+                # Normalization
+                clip_outliers=clip_outliers,
+                # Action prediciton
+                action_horizon=n_action_steps,
+                embodiment_tag=embodiment_tag,
+            )
+        else:
+            self.config = RLDX1Config(
+                base_model_path=pretrained_name_or_path,
+                revision=revision,
+                max_state_dim=max_state_dim,
+                max_action_dim=max_action_dim,
+                attn_implementation=attn_implementation,
+                # Fine-tuning
+                tune_diffusion_model=tune_diffusion_model,
+                use_vlln=use_vlln,
+                tune_vlln=tune_vlln,
+                tune_top_llm_layers=tune_top_llm_layers,
+                tune_llm=tune_llm,
+                backbone_trainable_params_fp32=backbone_trainable_params_fp32,
+                tune_visual=tune_visual,
+                tune_projector=tune_projector,
+                num_inference_timesteps=num_inference_timesteps,
+                backbone_use_lora=backbone_use_lora,
+                action_model_use_lora=action_model_use_lora,
+                # optimizer
+                optim=optim,
+                learning_rate=learning_rate,
+                weight_decay=weight_decay,
+                warmup_ratio=warmup_ratio,
+                scheduler_decay_lr=scheduler_decay_lr,
+                # Precision / compilation
+                use_bf16=use_bf16,
+                compile_model=compile_model,
+                gradient_checkpointing=gradient_checkpointing,
+                # VTC video window
+                video_length=video_length,
+                video_stride=video_stride,
+                # Image augmentation (train only)
+                color_jitter_params=color_jitter_params,
+                image_min_area=image_min_area,
+                # Normalization
+                clip_outliers=clip_outliers,
+                action_horizon=n_action_steps,
+                embodiment_tag=embodiment_tag,
+            )
 
-        # Save individual args (not the config object) for checkpoint restoration.
-        self.save_hyperparameters(ignore=["config"])
-        self.hparams["config"] = self.config.to_dict()
+        self.save_hyperparameters(ignore=["config", "pretrained_name_or_path", "compile_model"])
 
         self.model: Rldx1Model | None = None  # type: ignore[assignment]
         self._preprocessor: Rldx1Preprocessor | None = None
@@ -241,108 +284,153 @@ class Rldx1(Policy):
         )
 
         if dataset_stats is not None:
-            self._initialize_model(env_action_dim, dataset_stats)
+            self._initialize_model(dataset_stats, shard_files)
 
-    @classmethod
-    def from_config(cls, config: Rldx1Config) -> Rldx1:
-        """Build a policy from a :class:`Rldx1Config`.
+    def _from_hf(  # noqa: PLR6301, PLR0913, PLR0917
+        self,
+        pretrained_name_or_path: str,
+        revision: str | None,
+        max_state_dim: int,
+        max_action_dim: int,
+        attn_implementation: Literal["sdpa", "flash_attention_2"],
+        # Fine-tuning
+        tune_diffusion_model: bool,  # noqa: FBT001
+        use_vlln: bool,  # noqa: FBT001
+        tune_vlln: bool,  # noqa: FBT001
+        tune_top_llm_layers: int,
+        tune_llm: bool,  # noqa: FBT001
+        backbone_trainable_params_fp32: bool,  # noqa: FBT001
+        tune_visual: bool,  # noqa: FBT001
+        tune_projector: bool,  # noqa: FBT001
+        num_inference_timesteps: int,
+        backbone_use_lora: bool,  # noqa: FBT001
+        action_model_use_lora: bool,  # noqa: FBT001
+        # optimizer
+        optim: Literal["adamw_torch", "adamw_torch_fused", "adafactor"],
+        learning_rate: float,
+        weight_decay: float,
+        warmup_ratio: float,
+        scheduler_decay_lr: float,
+        # Precision / compilation
+        use_bf16: bool,  # noqa: FBT001
+        compile_model: bool,  # noqa: FBT001
+        gradient_checkpointing: bool,  # noqa: FBT001
+        # VTC video window
+        video_length: int,
+        video_stride: int,
+        # Image augmentation (train only)
+        color_jitter_params: dict[str, float] | None,
+        image_min_area: int | None,
+        # Normalization
+        clip_outliers: bool,  # noqa: FBT001
+        embodiment_tag: str,
+        # Action prediciton
+        action_horizon: int,
+    ) -> tuple[RLDX1Config, dict[str, dict[str, list[float] | str | tuple]], list[Path]]:
+        config_file = Path(hf_hub_download(pretrained_name_or_path, "config.json", revision=revision))  # nosec B615
+        shard_files = retrieve_safetensors_shards(pretrained_name_or_path, revision=revision)
+        stats_file = Path(hf_hub_download(pretrained_name_or_path, "processor/statistics.json", revision=revision))  # nosec B615
 
-        Args:
-            config: The policy configuration.
+        # --- parse config.json ---
+        with Path(config_file).open(encoding="utf-8") as f:
+            hf_config = json.load(f)
 
-        Returns:
-            An initialized :class:`Rldx1` policy.
-        """
-        return cls(
-            chunk_size=config.chunk_size,
-            n_action_steps=config.n_action_steps,
-            max_state_dim=config.max_state_dim,
-            max_action_dim=config.max_action_dim,
-            base_model_path=config.base_model_path,
-            revision=config.revision,
-            model_name=config.model_name,
-            select_layer=config.select_layer,
-            attn_implementation=config.attn_implementation,
-            n_cog_tokens=config.n_cog_tokens,
-            tune_top_llm_layers=config.tune_top_llm_layers,
-            tune_llm=config.tune_llm,
-            backbone_trainable_params_fp32=config.backbone_trainable_params_fp32,
-            tune_visual=config.tune_visual,
-            tune_projector=config.tune_projector,
-            use_vlln=config.use_vlln,
-            tune_diffusion_model=config.tune_diffusion_model,
-            tune_vlln=config.tune_vlln,
-            num_inference_timesteps=config.num_inference_timesteps,
-            backbone_use_lora=config.backbone_use_lora,
-            action_use_lora=config.action_use_lora,
-            optim=config.optim,
-            learning_rate=config.learning_rate,
-            weight_decay=config.weight_decay,
-            warmup_ratio=config.warmup_ratio,
-            scheduler_decay_lr=config.scheduler_decay_lr,
-            use_bf16=config.use_bf16,
-            compile_model=config.compile_model,
-            gradient_checkpointing=config.gradient_checkpointing,
-            color_jitter_params=config.color_jitter_params,
-            clip_outliers=config.clip_outliers,
+        hf_config["base_model_path"] = pretrained_name_or_path
+        hf_config["color_jitter_params"] = color_jitter_params
+        hf_config["backbone_trainable_params_fp32"] = backbone_trainable_params_fp32
+        hf_config["max_state_dim"] = max_state_dim
+        hf_config["max_action_dim"] = max_action_dim
+        hf_config["attn_implementation"] = attn_implementation
+        hf_config["tune_diffusion_model"] = tune_diffusion_model
+        hf_config["use_vlln"] = use_vlln
+        hf_config["tune_vlln"] = tune_vlln
+        hf_config["tune_top_llm_layers"] = tune_top_llm_layers
+        hf_config["tune_llm"] = tune_llm
+        hf_config["tune_visual"] = tune_visual
+        hf_config["tune_projector"] = tune_projector
+        hf_config["num_inference_timesteps"] = num_inference_timesteps
+        hf_config["backbone_use_lora"] = backbone_use_lora
+        hf_config["action_model_use_lora"] = action_model_use_lora
+        hf_config["optim"] = optim
+        hf_config["learning_rate"] = learning_rate
+        hf_config["weight_decay"] = weight_decay
+        hf_config["warmup_ratio"] = warmup_ratio
+        hf_config["scheduler_decay_lr"] = scheduler_decay_lr
+        hf_config["use_bf16"] = use_bf16
+        hf_config["compile_model"] = compile_model
+        hf_config["gradient_checkpointing"] = gradient_checkpointing
+        hf_config["video_length"] = video_length
+        hf_config["video_stride"] = video_stride
+        hf_config["clip_outliers"] = clip_outliers
+        hf_config["image_min_area"] = image_min_area
+        hf_config["action_horizon"] = action_horizon
+        hf_config["embodiment_tag"] = embodiment_tag
+
+        # from_dict skips unknown keys and coerces lists→tuples via type hints
+        config = RLDX1Config.from_dict(hf_config)
+
+        # --- build dataset_stats from HF artefacts ---
+        dataset_stats = extract_dataset_stats(
+            stats_file,
+            embodiment_tag=embodiment_tag,
+            max_state_dim=max_state_dim,
+            max_action_dim=max_action_dim,
         )
+        return config, dataset_stats, shard_files
 
     def _initialize_model(
         self,
-        env_action_dim: int,
-        dataset_stats: dict[str, dict[str, list[float] | str | tuple]] | None = None,
+        dataset_stats: dict[str, dict[str, list[float] | str | tuple]],
+        shard_files: list[Path] | None = None,
     ) -> None:
         """Build the model (and preprocessors) for both init paths.
 
         Args:
-            env_action_dim: Environment action dimension.
             dataset_stats: Dataset normalization statistics.
+            shard_files: List of shard files containing model weights.
         """
-        config = self.config
-        self.model = Rldx1Model.from_pretrained(
-            config.base_model_path,
-            revision=config.revision,
-            attn_implementation=config.attn_implementation,
-            use_bf16=config.use_bf16,
-            chunk_size=config.chunk_size,
-            n_action_steps=config.n_action_steps,
+        config: RLDX1Config = self.config
+        self.model = Rldx1Model(
+            base_model_path=config.base_model_path,
             max_state_dim=config.max_state_dim,
             max_action_dim=config.max_action_dim,
-            select_layer=config.select_layer,
-            n_cog_tokens=config.n_cog_tokens,
+            action_horizon=config.action_horizon,
+            attn_implementation=config.attn_implementation,
             num_inference_timesteps=config.num_inference_timesteps,
-            compile_model=config.compile_model,
-            gradient_checkpointing=config.gradient_checkpointing,
-            # Fine-tuning / PEFT control -> bridged onto the vendored RLDXNetworkConfig.
-            # Use independent backbone/action PEFT control with fallback to master switch.
-            backbone_peft_mode="lora" if config.backbone_use_lora else "full",
+            use_vlln=config.use_vlln,
+            tune_projector=config.tune_projector,
+            tune_visual=config.tune_visual,
+            tune_vlln=config.tune_vlln,
+            tune_diffusion_model=config.tune_diffusion_model,
             tune_top_llm_layers=config.tune_top_llm_layers,
             tune_llm=config.tune_llm,
             backbone_trainable_params_fp32=config.backbone_trainable_params_fp32,
-            tune_visual=config.tune_visual,
-            tune_projector=config.tune_projector,
-            use_vlln=config.use_vlln,
-            tune_diffusion_model=config.tune_diffusion_model,
-            tune_vlln=config.tune_vlln,
-            backbone_lora_rank=config.backbone_lora_rank,
-            backbone_lora_alpha=config.backbone_lora_alpha,
-            backbone_lora_dropout=config.backbone_lora_dropout,
-            backbone_lora_targets=config.backbone_lora_targets,
-            action_peft_mode="lora" if config.action_use_lora else "full",
-            action_lora_rank=config.action_lora_rank,
-            action_lora_alpha=config.action_lora_alpha,
-            action_lora_dropout=config.action_lora_dropout,
-            action_lora_targets=config.action_lora_targets,
+            backbone_use_lora=config.backbone_use_lora,
+            action_model_use_lora=config.action_model_use_lora,
+            gradient_checkpointing=config.gradient_checkpointing,
+            diffusion_model_cfg=config.diffusion_model_cfg,
+            backbone_lora_target_modules=config.backbone_lora_target_modules,
+            action_model_lora_target_modules=config.action_model_lora_target_modules,
             video_length=config.video_length,
             video_stride=config.video_stride,
         )
+
+        if shard_files is not None:
+            self.model.load_sharded_weights(shard_files)
+
+        if config.use_bf16:
+            self.model.to(torch.bfloat16)
+
+            if config.backbone_trainable_params_fp32:
+                for _, p in self.model.backbone.named_parameters():
+                    if p.requires_grad:
+                        p.data = p.data.to(torch.float32)
+
         self._preprocessor, self._postprocessor = make_rldx1_transforms(
             stats=dataset_stats,  # type: ignore[arg-type]
-            env_action_dim=env_action_dim,
             max_state_dim=config.max_state_dim,
             max_action_dim=config.max_action_dim,
-            action_horizon=config.chunk_size,
-            model_name=config.model_name,
+            action_horizon=config.action_horizon,
             revision=config.revision,
             use_percentiles=config.use_percentiles,
             clip_outliers=config.clip_outliers,
@@ -356,12 +444,14 @@ class Rldx1(Policy):
         )
 
     def setup(self, stage: str) -> None:
-        """Lazy-init the model from the datamodule before fit/validate/test.
+        """Set up model from datamodule (lazy or fine-tuning path).
 
-        Skips if already initialized via the eager path.
+        Called by Lightning before fit/validate/test/predict.
 
-        Args:
-            stage: Lightning stage ('fit', 'validate', 'test', 'predict').
+        - **Lazy path**: model is None → build model + preprocessors from dataset stats.
+        - **Fine-tuning path**: model already loaded from pretrained → rebuild
+          preprocessors with the training dataset's stats so normalization
+          matches the new data distribution.
 
         Raises:
             TypeError: If the train dataset is not a physicalai Dataset.
@@ -372,21 +462,54 @@ class Rldx1(Policy):
         train_dataset = datamodule.train_dataset
 
         if not isinstance(train_dataset, Dataset):
-            msg = f"Expected physicalai.data.Dataset, got {type(train_dataset)}"
+            msg = f"Expected physicalai Dataset, got {type(train_dataset)}"
             raise TypeError(msg)
 
         stats_dict = train_dataset.stats
-        action_features = train_dataset.action_features
-        env_action_dim = 0
-        for feature in action_features.values():
-            if feature.shape:
-                env_action_dim = feature.shape[0]
-                break
 
-        self.hparams["env_action_dim"] = env_action_dim
+        if self.model is not None:
+            # Fine-tuning path: model exists from pretrained, but the
+            # preprocessor stats must match the training data distribution.
+            self._update_preprocessor_stats(stats_dict)
+            reformat_dataset_to_match_policy(self, datamodule)
+            return
+
         self.hparams["dataset_stats"] = stats_dict
-        self._initialize_model(env_action_dim, stats_dict)
+
+        self._initialize_model(stats_dict)
+
         reformat_dataset_to_match_policy(self, datamodule)
+
+    def _update_preprocessor_stats(
+        self,
+        dataset_stats: dict[str, dict[str, list[float] | str | tuple]],
+    ) -> None:
+        """Rebuild preprocessor/postprocessor with new dataset stats.
+
+        Used when fine-tuning a pretrained model on a new dataset: the model
+        weights come from the checkpoint, but normalization statistics must
+        reflect the training data.
+        """
+        logger.info("Updating preprocessor stats for fine-tuning dataset")
+        config = self.config
+        self._preprocessor, self._postprocessor = make_rldx1_transforms(
+            stats=dataset_stats,  # type: ignore[arg-type]
+            max_state_dim=config.max_state_dim,
+            max_action_dim=config.max_action_dim,
+            action_horizon=config.action_horizon,
+            revision=config.revision,
+            use_percentiles=config.use_percentiles,
+            clip_outliers=config.clip_outliers,
+            image_max_area=config.image_max_area,
+            image_min_area=config.image_min_area or 0,  # type: ignore[arg-type]
+            image_resize_m=config.image_resize_m,
+            random_crop_fraction=config.random_crop_fraction,
+            random_rotation_angle=config.random_rotation_angle,
+            color_jitter_params=config.color_jitter_params,
+            embodiment_id=int(config.embodiment_id),  # type: ignore[arg-type]
+        )
+        self._dataset_stats = dataset_stats
+        self.hparams["dataset_stats"] = dataset_stats
 
     def forward(self, batch: Observation) -> torch.Tensor | tuple[torch.Tensor, dict[str, float]]:
         """Forward pass: training loss in train mode, action chunk in eval.

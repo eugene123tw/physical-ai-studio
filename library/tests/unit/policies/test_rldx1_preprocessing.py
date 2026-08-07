@@ -632,11 +632,10 @@ _NUM_VIEWS = 2
 
 def test_rldx1_observation_delta_indices_video_window() -> None:
     """``observation_delta_indices`` is the VTC window [-6, -4, -2, 0] for L=4, S=2."""
-    from physicalai.policies.rldx1.model import Rldx1Model
+    from physicalai.policies.rldx1.model import compute_action_delta_indices, compute_video_window_offsets
 
-    model = Rldx1Model(video_length=_VIDEO_LENGTH, video_stride=_VIDEO_STRIDE)
-    assert model.observation_delta_indices == [-6, -4, -2, 0]
-    assert model.action_delta_indices == list(range(model._chunk_size))  # noqa: SLF001
+    assert compute_video_window_offsets(_VIDEO_LENGTH, _VIDEO_STRIDE) == [-6, -4, -2, 0]
+    assert compute_action_delta_indices(ACTION_HORIZON) == list(range(ACTION_HORIZON))
 
 
 @pytest.mark.parametrize(
@@ -654,10 +653,9 @@ def test_rldx1_observation_delta_indices_parametrized(
     expected: list[int],
 ) -> None:
     """The video-window offsets scale with ``video_length`` / ``video_stride``."""
-    from physicalai.policies.rldx1.model import Rldx1Model
+    from physicalai.policies.rldx1.model import compute_video_window_offsets
 
-    model = Rldx1Model(video_length=video_length, video_stride=video_stride)
-    assert model.observation_delta_indices == expected
+    assert compute_video_window_offsets(video_length, video_stride) == expected
 
 
 @pytest.mark.parametrize(

@@ -1,339 +1,241 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
+"""RLDX network configuration dataclass."""
 
-"""Configuration for the RLDX-1 policy.
-
-This module provides the dataclass configuration for the RLDX-1 policy, a
-flow-matching Vision-Language-Action model built on a Qwen3-VL-8B backbone and
-a Multi-Stream Action Transformer (MSAT) action head.
-
-The configuration mirrors the **pre-train (PT) shape** of the upstream RLDX
-config (RLWRLD/RLDX-1), vendored here as ``RLDXNetworkConfig``. It deliberately
-omits the mid-train add-on streams (motion / memory / physics) and the RECAP RL
-plumbing, which are
-deferred to phase 2. See ``library/docs/rldx-1-integration.md`` for the full
-scope decision.
-
-Architecture dimensions (MSAT depth, attention heads, ``diffusion_model_cfg``,
-etc.) are read from the checkpoint ``config.json`` at load time, following the
-same pattern as :class:`physicalai.policies.groot.GrootConfig`. This config
-holds the Studio-level knobs: model source, fine-tuning / PEFT control, and
-flow-matching sampling parameters.
-
-For CLI usage, use a YAML config under ``configs/physicalai/``:
-
-    physicalai fit --config configs/physicalai/rldx1-ft-default.yaml
-
-Example (API):
-    >>> from physicalai.policies.rldx1 import Rldx1Config
-    >>> config = Rldx1Config(
-    ...     base_model_path="RLWRLD/RLDX-1-PT",
-    ...     backbone_use_lora=False,
-    ...     action_lora_rank=64,
-    ... )
-"""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from physicalai.training_config import Config
 
-# Size of the per-embodiment projector bank in RLDX-1-PT (``W.shape[0]`` of each
-# CategorySpecificLinear). Valid ``embodiment_id`` slots are ``[0, 36)``.
-MAX_NUM_EMBODIMENTS = 36
-
 
 @dataclass
-class Rldx1Config(Config):
-    """Configuration for the RLDX-1 policy (PT -> FT path only).
+class RLDX1Config(Config):
+    """Unified configuration for RLDX model with backbone and action model."""
 
-    RLDX-1 is RLWRLD's flow-matching VLA. v1 supports the single reproducible
-    training path: fine-tuning ``RLWRLD/RLDX-1-PT`` on a LeRobot dataset, the
-    same recipe that produced every released ``RLDX-1-FT-*`` checkpoint.
+    dtype: str = "bfloat16"  # Use bfloat16 for Flash Attention compatibility
 
-    The motion / memory / physics add-on streams and the RECAP RL trainer are
-    out of v1 scope; their toggle fields are kept (defaulting to ``False``) only
-    so the loader can tolerate FT ``config.json`` files that carry them. Setting
-    any add-on to ``True`` raises -- see :meth:`__post_init__`.
+    # Backbone architecture
+    base_model_path: str | None = "RLWRLD/RLDX-1-PT"
 
-    Attributes:
-        chunk_size: Number of action predictions per forward pass (action horizon).
-        n_action_steps: Number of action steps to execute per chunk.
-        max_state_dim: Maximum state dimension (shorter states zero-padded).
-        max_action_dim: Maximum action dimension (shorter actions zero-padded).
-        base_model_path: HuggingFace model ID or local path to the base checkpoint.
-        revision: Pinned git commit SHA for the base checkpoint download. Should be
-            a concrete SHA, never a branch name (lib.security rule 9).
-        model_name: HuggingFace ID of the Qwen3-VL backbone.
-        embodiment_id: Per-embodiment projector slot in the MSAT action head.
-            Either a slot ``int`` in ``[0, 36)`` or a tag-name ``str`` (e.g.
-            ``"fractal20220817_data"``) resolved via
-            ``EMBODIMENT_TAG_TO_PROJECTOR_INDEX``. Default 0 (general_embodiment)
-            for a fresh new-robot fine-tune; set the slot a released checkpoint
-            was trained on (0/1/3) to load it. Normalized to an int at init.
-        select_layer: Index of the VLM hidden layer used as cognition features.
-        backbone_embedding_dim: Backbone hidden dimension projected into the action head.
-        attn_implementation: Attention backend ('sdpa', 'flash_attention_2', 'eager').
-        n_cog_tokens: Number of cognition tokens routed from the backbone to MSAT.
-        tune_top_llm_layers: Number of top LLM layers to fine-tune (lower layers frozen).
-        tune_llm: Whether to fine-tune the entire LLM backbone (all decoder layers,
-            input embeddings, and lm_head). Overrides ``tune_top_llm_layers``.
-        backbone_trainable_params_fp32: Whether to cast trainable backbone
-            parameters to float32 after bf16 loading for optimizer stability.
-        tune_visual: Whether to fine-tune the vision tower.
-        tune_projector: Whether to fine-tune the cognition/state/action projectors.
-        use_vlln: Whether to construct the VLM-output layer norm in the action head.
-            Default ``True``. Set ``False`` to replace it with identity.
-        tune_diffusion_model: Whether to fine-tune the MSAT action model.
-        tune_vlln: Whether to fine-tune the VLM-output layer norm.
-        backbone_use_lora: Whether to use LoRA on the backbone top layers.
-            Default False (full fine-tuning). Set to True to use LoRA.
-        action_use_lora: Whether to use LoRA on the MSAT action model.
-            Default False (full fine-tuning). Set to True to use LoRA.
-        backbone_lora_rank: LoRA rank for the backbone.
-        backbone_lora_alpha: LoRA alpha for the backbone.
-        backbone_lora_dropout: LoRA dropout for the backbone.
-        backbone_lora_targets: Linear module names to wrap with LoRA in the backbone.
-        action_lora_rank: LoRA rank for the action model (paper App. D free-lunch default).
-        action_lora_alpha: LoRA alpha for the action model.
-        action_lora_dropout: LoRA dropout for the action model.
-        action_lora_targets: Linear module names to wrap with LoRA in the action model.
-        num_inference_timesteps: Number of flow-matching denoising steps at inference.
-        noise_beta_alpha: Alpha of the Beta distribution used to sample flow time.
-        noise_beta_beta: Beta of the Beta distribution used to sample flow time.
-        noise_s: Time-shift parameter for the flow-matching schedule.
-        num_timestep_buckets: Number of buckets for the timestep embedding.
-        state_dropout_prob: Probability of dropping the state input during training.
-        state_additive_noise_scale: Scale of additive Gaussian noise on state features.
-        image_max_area: Target max area (pixels) for aspect-preserving image resize.
-        image_min_area: Minimum pixel-area floor for the Qwen vision tiler. Frames
-            below it are upscaled (aspect-preserving) before encoding. ``None``
-            (default) leaves the tiler's own floor untouched; set e.g. ``65536``
-            (256x256) to lift tiny frames such as 96x96 PushT to a richer token
-            sequence.
-        image_resize_m: Alignment multiple for the resized/cropped image dimensions.
-        video_length: Number of VTC temporal frames per observation step.
-        video_stride: Action-step stride between VTC video frames.
-        random_crop_fraction: Train-time fractional crop size in ``(0, 1]``
-            (``None`` disables the crop stage).
-        random_rotation_angle: Train-time rotation limit in degrees (``None`` /
-            ``0`` disables rotation).
-        color_jitter_params: Train-time ``A.ColorJitter`` params (``None``
-            disables color jitter).
-        use_percentiles: Whether to normalize with 1st/99th percentiles (vs min/max).
-        clip_outliers: Whether to clip normalized state/action to ``[-1, 1]`` (upstream
-            ``clip_outliers``). ``True`` (default) matches the upstream RLDX-1 recipe:
-            training targets and decoded actions are clamped to the normalization
-            bounds. Set ``False`` (Pi05-style, no clip) for wide-range action spaces
-            where ``QUANTILES`` bounds would truncate task-critical extremes (e.g.
-            PushT). Gates both the train-time clip and the inference denormalize clamp.
-        use_memory: Phase-2 memory stream. Must be False in v1.
-        use_motion: Phase-2 motion stream. Must be False in v1.
-        use_physics: Phase-2 physics stream. Must be False in v1.
-        optim: Optimizer to build in ``configure_optimizers``. ``"adamw_torch"``
-            (default) and ``"adamw_torch_fused"`` keep full Adam moment state;
-            ``"adafactor"`` factors the second moment to cut optimizer memory
-            (roughly halves optimizer state) at a small quality/throughput cost.
-        learning_rate: Learning rate for the optimizer.
-        weight_decay: Weight decay for the optimizer.
-        warmup_ratio: Warmup ratio (0.0-1.0) of total training steps.
-        scheduler_decay_lr: Final learning rate after cosine decay. The LR is
-            cosine-decayed from ``learning_rate`` down to this value over the
-            remaining (post-warmup) training steps.
-        use_bf16: Whether to use bfloat16 precision.
-        compile_model: Whether to torch.compile the model.
-        gradient_checkpointing: Whether to enable activation checkpointing in
-            the MSAT action model during training.
-
-    Examples:
-        LoRA on both the backbone top layers and the MSAT action model (default):
-
-        >>> config = Rldx1Config()
-        >>> config.get_backbone_use_lora(), config.get_action_use_lora()
-        (True, True)
-
-        Full fine-tune backbone + LoRA on action (Paper Table 6, row 1):
-
-        >>> config = Rldx1Config(backbone_use_lora=False, action_use_lora=True)
-    """
-
-    # Model architecture / action chunking
-    chunk_size: int = 16  # action_horizon
-    n_action_steps: int = 16
-    max_state_dim: int = 64
-    max_action_dim: int = 64
-
-    # Model source
-    base_model_path: str = "RLWRLD/RLDX-1-PT"
     revision: str | None = None
-    model_name: str = "Qwen/Qwen3-VL-8B-Instruct"
-
-    # Embodiment projector slot in the MSAT action head. Default 0
-    # (general_embodiment), the slot RLDX-1-PT reserves and pre-conditions for
-    # downstream fine-tuning (highest-norm projector in PT); every released FT
-    # used it. Accepts either a slot int in [0, 36) or a tag-name string resolved
-    # via EMBODIMENT_TAG_TO_PROJECTOR_INDEX. To load a released benchmark
-    # checkpoint, set the slot it was trained on:
-    #   0  general_embodiment   -> FT-ROBOCASA, FT-RC365, FT-LIBERO, FT-GR1
-    #   1  fractal20220817_data -> FT-SIMPLER-GOOGLE
-    #   3  bridge_orig          -> FT-SIMPLER-WIDOWX
-    # (35 = new_embodiment is the legacy GR00T slot, superseded by general_embodiment.)
-    # Normalized to an int in __post_init__.
-    embodiment_id: int | str = 0
-
-    # Backbone
+    backbone_embedding_dim: int = 4096  # project_to_dim
     select_layer: int = 18
-    backbone_embedding_dim: int = 4096
-    attn_implementation: str = "sdpa"
-    n_cog_tokens: int = 64
+    reproject_vision: bool = False
+    use_flash_attention: bool = True
+    load_bf16: bool = True  # Enable BF16 loading
+    freeze_cog_tokens: bool = False  # Freeze cog_emb to prevent VLM backprop
 
-    # Fine-tuning control (full / partial)
-    tune_top_llm_layers: int = 4
+    # Backbone fine-tuning control
+    tune_top_llm_layers: int = 4  # Number of top LLM layers to tune
     tune_llm: bool = False
-    backbone_trainable_params_fp32: bool = True
     tune_visual: bool = False
-    tune_projector: bool = True
-    use_vlln: bool = False
-    tune_diffusion_model: bool = True
-    tune_vlln: bool = True
+    # TODO @maintainer: upstream defaults this to True, but the fp32 copies of  # noqa: FIX002, TD003
+    # trainable backbone params OOM on an A100. DeepSpeed ZeRO-Offload (CPU)
+    # avoids the OOM but is very slow in practice. Explore a better way to
+    # re-enable True by default.
+    backbone_trainable_params_fp32: bool = False
 
-    # Independent LoRA control for backbone and action model.
+    # Backbone (Qwen3 LLM) LoRA. Mirror of the action-model surface:
+    # ``backbone_use_lora`` toggles PEFT injection into the LLM layers;
+    # ``backbone_lora_num_layers`` picks the top-N suffix (-1 = all layers,
+    # 0 = skip, N > 0 = last N). When LoRA is active the backbone is set
+    # to ``requires_grad_(False)`` first and only the injected LoRA params
+    # remain trainable — so ``tune_top_llm_layers`` is effectively ignored
+    # (the launcher warns about the conflict).
+    # ``backbone_lora_target_modules`` covers Qwen3 attention + MLP
+    # projections.
     backbone_use_lora: bool = False
-    action_use_lora: bool = False
-
-    # Backbone (Qwen3-VL top layers) LoRA hyperparameters.
     backbone_lora_rank: int = 64
     backbone_lora_alpha: int = 64
     backbone_lora_dropout: float = 0.0
-    backbone_lora_targets: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj")
-
-    # Action model (MSAT) LoRA hyperparameters. r=64 is the paper-recommended
-    # free lunch. Targets are MSAT block module names (V-L / state-action / physics
-    # QKV + output projections and the MMDiT inner FFN linears), not Qwen attention
-    # names. Absent targets (e.g. p_qkv/p_proj when physics is disabled) are
-    # filtered before the PEFT call.
-    action_lora_rank: int = 64
-    action_lora_alpha: int = 64
-    action_lora_dropout: float = 0.0
-    action_lora_targets: tuple[str, ...] = (
-        "vl_qkv",
-        "vl_proj",
-        "sa_qkv",
-        "sa_proj",
-        "p_qkv",
-        "p_proj",
-        "linear1",
-        "linear2",
+    backbone_lora_num_layers: int = -1
+    backbone_lora_target_modules: list[str] = field(
+        default_factory=lambda: [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
     )
 
-    # Flow matching
+    # Image pipeline parameters
+    # Step 1 — aspect-ratio-preserving resize + m-aligned crop
+    image_max_area: int = 65536  # 256 * 256 by default
+    image_resize_m: int = 32
+    image_min_area: int | None = None
+    # Step 2 — optional fractional crop + resize-back (train: random, eval: center)
+    random_crop_fraction: float | None = None  # None = no-op
+    # Step 3 — optional photometric / geometric augmentation (train only)
+    random_rotation_angle: int | None = None
+    color_jitter_params: dict[str, float] | None = None
+    formalize_language: bool = True
+    apply_sincos_state_encoding: bool = False  # Global flag to enable per-embodiment sin/cos encoding
+    use_percentiles: bool = True
+    conversation_image_first: bool = False
+
+    # Video input configuration
+    # ``use_video`` is an architectural invariant: every supported
+    # checkpoint embeds VTC video tokens.
+    use_video: bool = True
+    video_length: int = 4
+    video_stride: int = 2  # Action-step stride between video frames in context window
+
+    # Action head architecture (MSAT)
+    max_state_dim: int = 64  # Default from state_shape
+    max_action_dim: int = 64  # Default from action_shape
+    action_horizon: int = 16
+    hidden_size: int = 1024
+    input_embedding_dim: int = 1536
+    general_embodiment_train_ratio: float = 0
+    add_pos_embed: bool = True
+    attn_dropout: float = 0.2
+    use_vlln: bool = False
+    max_seq_len: int = 1024
+    n_cog_tokens: int = 64
+    diffusion_model_cfg: dict = field(
+        default_factory=lambda: {
+            "attention_head_dim": 64,
+            "depth_multi_stream": 4,
+            "depth_single_stream": 8,
+            "dropout": 0.2,
+            "num_attention_heads": 24,
+            "output_dim": 1024,
+            "positional_embeddings": "rope_sa_only",
+            "rope_theta": 10000.0,
+            "temb_type": "input_token",
+            "gradient_checkpointing": False,
+            "action_model_max_seq_len": 512,
+            "pre_norm": "layer_norm",
+            "qk_norm": "rms_norm",
+        },
+    )
+
+    # Action head fine-tuning control
+    tune_projector: bool = True
+    tune_diffusion_model: bool = True
+    tune_vlln: bool = True
+
+    # Action model (MSAT) LoRA. When ``action_model_use_lora=True``,
+    # ``RLDXActionModel.set_trainable_parameters`` injects PEFT LoRA
+    # adapters into the MSAT linear projections listed in
+    # ``action_model_lora_target_modules`` instead of full-tuning the DiT.
+    # The default target list covers MSAT's V-L / state-action / physics
+    # QKV + output projections + the MMDiT inner FFN linears (see
+    # ``rldx/model/modules/action_model/blocks.py``). Targets that don't
+    # exist in the current MSAT (e.g. ``p_qkv``/``p_proj`` when
+    # ``use_physics=False``) are filtered before the PEFT call.
+    action_model_use_lora: bool = False
+    action_model_lora_rank: int = 64
+    action_model_lora_alpha: int = 64
+    action_model_lora_dropout: float = 0.0
+    action_model_lora_target_modules: list[str] = field(
+        default_factory=lambda: [
+            "vl_qkv",
+            "vl_proj",
+            "sa_qkv",
+            "sa_proj",
+            "p_qkv",
+            "p_proj",
+            "linear1",
+            "linear2",
+        ],
+    )
+
+    # Flow matching parameters
     num_inference_timesteps: int = 4
     noise_beta_alpha: float = 1.5
     noise_beta_beta: float = 1.0
     noise_s: float = 0.999
     num_timestep_buckets: int = 1000
 
-    # State augmentation
-    state_dropout_prob: float = 0.0
-    state_additive_noise_scale: float = 0.0
+    # State Augmentation parameters
+    state_dropout_prob: float = 0.0  # State dropout probability
+    state_additive_noise_scale: float = 0.0  # Scale for additive Gaussian noise on state features
+    clip_outliers: bool = True  # Studio-only: gates train-time clip + inference clamp
 
-    # Image / language pipeline
-    image_max_area: int = 65536  # 256 * 256
-    image_min_area: int | None = None
-    image_resize_m: int = 32
-    # VTC video window: each camera view carries ``video_length`` temporal frames
-    # sampled at ``video_stride`` action-steps (offsets [-6, -4, -2, 0]). Used to
-    # build ``delta_timestamps`` (see ``get_rldx1_delta_timestamps``); the
-    # released FT checkpoints were all trained with 4 frames at stride 2.
-    video_length: int = 4
-    video_stride: int = 2
-    # Train-time image augmentation (upstream ReplayCompose). All default off so
-    # eval / inference is deterministic; set to reproduce an FT training recipe.
-    # One sampled param set is shared across a sample's frames and views.
-    random_crop_fraction: float | None = None
-    random_rotation_angle: int | None = None
-    color_jitter_params: dict[str, float] | None = None
-    use_percentiles: bool = True
-    # Clip normalized state/action to [-1, 1] (upstream clip_outliers). True keeps
-    # upstream parity; False (Pi05-style) preserves out-of-percentile action tails
-    # for wide-range tasks like PushT. Gates both the train clip and infer clamp.
-    clip_outliers: bool = True
+    # Multi-embodiment parameters
+    max_num_embodiments: int = 36
+    embodiment_id: int | str = 0  # Studio-only: resolved to a projector slot int by Rldx1Config
+    embodiment_tag: str = "general_embodiment"  # Studio-only: resolved to a projector slot int by Rldx1Config
 
-    # Phase-2 add-on streams. Kept so FT configs that carry them load cleanly;
-    # must remain False in v1.
-    use_memory: bool = False
+    # Memory configuration (phase-2 add-on)
+    use_memory: bool = False  # Enable memory-augmented cognition tokens
+    memory_length: int = 4  # Number of past timesteps for memory (= context_window)
+    memory_n_cog_tokens: int | None = (
+        None  # Number of cognition tokens routed through memory (defaults to n_cog_tokens)
+    )
+    concat_memory: bool = False  # If True, concat MQ_augmented after MQ_original instead of replacing
+    memory_dropout_prob: float = 0.0  # Dropout ratio for augmented cognition tokens (concat_memory=True only, mask-out)
+    memory_stride: int = 16  # Action-step stride between memory snapshots (should match execution_horizon)
+    memory_cfg: dict = field(
+        default_factory=lambda: {
+            "hidden_size": 4096,
+            "intermediate_size": 16384,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 16,
+            "num_key_value_heads": 16,
+            "max_position_embeddings": 32,
+            "rms_norm_eps": 1e-5,
+            "use_causal_attn": True,
+            "use_rope": True,
+        },
+    )
+
+    # Motion module configuration (phase-2 add-on)
     use_motion: bool = False
-    use_physics: bool = False
+    motion_insert_layer: int = 9
+    motion_d_hid: int = 512
+    motion_window: tuple = (5, 9, 9)
+    motion_ext_chnls: tuple = (256,)
+    motion_int_chnls: tuple = (256, 256, 512)
+    motion_corr_func: str = "cosine"
+    motion_n_encoders: int = 1
+    motion_use_layerscale: bool = False
+    motion_layerscale_init: float = 1e-5
+    motion_use_layernorm: bool = False
+    motion_use_syncbn: bool = False
+    motion_injection_point: str = "vision_encoder"  # "vision_encoder" or "vl_input"
+    motion_pool_type: str = "avg"  # "avg" or "conv" (spatial pooling for vl_input)
+    motion_drop: bool = True  # drop motion module tokens at internal_projection layer
+    motion_gradient_check: bool = False  # log motion module gradient norms during training
+    motion_int_mode: str = "lite"  # "lite" (1x1 Conv3d L-fuse, default) or "full" (3-layer 3x3 conv stack)
 
-    # Optimizer / training hyperparameters
+    # Physics (tactile/torque) configuration (phase-2 add-on)
+    use_physics: bool = False
+    physics_keys: list[str] = field(default_factory=list)  # e.g., ["tactile", "torque"]
+    physics_dims: list[int] = field(
+        default_factory=list,
+    )  # Per-key dimensions, aligned with `physics_keys` (e.g., [30, 7])
+    physics_loss_weight: float = 0.1
+    allow_missing_physics: bool = False  # If True, samples without physics data are zero-filled and attention-masked
+    physics_delta_indices: list[int] | None = None  # Injected from modality_configs in setup.py; d<=0 = hist, d>0 = fut
+    physics_use_flow_matching: bool = True  # False switches to the all-conditioning + MSE loss path
+    physics_dropout_prob: float = 0.0
+    """Per-sample dropout on physics conditioning tokens during training.
+    Flow-matching mode drops only history tokens; the MSE-loss path drops
+    the full sequence."""
+
+    @property
+    def physics_dim(self) -> int:
+        """Total physics dimension, derived from physics_dims."""
+        return sum(self.physics_dims) if self.physics_dims else 0
+
+    # Optimizer & scheduler
     optim: Literal["adamw_torch", "adamw_torch_fused", "adafactor"] = "adamw_torch"
     learning_rate: float = 1e-4
     weight_decay: float = 0.01
     warmup_ratio: float = 0.05
     scheduler_decay_lr: float = 1e-5
 
-    # Precision / compilation
+    # Precision & compute
     use_bf16: bool = True
     compile_model: bool = False
+    # Top-level flag; ``diffusion_model_cfg["gradient_checkpointing"]`` above
+    # remains the one MSAT actually constructs from.
     gradient_checkpointing: bool = False
 
-    def __post_init__(self) -> None:
-        """Enforce the v1 scope boundary and normalize ``embodiment_id``.
-
-        Raises:
-            NotImplementedError: If a phase-2 add-on stream or the unsupported feature is enabled.
-        """
-        for name in ("use_memory", "use_motion", "use_physics"):
-            if getattr(self, name):
-                msg = (
-                    f"Rldx1Config.{name}=True is a phase-2 feature and is not "
-                    "supported in v1. See library/docs/rldx-1-integration.md."
-                )
-                raise NotImplementedError(msg)
-
-        self.embodiment_id = self._resolve_embodiment_id(self.embodiment_id)
-
-    @staticmethod
-    def _resolve_embodiment_id(value: int | str) -> int:
-        """Resolve an embodiment tag name or slot index to a projector slot int.
-
-        Args:
-            value: Either a projector slot ``int`` in ``[0, MAX_NUM_EMBODIMENTS)``
-                or a tag-name ``str`` key of ``EMBODIMENT_TAG_TO_PROJECTOR_INDEX``
-                (e.g. ``"fractal20220817_data"``).
-
-        Returns:
-            The resolved projector slot index.
-
-        Raises:
-            ValueError: If a string tag is unknown or an int is out of range.
-        """
-        if isinstance(value, str):
-            from physicalai.policies.rldx1.components.embodiments import (  # noqa: PLC0415
-                EMBODIMENT_TAG_TO_PROJECTOR_INDEX,
-            )
-
-            try:
-                return EMBODIMENT_TAG_TO_PROJECTOR_INDEX[value]
-            except KeyError:
-                known = ", ".join(EMBODIMENT_TAG_TO_PROJECTOR_INDEX)
-                msg = (
-                    f"Unknown embodiment tag {value!r}. Known tags: {known}. "
-                    f"Alternatively pass an int slot in [0, {MAX_NUM_EMBODIMENTS})."
-                )
-                raise ValueError(msg) from None
-        if not 0 <= value < MAX_NUM_EMBODIMENTS:
-            msg = (
-                f"embodiment_id={value} is out of range; must be a slot int in "
-                f"[0, {MAX_NUM_EMBODIMENTS}) or a known tag name."
-            )
-            raise ValueError(msg)
-        return value
-
-    @property
-    def action_horizon(self) -> int:
-        """Alias for chunk_size (action horizon)."""
-        return self.chunk_size
+    attn_implementation: Literal["sdpa", "flash_attention_2"] = "sdpa"

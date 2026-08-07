@@ -12,7 +12,7 @@ from .groot import Groot, GrootConfig, GrootModel
 from .lerobot import get_lerobot_policy
 from .pi0 import Pi0, Pi0Config, Pi0Model
 from .pi05 import Pi05, Pi05Config, Pi05Model
-from .rldx1 import Rldx1, Rldx1Config, Rldx1Model
+from .rldx1 import Rldx1, RLDX1Config, Rldx1Model
 from .smolvla import SmolVLA, SmolVLAConfig, SmolVLAModel
 
 __all__ = [
@@ -33,10 +33,10 @@ __all__ = [
     "Pi05Model",
     # Base
     "Policy",
-    # RLDX-1
-    "Rldx1",
-    "Rldx1Config",
+    # RLDX
+    "RLDX1Config",
     "Rldx1Model",
+    "Rldx1",
     # SmolVLA
     "SmolVLA",
     "SmolVLAConfig",

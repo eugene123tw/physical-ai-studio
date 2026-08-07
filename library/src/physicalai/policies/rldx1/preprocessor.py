@@ -641,13 +641,11 @@ class Rldx1Postprocessor(nn.Module):
         use_percentiles: bool = True,
         clip_outliers: bool = True,
         action_horizon: int = ACTION_HORIZON,
-        env_action_dim: int = 0,
     ) -> None:
         """Initialize the postprocessor."""
         super().__init__()
         self.action_horizon = action_horizon
         self.clip_outliers = clip_outliers
-        self.env_action_dim = env_action_dim
 
         if action_feature is not None and action_feature.shape is not None:
             self._action_dim = int(action_feature.shape[0])
@@ -694,9 +692,6 @@ class Rldx1Postprocessor(nn.Module):
         else:
             out_t = action
 
-        if self.env_action_dim > 0 and out_t.shape[-1] >= self.env_action_dim:
-            out_t = out_t[..., : self.env_action_dim]
-
         return out_t.squeeze(1) if squeeze else out_t
 
 
@@ -708,7 +703,6 @@ class Rldx1Postprocessor(nn.Module):
 def make_rldx1_transforms(  # noqa: PLR0913
     *,
     stats: dict[str, dict[str, list[float]]] | None,
-    env_action_dim: int = 0,
     max_state_dim: int = MAX_STATE_DIM,
     max_action_dim: int = MAX_ACTION_DIM,
     action_horizon: int = ACTION_HORIZON,
@@ -784,6 +778,5 @@ def make_rldx1_transforms(  # noqa: PLR0913
         use_percentiles=use_percentiles,
         clip_outliers=clip_outliers,
         action_horizon=action_horizon,
-        env_action_dim=env_action_dim,
     )
     return preprocessor, postprocessor

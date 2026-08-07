@@ -17,7 +17,7 @@ RECAP RL trainer are deferred to phase 2. See
     The integration is research-only unless RLWRLD relicenses.
 """
 
-from physicalai.policies.rldx1.config import Rldx1Config
+from physicalai.policies.rldx1.config import RLDX1Config
 from physicalai.policies.rldx1.model import Rldx1Model
 from physicalai.policies.rldx1.policy import Rldx1
 from physicalai.policies.rldx1.preprocessor import (
@@ -27,9 +27,9 @@ from physicalai.policies.rldx1.preprocessor import (
 )
 
 __all__ = [
-    "Rldx1",
-    "Rldx1Config",
+    "RLDX1Config",
     "Rldx1Model",
+    "Rldx1",
     "Rldx1Postprocessor",
     "Rldx1Preprocessor",
     "make_rldx1_transforms",

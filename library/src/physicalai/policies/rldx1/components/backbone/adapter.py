@@ -5,7 +5,6 @@
 
 """VTC-Qwen3-VL backbone adapter."""
 
-import os
 from typing import Any
 
 import torch
@@ -18,11 +17,6 @@ from transformers.utils import is_torchdynamo_compiling
 
 from physicalai.policies.rldx1.components.backbone.modeling_vtc import LayerWrapper, VTCQwen3Model
 from physicalai.policies.rldx1.components.backbone.text_model_forward import install_vtc_text_forward
-
-# Default attention implementation for the Qwen3-VL backbone load.
-# Production stays on FlashAttention-2 for throughput; environments that
-# cannot build flash-attn (e.g. brand-new toolchains, CI runners with no
-# nvcc) can opt out via ``RLDX_ATTN_IMPL=sdpa`` without touching code.
 
 
 class VTCQwen3VLBackbone(nn.Module):
@@ -42,7 +36,9 @@ class VTCQwen3VLBackbone(nn.Module):
         n_cog_tokens: int = 8,
         motion_config: dict | None = None,
         transformers_loading_kwargs: dict | None = None,
-        **kwargs: Any,  # noqa: ANN401
+        gradient_checkpointing: bool = False,  # noqa: FBT001, FBT002
+        skip_pretrained_weights: bool = True,  # noqa: FBT001, FBT002
+        attn_implementation: str = "sdpa",
     ) -> None:
         """Initialize the VTC-Qwen3-VL backbone wrapper.
 
@@ -79,10 +75,13 @@ class VTCQwen3VLBackbone(nn.Module):
                 HuggingFace ``from_pretrained`` / ``AutoConfig.from_pretrained``
                 call (e.g. ``revision``, ``cache_dir``, ``token``).
                 ``trust_remote_code`` defaults to ``True`` if not supplied.
-            **kwargs: ``skip_pretrained_weights`` (bool) — when ``True``,
-                builds the architecture from config only and skips downloading
-                pretrained weights (weights are expected to arrive via a
-                Lightning checkpoint).
+            gradient_checkpointing: Enable activation checkpointing on the LLM
+                and visual tower for training memory savings.
+            skip_pretrained_weights: When ``True``, builds the architecture
+                from config only and skips downloading pretrained weights
+                (weights are expected to arrive via a Lightning checkpoint).
+            attn_implementation: Attention backend passed to the underlying
+                HuggingFace model (e.g. ``"sdpa"``, ``"flash_attention_2"``).
 
         Raises:
             ValueError: If ``motion_injection_point`` is ``"vl_input"`` but
@@ -92,24 +91,9 @@ class VTCQwen3VLBackbone(nn.Module):
         """
         super().__init__()
 
-        # Caller's dict is the single source of truth for HF from_pretrained
-        # kwargs. ``setdefault`` puts a floor under ``trust_remote_code``
-        # (RLDX always needs it on) without overriding a caller-supplied
-        # value, and — critically — never duplicates a key explicitly on
-        # the from_pretrained call lines below. ``setup.py`` preloads
-        # ``trust_remote_code`` into the dict, so passing
-        # ``trust_remote_code=True`` *and* spreading the dict raises
-        # ``TypeError: got multiple values for keyword argument
-        # 'trust_remote_code'`` for every finetune-from-HF run. Keep the
-        # explicit kwarg list on each call site confined to truly
-        # model-specific args (``attn_implementation``, ``torch_dtype``)
-        # which ``setup.py`` does NOT put in the dict.
         transformers_loading_kwargs = dict(transformers_loading_kwargs or {})
         transformers_loading_kwargs.setdefault("trust_remote_code", True)
 
-        attn_implementation = os.environ.get("RLDX_ATTN_IMPL", "sdpa")
-
-        skip_pretrained_weights = kwargs.pop("skip_pretrained_weights", False)
         if skip_pretrained_weights:
             print("[i] Creating VTC-Qwen3-VL architecture only (weights from checkpoint)")
 
@@ -139,14 +123,19 @@ class VTCQwen3VLBackbone(nn.Module):
                 self.qwen_model = self.qwen_model.to(torch.bfloat16)
         else:
             print(f"[i] Loading VTC-Qwen3-VL model from {model_name}")
-            with no_init_weights():
-                self.qwen_model = VTCQwen3Model.from_pretrained(  # type: ignore[assignment]
-                    model_name,
-                    motion_config=motion_config,
-                    attn_implementation=attn_implementation,
-                    torch_dtype=torch.bfloat16,
-                    **transformers_loading_kwargs,
-                )
+            self.qwen_model = VTCQwen3Model.from_pretrained(  # type: ignore[assignment]
+                model_name,
+                motion_config=motion_config,
+                attn_implementation=attn_implementation,
+                torch_dtype=torch.bfloat16,
+                **transformers_loading_kwargs,
+            )
+
+        if gradient_checkpointing:
+            self.qwen_model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        else:
+            self.qwen_model.gradient_checkpointing_disable()
+
         # Keep BatchNorm running stats in float32 for bf16 compatibility
         motion_block = getattr(self.qwen_model.model.visual, "motion_block", None)
         if motion_block is not None:

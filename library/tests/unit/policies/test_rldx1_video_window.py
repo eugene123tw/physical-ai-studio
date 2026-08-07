@@ -45,9 +45,9 @@ def test_window_samples_expected_strides() -> None:
     """A full history yields frames at offsets ``[-6, -4, -2, 0]``."""
     policy = _bare_policy()
     for step in range(10):
-        policy._record_video_frames({_VIEW: _frame(step)})  # noqa: SLF001
+        policy._vtc_buffer.record({_VIEW: _frame(step)})  # noqa: SLF001
 
-    windowed = policy._apply_video_window({_VIEW: _frame(9)}, [_VIEW])  # noqa: SLF001
+    windowed = policy._vtc_buffer._apply_window({_VIEW: _frame(9)}, [_VIEW])  # noqa: SLF001
     stacked = windowed[_VIEW]
 
     # (B, T, C, H, W) with T == video_length.
@@ -71,9 +71,9 @@ def test_window_clamps_when_history_short() -> None:
     """Before the window span fills, offsets clamp to the oldest frame."""
     policy = _bare_policy()
     for step in range(3):  # only steps 0, 1, 2 recorded
-        policy._record_video_frames({_VIEW: _frame(step)})  # noqa: SLF001
+        policy._vtc_buffer.record({_VIEW: _frame(step)})  # noqa: SLF001
 
-    windowed = policy._apply_video_window({_VIEW: _frame(2)}, [_VIEW])  # noqa: SLF001
+    windowed = policy._vtc_buffer._apply_window({_VIEW: _frame(2)}, [_VIEW])  # noqa: SLF001
     sampled = [int(windowed[_VIEW][0, t, 0, 0, 0].item()) for t in range(_VIDEO_LENGTH)]
     # -6, -4, -2 clamp to the first frame (0); 0 is the latest (2).
     assert sampled == [0, 0, 0, 2]
@@ -82,10 +82,10 @@ def test_window_clamps_when_history_short() -> None:
 def test_first_frame_fills_history_without_warmup() -> None:
     """The first rollout frame populates every missing temporal offset."""
     policy = _bare_policy()
-    policy._record_video_frames({_VIEW: _frame(5)})  # noqa: SLF001
+    policy._vtc_buffer.record({_VIEW: _frame(5)})  # noqa: SLF001
 
     assert not policy._vtc_buffer.is_warming_up  # noqa: SLF001
-    windowed = policy._apply_video_window({_VIEW: _frame(5)}, [_VIEW])  # noqa: SLF001
+    windowed = policy._vtc_buffer._apply_window({_VIEW: _frame(5)}, [_VIEW])  # noqa: SLF001
     sampled = [int(windowed[_VIEW][0, t, 0, 0, 0].item()) for t in range(_VIDEO_LENGTH)]
     assert sampled == [5, 5, 5, 5]
 
@@ -94,27 +94,27 @@ def test_history_buffer_bounded_to_span() -> None:
     """The per-view deque holds only ``span + 1`` frames."""
     policy = _bare_policy()
     for step in range(20):
-        policy._record_video_frames({_VIEW: _frame(step)})  # noqa: SLF001
+        policy._vtc_buffer.record({_VIEW: _frame(step)})  # noqa: SLF001
 
     span = (_VIDEO_LENGTH - 1) * _VIDEO_STRIDE
-    assert policy._frame_history is not None  # noqa: SLF001
-    assert len(policy._frame_history[_VIEW]) == span + 1  # noqa: SLF001
+    assert policy._vtc_buffer._history is not None  # noqa: SLF001
+    assert len(policy._vtc_buffer._history[_VIEW]) == span + 1  # noqa: SLF001
 
 
 def test_reset_clears_history() -> None:
     """``reset`` drops the frame history so a new episode starts fresh."""
     policy = _bare_policy()
-    policy._record_video_frames({_VIEW: _frame(0)})  # noqa: SLF001
-    assert policy._frame_history is not None  # noqa: SLF001
+    policy._vtc_buffer.record({_VIEW: _frame(0)})  # noqa: SLF001
+    assert policy._vtc_buffer._history is not None  # noqa: SLF001
 
     policy.reset()
-    assert policy._frame_history is None  # noqa: SLF001
+    assert policy._vtc_buffer._history is None  # noqa: SLF001
 
 
 def test_prepare_window_seeds_history_on_direct_call() -> None:
     """A direct single-frame call (no prior record) seeds and stacks the frame."""
     policy = _bare_policy()
-    prepared = policy._prepare_video_window({_VIEW: _frame(5)})  # noqa: SLF001
+    prepared = policy._vtc_buffer.prepare({_VIEW: _frame(5)})  # noqa: SLF001
 
     stacked = prepared[_VIEW]
     assert stacked.shape == (1, _VIDEO_LENGTH, 3, 2, 2)
@@ -129,19 +129,19 @@ def test_prepare_window_passes_through_multiframe_batch() -> None:
     multiframe = torch.stack([_frame(t) for t in range(_VIDEO_LENGTH)], dim=1)  # (1, T, 3, 2, 2)
     batch = {_VIEW: multiframe}
 
-    prepared = policy._prepare_video_window(batch)  # noqa: SLF001
+    prepared = policy._vtc_buffer.prepare(batch)  # noqa: SLF001
 
     # Same object returned unchanged; history untouched.
     assert prepared is batch
-    assert policy._frame_history is None  # noqa: SLF001
+    assert policy._vtc_buffer._history is None  # noqa: SLF001
 
 
 def test_multiframe_input_not_recorded() -> None:
     """Recording skips batches that already carry a temporal axis."""
     policy = _bare_policy()
     multiframe = torch.stack([_frame(t) for t in range(_VIDEO_LENGTH)], dim=1)
-    policy._record_video_frames({_VIEW: multiframe})  # noqa: SLF001
-    assert policy._frame_history is None  # noqa: SLF001
+    policy._vtc_buffer.record({_VIEW: multiframe})  # noqa: SLF001
+    assert policy._vtc_buffer._history is None  # noqa: SLF001
 
 
 # ---------------------------------------------------------------------------
@@ -193,8 +193,8 @@ def test_observation_delta_indices_returns_list_of_int() -> None:
 def test_numpy_frames_are_coerced() -> None:
     """Numpy view arrays are accepted and coerced to tensors."""
     policy = _bare_policy()
-    policy._record_video_frames({_VIEW: np.full((1, 3, 2, 2), 4.0, dtype=np.float32)})  # noqa: SLF001
+    policy._vtc_buffer.record({_VIEW: np.full((1, 3, 2, 2), 4.0, dtype=np.float32)})  # noqa: SLF001
 
-    windowed = policy._apply_video_window({_VIEW: _frame(4)}, [_VIEW])  # noqa: SLF001
+    windowed = policy._vtc_buffer._apply_window({_VIEW: _frame(4)}, [_VIEW])  # noqa: SLF001
     assert torch.is_tensor(windowed[_VIEW])
     assert int(windowed[_VIEW][0, -1, 0, 0, 0].item()) == 4

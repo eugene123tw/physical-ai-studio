@@ -938,11 +938,13 @@ class MSAT(JointBase):
         attention_bias: bool | None = None,  # noqa: FBT001
         norm_eps: float = 1e-6,
         compute_dtype: torch.dtype = torch.float32,
+        final_dropout: bool = True,  # noqa: FBT001, FBT002, ARG002
         positional_embeddings: str | None = "rope_sa_only",
         action_model_max_seq_len: int = 512,
         sa_dim: int = 1536,
         vl_dim: int = 1536,
         qk_norm: str = "none",
+        use_swiglu: bool = False,  # noqa: FBT001, FBT002, ARG002
         mlp_ratio: float = 4.0,
         vl_mlp_ratio: float | None = None,
         temb_type: str = "layerwise_mod",
@@ -967,6 +969,7 @@ class MSAT(JointBase):
                 If None, defaults to True unless ``remove_bias`` is enabled.
             norm_eps: Epsilon value for normalization layers.
             compute_dtype: Dtype used by the timestep encoder.
+            final_dropout: Unused; accepted for config compatibility with sub-block signatures.
             positional_embeddings: Positional embedding mode. Supported values are
                 ``"rope_sa_only"``, ``"rope_vl_sa"``, and ``None``.
                 Default is ``"rope_sa_only"``.
@@ -974,6 +977,7 @@ class MSAT(JointBase):
             sa_dim: State-action stream hidden size.
             vl_dim: Vision-language stream hidden size.
             qk_norm: Q/K normalization mode.
+            use_swiglu: Unused; accepted for config compatibility with sub-block signatures.
             mlp_ratio: MLP expansion ratio for SA stream.
             vl_mlp_ratio: Optional MLP expansion ratio override for VL stream.
             temb_type: Timestep conditioning mode.

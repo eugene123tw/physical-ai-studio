@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn.functional as F  # noqa: N812
-from physicalai.training_config.mixin import FromConfig
+from physicalai.config.mixin import FromConfig
 from torch import nn
 from torch.distributions import Beta
 

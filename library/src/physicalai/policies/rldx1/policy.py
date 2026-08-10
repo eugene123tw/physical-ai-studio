@@ -511,7 +511,7 @@ class Rldx1(Policy):
         self._dataset_stats = dataset_stats
         self.hparams["dataset_stats"] = dataset_stats
 
-    def forward(self, batch: Observation) -> torch.Tensor | tuple[torch.Tensor, dict[str, float]]:
+    def forward(self, batch: Observation) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor | float]]:
         """Forward pass: training loss in train mode, action chunk in eval.
 
         Args:
@@ -547,7 +547,7 @@ class Rldx1(Policy):
         self.log("train/loss", loss_dict["loss"], prog_bar=True, on_step=True, on_epoch=True)
         return loss
 
-    def compute_val_loss(self, batch: Observation) -> tuple[torch.Tensor, dict[str, float]]:
+    def compute_val_loss(self, batch: Observation) -> tuple[torch.Tensor, dict[str, torch.Tensor | float]]:
         """Compute validation loss for the current batch.
 
         Args:

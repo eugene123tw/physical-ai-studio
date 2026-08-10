@@ -1036,7 +1036,7 @@ class Rldx1Model(Model):
     def forward(
         self,
         batch: dict[str, torch.Tensor],
-    ) -> tuple[torch.Tensor, dict[str, float]] | torch.Tensor:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor | float]] | torch.Tensor:
         """Dispatch between training loss and action prediction.
 
         Args:
@@ -1049,7 +1049,7 @@ class Rldx1Model(Model):
             return self.compute_loss(batch)
         return self.get_action(batch)
 
-    def compute_loss(self, batch: dict[str, Any]) -> tuple[torch.Tensor, dict[str, float]]:
+    def compute_loss(self, batch: dict[str, Any]) -> tuple[torch.Tensor, dict[str, torch.Tensor | float]]:
         """Run backbone + action model in training mode.
 
         Returns:
@@ -1060,7 +1060,7 @@ class Rldx1Model(Model):
 
         outputs = self.action_model(backbone_outputs, action_inputs)
         loss = outputs["loss"]
-        loss_dict = {
+        loss_dict: dict[str, torch.Tensor | float] = {
             key: float(value.detach())
             for key, value in outputs.items()
             if isinstance(value, torch.Tensor) and value.ndim == 0
@@ -1070,8 +1070,8 @@ class Rldx1Model(Model):
     @torch.no_grad()
     def compute_val_loss(
         self,
-        batch: dict[str, torch.Tensor],
-    ) -> tuple[torch.Tensor, dict[str, float]]:
+        batch: dict[str, Any],
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor | float]]:
         """Compute deterministic action prediction MSE for validation.
 
         Runs the full denoising path via :meth:`get_action` and compares it to

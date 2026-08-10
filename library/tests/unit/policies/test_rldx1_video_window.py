@@ -36,9 +36,10 @@ def _frame(step: int) -> torch.Tensor:
 def _bare_policy() -> Rldx1:
     """Construct a model-less policy (offline, no weight download).
 
-    The default config ships ``video_length=4`` / ``video_stride=2``.
+    ``pretrained_name_or_path=None`` takes the lazy init path so no HF Hub
+    download happens. The default config ships ``video_length=4`` / ``video_stride=2``.
     """
-    return Rldx1()
+    return Rldx1(pretrained_name_or_path=None)
 
 
 def test_window_samples_expected_strides() -> None:
@@ -64,7 +65,7 @@ def test_vlln_defaults_to_upstream_checkpoint_architecture() -> None:
 
 def test_vlln_can_be_enabled_explicitly() -> None:
     """Fine-tuning configurations may opt into the additional VLLN layer."""
-    assert Rldx1(use_vlln=True).config.use_vlln
+    assert Rldx1(pretrained_name_or_path=None, use_vlln=True).config.use_vlln
 
 
 def test_window_clamps_when_history_short() -> None:

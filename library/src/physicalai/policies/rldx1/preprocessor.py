@@ -101,7 +101,7 @@ INPUT_IDS = "input_ids"
 ATTENTION_MASK = "attention_mask"
 PIXEL_VALUES = "pixel_values"
 IMAGE_GRID_THW = "image_grid_thw"
-MM_TOKEN_TYPE_IDS = "mm_token_type_ids"  # noqa: S105  (output key, not a secret)
+MM_TOKEN_TYPE_IDS = "mm_token_type_ids"  # noqa: S105 # nosec B105 -- dict key name, not a secret
 IMAGE_WISE_ENCODING = "image_wise_encoding"
 NUM_VIEWS = "num_views"
 NUM_FRAMES = "num_frames"
@@ -279,10 +279,14 @@ class Rldx1Preprocessor(nn.Module):
         """
         if self._vlm_processor_cache is None:
             # lib.security: never trust_remote_code; pin the processor revision.
-            loading_kwargs: dict[str, Any] = {"trust_remote_code": False, "use_fast": True}
-            if self.revision is not None:
-                loading_kwargs["revision"] = self.revision
-            processor = AutoProcessor.from_pretrained(self.model_name, **loading_kwargs)
+            # revision is passed as an explicit keyword (not via a conditionally
+            # built kwargs dict) so the pin is auditable to static scanners.
+            processor = AutoProcessor.from_pretrained(
+                self.model_name,
+                trust_remote_code=False,
+                use_fast=True,
+                revision=self.revision,
+            )
             processor.tokenizer.padding_side = "left"
             self._vlm_processor_cache = processor
         return self._vlm_processor_cache

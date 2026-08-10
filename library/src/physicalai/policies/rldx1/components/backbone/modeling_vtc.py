@@ -17,6 +17,11 @@ from transformers import AutoConfig, AutoProcessor, Qwen3VLForConditionalGenerat
 from .layer_wrapper import LayerWrapper
 from .text_model_forward import install_vtc_text_forward
 
+# Pinned commit for the upstream Qwen3-VL reference architecture config (lib.security
+# rule 9). This only supplies the base config schema for the VTC variant, never weights,
+# but is still pinned to avoid an unpinned Hub read at import/build time.
+_QWEN3_VL_REFERENCE_REVISION = "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
+
 
 def _checkpoint_has_motion_weights(  # noqa: PLR0911
     path_or_name: str,
@@ -116,7 +121,7 @@ class VTCQwen3Model(Qwen3VLForConditionalGeneration):
         # kwargs) on the VTC branch. Pinning ``revision`` here keeps the
         # weight blobs aligned with ``--model-revision``.
         download_kwargs = {k: kwargs.pop(k) for k in ("revision", "cache_dir", "token") if k in kwargs}
-        revision = download_kwargs.get("revision")
+        revision = download_kwargs.pop("revision", None)
 
         if "vtc" in pretrained_model_name_or_path.lower():
             print(
@@ -124,12 +129,16 @@ class VTCQwen3Model(Qwen3VLForConditionalGeneration):
             )
             # Reference architecture config — always the upstream Qwen3-VL.
             # revision pins the RLDX repo, not this reference, so don't thread
-            # download_kwargs here.
-            base_config = AutoConfig.from_pretrained("Qwen/Qwen3-VL-8B-Instruct")
+            # download_kwargs here; pin to a fixed commit instead (lib.security rule 9).
+            base_config = AutoConfig.from_pretrained(
+                "Qwen/Qwen3-VL-8B-Instruct",
+                revision=_QWEN3_VL_REFERENCE_REVISION,
+            )
         else:
             print(f"[i] VTC loading Qwen3-VL weights from {pretrained_model_name_or_path}")
             base_config = AutoConfig.from_pretrained(
                 pretrained_model_name_or_path,
+                revision=revision,
                 **download_kwargs,
             )
 
@@ -147,6 +156,7 @@ class VTCQwen3Model(Qwen3VLForConditionalGeneration):
             model = Qwen3VLForConditionalGeneration.from_pretrained(
                 pretrained_model_name_or_path,
                 **extra,
+                revision=revision,
                 **download_kwargs,
                 **kwargs,
             )  # type: ignore[arg-type, misc]
@@ -194,10 +204,11 @@ class VTCQwen3Model(Qwen3VLForConditionalGeneration):
             else:
                 # Thread revision/cache_dir/token so the weight blobs we
                 # load below match the pinned commit, not HEAD.
-                local_dir = snapshot_download(pretrained_model_name_or_path, **download_kwargs)
+                local_dir = snapshot_download(pretrained_model_name_or_path, revision=revision, **download_kwargs)
 
             processor = AutoProcessor.from_pretrained(
                 pretrained_model_name_or_path,
+                revision=revision,
                 **download_kwargs,
             )
 

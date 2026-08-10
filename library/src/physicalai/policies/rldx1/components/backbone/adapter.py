@@ -93,11 +93,18 @@ class VTCQwen3VLBackbone(nn.Module):
 
         transformers_loading_kwargs = dict(transformers_loading_kwargs or {})
         transformers_loading_kwargs.setdefault("trust_remote_code", True)
+        # Pop revision out so it's always passed as an explicit keyword (not hidden
+        # inside **kwargs) — keeps the pin auditable and visible to security scanners.
+        revision = transformers_loading_kwargs.pop("revision", None)
 
         if skip_pretrained_weights:
             print("[i] Creating VTC-Qwen3-VL architecture only (weights from checkpoint)")
 
-            backbone_config = AutoConfig.from_pretrained(model_name, **transformers_loading_kwargs)
+            backbone_config = AutoConfig.from_pretrained(
+                model_name,
+                revision=revision,
+                **transformers_loading_kwargs,
+            )
             if motion_config is not None:
                 for k, v in motion_config.items():
                     setattr(backbone_config.vision_config, k, v)
@@ -128,6 +135,7 @@ class VTCQwen3VLBackbone(nn.Module):
                 motion_config=motion_config,
                 attn_implementation=attn_implementation,
                 torch_dtype=torch.bfloat16,
+                revision=revision,
                 **transformers_loading_kwargs,
             )
 

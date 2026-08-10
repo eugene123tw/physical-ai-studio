@@ -366,6 +366,19 @@ class Rldx1(Policy):
         hf_config["action_horizon"] = action_horizon
         hf_config["embodiment_tag"] = embodiment_tag
 
+        # pop unused keys to avoid dataclass validation errors
+        for unused_key in [
+            "architectures",
+            "backbone_model_type",
+            "memory_video_delta_indices",
+            "model_name",
+            "model_type",
+            "qwen3_collator",
+            "transformers_version",
+            "use_relative_action",
+        ]:
+            hf_config.pop(unused_key, None)
+
         # from_dict skips unknown keys and coerces lists→tuples via type hints
         config = Rldx1Config.from_dict(hf_config)
 

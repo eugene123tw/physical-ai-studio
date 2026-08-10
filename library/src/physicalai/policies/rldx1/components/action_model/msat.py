@@ -10,8 +10,6 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F  # noqa: N812
-from diffusers import ConfigMixin, ModelMixin
-from diffusers.configuration_utils import register_to_config
 from torch import nn
 
 from physicalai.policies.rldx1.components.action_model.blocks import (
@@ -26,14 +24,349 @@ from physicalai.policies.rldx1.components.action_model.ops import RoPEEmbedder1D
 from physicalai.policies.shared.components.nn import TimestepEncoder
 
 
-class JointBase(ModelMixin, ConfigMixin):  # type: ignore[misc]
-    """Shared MSAT building and forward utilities.
+class MSAT(nn.Module):
+    """Multi-Stream Action Transformer.
 
-    This mixin hosts block-construction helpers and the internal forward paths
-    used by :class:`MSAT` for both standard and physics-enabled execution.
+    The model stacks lower multi-stream blocks followed by optional upper
+    single-stream blocks, with optional physics conditioning support.
+    Block-construction helpers and the internal forward paths are defined
+    first, followed by the public ``__init__``/``forward`` API.
     """
 
-    _supports_gradient_checkpointing = True
+    time_token_proj: nn.Linear | nn.Identity
+    shared_single_mod_proj: nn.Linear | nn.Identity
+    rope_embedder: RoPEEmbedder1D | nn.Identity
+    vl_proj_to_sa: nn.Linear | nn.Identity
+
+    def __init__(  # noqa: PLR0913, PLR0912, PLR0915, PLR0917
+        self,
+        num_attention_heads: int = 8,
+        attention_head_dim: int = 64,
+        output_dim: int = 26,
+        depth_multi_stream: int = 12,
+        depth_single_stream: int = 0,
+        dropout: float = 0.1,
+        attention_bias: bool | None = None,  # noqa: FBT001
+        norm_eps: float = 1e-6,
+        compute_dtype: torch.dtype = torch.float32,
+        final_dropout: bool = True,  # noqa: FBT001, FBT002, ARG002
+        positional_embeddings: str | None = "rope_sa_only",
+        action_model_max_seq_len: int = 512,
+        sa_dim: int = 1536,
+        vl_dim: int = 1536,
+        qk_norm: str = "none",
+        use_swiglu: bool = False,  # noqa: FBT001, FBT002, ARG002
+        mlp_ratio: float = 4.0,
+        vl_mlp_ratio: float | None = None,
+        temb_type: str = "layerwise_mod",
+        remove_bias: bool = False,  # noqa: FBT001, FBT002
+        pre_norm: str = "layer_norm",
+        post_norm: str = "none",
+        rope_theta: float = 10000.0,
+        gradient_checkpointing: bool = False,  # noqa: FBT001, FBT002
+        use_physics: bool = False,  # noqa: FBT001, FBT002
+        physics_dim: int = 0,
+    ) -> None:
+        """Initialize the Multi-Stream Action Transformer.
+
+        Args:
+            num_attention_heads: Number of attention heads per transformer block.
+            attention_head_dim: Per-head channel dimension.
+            output_dim: Output channel size for action (and physics) projections.
+            depth_multi_stream: Number of lower multi-stream blocks.
+            depth_single_stream: Number of upper single-stream blocks.
+            dropout: Dropout probability used in attention/MLP branches.
+            attention_bias: Whether attention-related linear layers use bias.
+                If None, defaults to True unless ``remove_bias`` is enabled.
+            norm_eps: Epsilon value for normalization layers.
+            compute_dtype: Dtype used by the timestep encoder.
+            final_dropout: Unused; accepted for config compatibility with sub-block signatures.
+            positional_embeddings: Positional embedding mode. Supported values are
+                ``"rope_sa_only"``, ``"rope_vl_sa"``, and ``None``.
+                Default is ``"rope_sa_only"``.
+            action_model_max_seq_len: Maximum sequence length for RoPE tables.
+            sa_dim: State-action stream hidden size.
+            vl_dim: Vision-language stream hidden size.
+            qk_norm: Q/K normalization mode.
+            use_swiglu: Unused; accepted for config compatibility with sub-block signatures.
+            mlp_ratio: MLP expansion ratio for SA stream.
+            vl_mlp_ratio: Optional MLP expansion ratio override for VL stream.
+            temb_type: Timestep conditioning mode.
+            remove_bias: If True, removes bias from modulation/projection layers and
+                forces attention projections to be bias-free.
+            pre_norm: Normalization type before attention/MLP.
+            post_norm: Normalization type after attention/MLP.
+            rope_theta: RoPE theta base.
+            gradient_checkpointing: Whether to enable activation checkpointing
+                in MSAT block loops during training.
+            use_physics: Enables physics-conditioned architecture when True.
+            physics_dim: Total physics signal dimension.
+
+        Raises:
+            NotImplementedError: If ``positional_embeddings`` is not one of the supported values.
+        """
+        super().__init__()
+        if positional_embeddings not in {"rope_sa_only", "rope_vl_sa", None}:
+            msg = ("Unsupported positional_embeddings. Use 'rope_sa_only', 'rope_vl_sa', or None.",)
+            raise NotImplementedError(msg)
+        self.use_physics = use_physics
+        self.physics_dim = physics_dim
+        self.inner_dim = num_attention_heads * attention_head_dim
+        self.timestep_encoder = TimestepEncoder(
+            embedding_dim=self.inner_dim,
+            compute_dtype=compute_dtype,
+        )
+        self.positional_embeddings = positional_embeddings
+        self.attention_head_dim = attention_head_dim
+        self.temb_type = temb_type if temb_type is not None else "layerwise_mod"
+        self.num_temb_tokens = 1  # Single time token when temb_type="input_token"
+        self.gradient_checkpointing = gradient_checkpointing
+
+        # Set default attention_bias if not provided (MSAT default: True)
+        if attention_bias is None:
+            attention_bias = True
+
+        # If remove_bias=True, override attention_bias to False
+        if remove_bias:
+            attention_bias = False
+            print(
+                "[MSAT] remove_bias=True: overriding attention_bias to False for all attention layers",
+            )
+
+        # Create time token projection if temb_type is "input_token"
+        # Time token is always added right before action tokens: [VL | S | time_token | A]
+        if self.temb_type == "input_token":
+            # Double stream: VL, SA - time_token goes before SA (which contains action)
+            if self.inner_dim != sa_dim:
+                self.time_token_proj = nn.Linear(self.inner_dim, sa_dim, bias=not remove_bias)
+            else:
+                self.time_token_proj = nn.Identity()
+
+            self.time_token_pos_emb = None
+        else:
+            self.time_token_proj = nn.Identity()
+            self.time_token_pos_emb = None
+
+        self.freq_encoder = None
+        self.freq_token_proj = None
+        self.num_freq_tokens = 0
+
+        # Create shared modulation modules if temb_type is "shared_mod"
+        if self.temb_type == "shared_mod":
+            # Double stream: VL, SA
+            self.shared_sa_mod = Modulation(self.inner_dim, double=True, remove_bias=remove_bias)
+            self.shared_vl_mod = Modulation(self.inner_dim, double=True, remove_bias=remove_bias)
+
+            # For SingleStreamBlocks: use inner_dim as input (same as temb), then project output
+            self.shared_single_mod = Modulation(
+                self.inner_dim,
+                double=False,
+                remove_bias=remove_bias,
+            )
+            if self.inner_dim != sa_dim:
+                self.shared_single_mod_proj = nn.Linear(
+                    self.inner_dim,
+                    sa_dim,
+                    bias=not remove_bias,
+                )
+            else:
+                self.shared_single_mod_proj = nn.Identity()
+
+        print("\nInitializing MSAT...")
+
+        # Initialize RoPE embedder if needed
+        if positional_embeddings == "rope_sa_only":
+            # RoPE for SA stream only (attention_head_dim assumed to be 64 below)
+            # Axis 0 (dim=16): 0 (unused)
+            # Axis 1 (dim=48): SA sequence position
+            print(f"[MSAT] RoPE theta: {rope_theta}")
+            self.rope_embedder = RoPEEmbedder1D(
+                head_dim=attention_head_dim,
+                axes_dim=[attention_head_dim // 4, attention_head_dim - attention_head_dim // 4],
+                theta=rope_theta,
+                max_seq_len=action_model_max_seq_len,
+            )
+            self.use_rope = True
+        elif positional_embeddings == "rope_vl_sa":
+            # RoPE for VL and SA streams (attention_head_dim assumed to be 64 below)
+            # Axis 0 (dim=48): VL sequence position
+            # Axis 1 (dim=16): SA sequence position
+            self.rope_embedder = RoPEEmbedder1D(
+                head_dim=attention_head_dim,
+                axes_dim=[attention_head_dim - attention_head_dim // 4, attention_head_dim // 4],
+                theta=rope_theta,
+                max_seq_len=action_model_max_seq_len,
+            )
+            self.use_rope = True
+        else:
+            self.rope_embedder = nn.Identity()
+            self.use_rope = False
+
+        use_pos_emb = self.use_rope
+        print(
+            f"[MSAT] 'positional_embeddings' of MSAT: {positional_embeddings}, "
+            f"action_model_max_seq_len: {action_model_max_seq_len}, enabled: {use_pos_emb}",
+        )
+
+        self.sa_dim = sa_dim
+        self.vl_dim = vl_dim
+
+        # VL→SA projection (used by both physics and non-physics paths)
+        if sa_dim != vl_dim:
+            self.vl_proj_to_sa = nn.Linear(vl_dim, sa_dim, bias=not remove_bias)
+            print(f"[MSAT] Projecting VL dimension from {vl_dim} to {sa_dim}")
+        else:
+            self.vl_proj_to_sa = nn.Identity()
+
+        if self.use_physics and physics_dim > 0:
+            # ── Physics-enabled architecture ──────────────────────────────────────
+            # Lower: ExpandedDoubleStreamBlocks [VL | SA | P] — extends DoubleStreamBlock with P stream
+            # Upper: ExpandedSingleStreamBlocks [VL+SA | P]  — extends SingleStreamBlock with P stream
+            # Pretrained weights load directly (same attribute names as base blocks).
+            print(f"\n[MSAT] Physics mode: use_physics=True, physics_dim={physics_dim}")
+            print(f"[MSAT] Lower: {depth_multi_stream} ExpandedDoubleStreamBlocks [VL | SA | P]")
+            print(f"[MSAT] Upper: {depth_single_stream} ExpandedSingleStreamBlocks [VL+SA | P]")
+
+            self.double_blocks = self._build_expanded_double_blocks(
+                depth=depth_multi_stream,
+                sa_dim=sa_dim,
+                vl_dim=vl_dim,
+                p_dim=sa_dim,  # Physics tokens projected to sa_dim by PhysicalSignalEncoder
+                num_heads=num_attention_heads,
+                head_dim=attention_head_dim,
+                dropout=dropout,
+                attention_bias=attention_bias,
+                norm_eps=norm_eps,
+                qk_norm=qk_norm,
+                mlp_ratio=mlp_ratio,
+                vl_mlp_ratio=vl_mlp_ratio,
+                positional_embeddings=positional_embeddings,
+                max_seq_length=action_model_max_seq_len,
+                temb_type=self.temb_type,
+                remove_bias=remove_bias,
+                pre_norm=pre_norm,
+                post_norm=post_norm,
+            )
+
+            single_stream_hidden_size = sa_dim
+            self.single_blocks = self._build_expanded_single_blocks(
+                depth=depth_single_stream,
+                hidden_size=single_stream_hidden_size,
+                p_dim=sa_dim,
+                num_heads=num_attention_heads,
+                head_dim=attention_head_dim,
+                dropout=dropout,
+                attention_bias=attention_bias,
+                norm_eps=norm_eps,
+                qk_norm=qk_norm,
+                mlp_ratio=mlp_ratio,
+                positional_embeddings=positional_embeddings,
+                max_seq_length=action_model_max_seq_len,
+                temb_type=self.temb_type,
+                remove_bias=remove_bias,
+                pre_norm=pre_norm,
+                post_norm=post_norm,
+            )
+
+            has_single_blocks = depth_single_stream > 0
+            sa_hidden_dim = single_stream_hidden_size if has_single_blocks else sa_dim
+            self._sa_hidden_dim = sa_hidden_dim
+
+            # Physics output projection (AdaLN-zero style)
+            self.norm_out_physics = nn.LayerNorm(sa_dim, elementwise_affine=False, eps=1e-6)
+            self.proj_out_physics_1 = nn.Linear(self.inner_dim, 2 * sa_dim, bias=not remove_bias)
+            self.proj_out_physics_2 = nn.Linear(sa_dim, output_dim, bias=not remove_bias)
+
+        else:
+            # ── Standard architecture (no physics) ────────────────────────────────
+            self.double_blocks = self._build_double_blocks(
+                depth=depth_multi_stream,
+                sa_dim=sa_dim,
+                vl_dim=vl_dim,
+                num_heads=num_attention_heads,
+                head_dim=attention_head_dim,
+                dropout=dropout,
+                attention_bias=attention_bias,
+                norm_eps=norm_eps,
+                qk_norm=qk_norm,
+                mlp_ratio=mlp_ratio,
+                vl_mlp_ratio=vl_mlp_ratio,
+                positional_embeddings=positional_embeddings,
+                max_seq_length=action_model_max_seq_len,
+                temb_type=self.temb_type,
+                remove_bias=remove_bias,
+                pre_norm=pre_norm,
+                post_norm=post_norm,
+            )
+
+            single_stream_hidden_size = sa_dim
+            self.single_blocks = self._build_single_blocks(
+                depth=depth_single_stream,
+                hidden_size=single_stream_hidden_size,
+                num_heads=num_attention_heads,
+                head_dim=attention_head_dim,
+                dropout=dropout,
+                attention_bias=attention_bias,
+                norm_eps=norm_eps,
+                qk_norm=qk_norm,
+                mlp_ratio=mlp_ratio,
+                positional_embeddings=positional_embeddings,
+                max_seq_length=action_model_max_seq_len,
+                temb_type=self.temb_type,
+                remove_bias=remove_bias,
+                pre_norm=pre_norm,
+                post_norm=post_norm,
+            )
+
+            has_single_blocks = depth_single_stream > 0
+            sa_hidden_dim = single_stream_hidden_size if has_single_blocks else sa_dim
+            self._sa_hidden_dim = sa_hidden_dim
+
+        # Output projection (AdaLN-zero style) - for action prediction
+        self.norm_out = nn.LayerNorm(sa_hidden_dim, elementwise_affine=False, eps=1e-6)
+        self.proj_out_1 = nn.Linear(self.inner_dim, 2 * sa_hidden_dim, bias=not remove_bias)
+        self.proj_out_2 = nn.Linear(sa_hidden_dim, output_dim, bias=not remove_bias)
+        print(f"[MSAT] Output projection: sa_hidden_dim={sa_hidden_dim} -> output_dim={output_dim}")
+
+        self._remove_bias = remove_bias
+
+        print("[MSAT] Total number of MSAT parameters: ", sum(p.numel() for p in self.parameters() if p.requires_grad))
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,  # SA tokens
+        encoder_hidden_states: torch.Tensor,  # VL tokens
+        timestep: torch.LongTensor | None = None,
+        return_all_hidden_states: bool = False,  # noqa: FBT001, FBT002
+        encoder_attention_mask: torch.Tensor | None = None,  # [B, N_vl] VL attention mask (1=visible, 0=masked)
+        physics_embs: torch.Tensor | None = None,  # [B, N_p, sa_dim] Physics tokens (when use_physics=True)
+        physics_attention_mask: torch.Tensor | None = None,  # [B] per-sample physics mask (1=visible, 0=masked)
+    ) -> Any:  # noqa: ANN401
+        """Run a forward pass through MSAT.
+
+        Args:
+            hidden_states: State-action tokens ``[B, N_sa, sa_dim]``.
+            encoder_hidden_states: Vision-language tokens ``[B, N_vl, vl_dim]``.
+            timestep: Diffusion timestep tensor ``[B]``.
+            return_all_hidden_states: If True, return intermediate SA hidden states.
+            encoder_attention_mask: Optional VL visibility mask ``[B, N_vl]``.
+            physics_embs: Optional physics tokens ``[B, N_p, sa_dim]``.
+            physics_attention_mask: Optional per-sample physics visibility mask ``[B]``.
+
+        Returns:
+            Action output tensor or physics-aware output dict depending on
+            configuration. Returns ``(output, hidden_states)`` when
+            ``return_all_hidden_states=True``.
+        """
+        return self._forward_inner(
+            hidden_states,
+            encoder_hidden_states,
+            timestep,
+            return_all_hidden_states,
+            encoder_attention_mask,
+            physics_embs,
+            physics_attention_mask,
+        )
 
     def _apply_checkpoint(self, func: Callable[..., Any], *args: Any) -> Any:  # noqa: ANN401
         """Apply gradient checkpointing if enabled, matching Pi05Model's convention.
@@ -912,347 +1245,3 @@ class JointBase(ModelMixin, ConfigMixin):  # type: ignore[misc]
         shift, scale = self.proj_out_1(F.silu(temb)).chunk(2, dim=1)
         sa = self.norm_out(sa) * (1 + scale[:, None]) + shift[:, None]
         return self.proj_out_2(sa)
-
-
-class MSAT(JointBase):
-    """Multi-Stream Action Transformer.
-
-    The model stacks lower multi-stream blocks followed by optional upper
-    single-stream blocks, with optional physics conditioning support.
-    """
-
-    time_token_proj: nn.Linear | nn.Identity | None
-    shared_single_mod_proj: nn.Linear | nn.Identity
-    rope_embedder: RoPEEmbedder1D | None
-    vl_proj_to_sa: nn.Linear | nn.Identity
-
-    @register_to_config
-    def __init__(  # noqa: PLR0913, PLR0912, PLR0915, PLR0917
-        self,
-        num_attention_heads: int = 8,
-        attention_head_dim: int = 64,
-        output_dim: int = 26,
-        depth_multi_stream: int = 12,
-        depth_single_stream: int = 0,
-        dropout: float = 0.1,
-        attention_bias: bool | None = None,  # noqa: FBT001
-        norm_eps: float = 1e-6,
-        compute_dtype: torch.dtype = torch.float32,
-        final_dropout: bool = True,  # noqa: FBT001, FBT002, ARG002
-        positional_embeddings: str | None = "rope_sa_only",
-        action_model_max_seq_len: int = 512,
-        sa_dim: int = 1536,
-        vl_dim: int = 1536,
-        qk_norm: str = "none",
-        use_swiglu: bool = False,  # noqa: FBT001, FBT002, ARG002
-        mlp_ratio: float = 4.0,
-        vl_mlp_ratio: float | None = None,
-        temb_type: str = "layerwise_mod",
-        remove_bias: bool = False,  # noqa: FBT001, FBT002
-        pre_norm: str = "layer_norm",
-        post_norm: str = "none",
-        rope_theta: float = 10000.0,
-        gradient_checkpointing: bool = False,  # noqa: FBT001, FBT002
-        use_physics: bool = False,  # noqa: FBT001, FBT002
-        physics_dim: int = 0,
-    ) -> None:
-        """Initialize the Multi-Stream Action Transformer.
-
-        Args:
-            num_attention_heads: Number of attention heads per transformer block.
-            attention_head_dim: Per-head channel dimension.
-            output_dim: Output channel size for action (and physics) projections.
-            depth_multi_stream: Number of lower multi-stream blocks.
-            depth_single_stream: Number of upper single-stream blocks.
-            dropout: Dropout probability used in attention/MLP branches.
-            attention_bias: Whether attention-related linear layers use bias.
-                If None, defaults to True unless ``remove_bias`` is enabled.
-            norm_eps: Epsilon value for normalization layers.
-            compute_dtype: Dtype used by the timestep encoder.
-            final_dropout: Unused; accepted for config compatibility with sub-block signatures.
-            positional_embeddings: Positional embedding mode. Supported values are
-                ``"rope_sa_only"``, ``"rope_vl_sa"``, and ``None``.
-                Default is ``"rope_sa_only"``.
-            action_model_max_seq_len: Maximum sequence length for RoPE tables.
-            sa_dim: State-action stream hidden size.
-            vl_dim: Vision-language stream hidden size.
-            qk_norm: Q/K normalization mode.
-            use_swiglu: Unused; accepted for config compatibility with sub-block signatures.
-            mlp_ratio: MLP expansion ratio for SA stream.
-            vl_mlp_ratio: Optional MLP expansion ratio override for VL stream.
-            temb_type: Timestep conditioning mode.
-            remove_bias: If True, removes bias from modulation/projection layers and
-                forces attention projections to be bias-free.
-            pre_norm: Normalization type before attention/MLP.
-            post_norm: Normalization type after attention/MLP.
-            rope_theta: RoPE theta base.
-            gradient_checkpointing: Whether to enable activation checkpointing
-                in MSAT block loops during training.
-            use_physics: Enables physics-conditioned architecture when True.
-            physics_dim: Total physics signal dimension.
-
-        Raises:
-            NotImplementedError: If ``positional_embeddings`` is not one of the supported values.
-        """
-        super().__init__()
-        if positional_embeddings not in {"rope_sa_only", "rope_vl_sa", None}:
-            msg = ("Unsupported positional_embeddings. Use 'rope_sa_only', 'rope_vl_sa', or None.",)
-            raise NotImplementedError(msg)
-        self.use_physics = use_physics
-        self.physics_dim = physics_dim
-        self.inner_dim = num_attention_heads * attention_head_dim
-        self.timestep_encoder = TimestepEncoder(
-            embedding_dim=self.inner_dim,
-            compute_dtype=compute_dtype,
-        )
-        self.positional_embeddings = positional_embeddings
-        self.attention_head_dim = attention_head_dim
-        self.temb_type = temb_type if temb_type is not None else "layerwise_mod"
-        self.num_temb_tokens = 1  # Single time token when temb_type="input_token"
-        self.gradient_checkpointing = gradient_checkpointing
-
-        # Set default attention_bias if not provided (MSAT default: True)
-        if attention_bias is None:
-            attention_bias = True
-
-        # If remove_bias=True, override attention_bias to False
-        if remove_bias:
-            attention_bias = False
-            print(
-                "[MSAT] remove_bias=True: overriding attention_bias to False for all attention layers",
-            )
-
-        # Create time token projection if temb_type is "input_token"
-        # Time token is always added right before action tokens: [VL | S | time_token | A]
-        if self.temb_type == "input_token":
-            # Double stream: VL, SA - time_token goes before SA (which contains action)
-            if self.inner_dim != sa_dim:
-                self.time_token_proj = nn.Linear(self.inner_dim, sa_dim, bias=not remove_bias)
-            else:
-                self.time_token_proj = nn.Identity()
-
-            self.time_token_pos_emb = None
-        else:
-            self.time_token_proj = None
-            self.time_token_pos_emb = None
-
-        self.freq_encoder = None
-        self.freq_token_proj = None
-        self.num_freq_tokens = 0
-
-        # Create shared modulation modules if temb_type is "shared_mod"
-        if self.temb_type == "shared_mod":
-            # Double stream: VL, SA
-            self.shared_sa_mod = Modulation(self.inner_dim, double=True, remove_bias=remove_bias)
-            self.shared_vl_mod = Modulation(self.inner_dim, double=True, remove_bias=remove_bias)
-
-            # For SingleStreamBlocks: use inner_dim as input (same as temb), then project output
-            self.shared_single_mod = Modulation(
-                self.inner_dim,
-                double=False,
-                remove_bias=remove_bias,
-            )
-            if self.inner_dim != sa_dim:
-                self.shared_single_mod_proj = nn.Linear(
-                    self.inner_dim,
-                    sa_dim,
-                    bias=not remove_bias,
-                )
-            else:
-                self.shared_single_mod_proj = nn.Identity()
-
-        print("\nInitializing MSAT...")
-
-        # Initialize RoPE embedder if needed
-        if positional_embeddings == "rope_sa_only":
-            # RoPE for SA stream only (attention_head_dim assumed to be 64 below)
-            # Axis 0 (dim=16): 0 (unused)
-            # Axis 1 (dim=48): SA sequence position
-            print(f"[MSAT] RoPE theta: {rope_theta}")
-            self.rope_embedder = RoPEEmbedder1D(
-                head_dim=attention_head_dim,
-                axes_dim=[attention_head_dim // 4, attention_head_dim - attention_head_dim // 4],
-                theta=rope_theta,
-                max_seq_len=action_model_max_seq_len,
-            )
-            self.use_rope = True
-        elif positional_embeddings == "rope_vl_sa":
-            # RoPE for VL and SA streams (attention_head_dim assumed to be 64 below)
-            # Axis 0 (dim=48): VL sequence position
-            # Axis 1 (dim=16): SA sequence position
-            self.rope_embedder = RoPEEmbedder1D(
-                head_dim=attention_head_dim,
-                axes_dim=[attention_head_dim - attention_head_dim // 4, attention_head_dim // 4],
-                theta=rope_theta,
-                max_seq_len=action_model_max_seq_len,
-            )
-            self.use_rope = True
-        else:
-            self.rope_embedder = None
-            self.use_rope = False
-
-        use_pos_emb = self.use_rope
-        print(
-            f"[MSAT] 'positional_embeddings' of MSAT: {positional_embeddings}, "
-            f"action_model_max_seq_len: {action_model_max_seq_len}, enabled: {use_pos_emb}",
-        )
-
-        self.sa_dim = sa_dim
-        self.vl_dim = vl_dim
-
-        # VL→SA projection (used by both physics and non-physics paths)
-        if sa_dim != vl_dim:
-            self.vl_proj_to_sa = nn.Linear(vl_dim, sa_dim, bias=not remove_bias)
-            print(f"[MSAT] Projecting VL dimension from {vl_dim} to {sa_dim}")
-        else:
-            self.vl_proj_to_sa = nn.Identity()
-
-        if self.use_physics and physics_dim > 0:
-            # ── Physics-enabled architecture ──────────────────────────────────────
-            # Lower: ExpandedDoubleStreamBlocks [VL | SA | P] — extends DoubleStreamBlock with P stream
-            # Upper: ExpandedSingleStreamBlocks [VL+SA | P]  — extends SingleStreamBlock with P stream
-            # Pretrained weights load directly (same attribute names as base blocks).
-            print(f"\n[MSAT] Physics mode: use_physics=True, physics_dim={physics_dim}")
-            print(f"[MSAT] Lower: {depth_multi_stream} ExpandedDoubleStreamBlocks [VL | SA | P]")
-            print(f"[MSAT] Upper: {depth_single_stream} ExpandedSingleStreamBlocks [VL+SA | P]")
-
-            self.double_blocks = self._build_expanded_double_blocks(
-                depth=depth_multi_stream,
-                sa_dim=sa_dim,
-                vl_dim=vl_dim,
-                p_dim=sa_dim,  # Physics tokens projected to sa_dim by PhysicalSignalEncoder
-                num_heads=num_attention_heads,
-                head_dim=attention_head_dim,
-                dropout=dropout,
-                attention_bias=attention_bias,
-                norm_eps=norm_eps,
-                qk_norm=qk_norm,
-                mlp_ratio=mlp_ratio,
-                vl_mlp_ratio=vl_mlp_ratio,
-                positional_embeddings=positional_embeddings,
-                max_seq_length=action_model_max_seq_len,
-                temb_type=self.temb_type,
-                remove_bias=remove_bias,
-                pre_norm=pre_norm,
-                post_norm=post_norm,
-            )
-
-            single_stream_hidden_size = sa_dim
-            self.single_blocks = self._build_expanded_single_blocks(
-                depth=depth_single_stream,
-                hidden_size=single_stream_hidden_size,
-                p_dim=sa_dim,
-                num_heads=num_attention_heads,
-                head_dim=attention_head_dim,
-                dropout=dropout,
-                attention_bias=attention_bias,
-                norm_eps=norm_eps,
-                qk_norm=qk_norm,
-                mlp_ratio=mlp_ratio,
-                positional_embeddings=positional_embeddings,
-                max_seq_length=action_model_max_seq_len,
-                temb_type=self.temb_type,
-                remove_bias=remove_bias,
-                pre_norm=pre_norm,
-                post_norm=post_norm,
-            )
-
-            has_single_blocks = depth_single_stream > 0
-            sa_hidden_dim = single_stream_hidden_size if has_single_blocks else sa_dim
-            self._sa_hidden_dim = sa_hidden_dim
-
-            # Physics output projection (AdaLN-zero style)
-            self.norm_out_physics = nn.LayerNorm(sa_dim, elementwise_affine=False, eps=1e-6)
-            self.proj_out_physics_1 = nn.Linear(self.inner_dim, 2 * sa_dim, bias=not remove_bias)
-            self.proj_out_physics_2 = nn.Linear(sa_dim, output_dim, bias=not remove_bias)
-
-        else:
-            # ── Standard architecture (no physics) ────────────────────────────────
-            self.double_blocks = self._build_double_blocks(
-                depth=depth_multi_stream,
-                sa_dim=sa_dim,
-                vl_dim=vl_dim,
-                num_heads=num_attention_heads,
-                head_dim=attention_head_dim,
-                dropout=dropout,
-                attention_bias=attention_bias,
-                norm_eps=norm_eps,
-                qk_norm=qk_norm,
-                mlp_ratio=mlp_ratio,
-                vl_mlp_ratio=vl_mlp_ratio,
-                positional_embeddings=positional_embeddings,
-                max_seq_length=action_model_max_seq_len,
-                temb_type=self.temb_type,
-                remove_bias=remove_bias,
-                pre_norm=pre_norm,
-                post_norm=post_norm,
-            )
-
-            single_stream_hidden_size = sa_dim
-            self.single_blocks = self._build_single_blocks(
-                depth=depth_single_stream,
-                hidden_size=single_stream_hidden_size,
-                num_heads=num_attention_heads,
-                head_dim=attention_head_dim,
-                dropout=dropout,
-                attention_bias=attention_bias,
-                norm_eps=norm_eps,
-                qk_norm=qk_norm,
-                mlp_ratio=mlp_ratio,
-                positional_embeddings=positional_embeddings,
-                max_seq_length=action_model_max_seq_len,
-                temb_type=self.temb_type,
-                remove_bias=remove_bias,
-                pre_norm=pre_norm,
-                post_norm=post_norm,
-            )
-
-            has_single_blocks = depth_single_stream > 0
-            sa_hidden_dim = single_stream_hidden_size if has_single_blocks else sa_dim
-            self._sa_hidden_dim = sa_hidden_dim
-
-        # Output projection (AdaLN-zero style) - for action prediction
-        self.norm_out = nn.LayerNorm(sa_hidden_dim, elementwise_affine=False, eps=1e-6)
-        self.proj_out_1 = nn.Linear(self.inner_dim, 2 * sa_hidden_dim, bias=not remove_bias)
-        self.proj_out_2 = nn.Linear(sa_hidden_dim, output_dim, bias=not remove_bias)
-        print(f"[MSAT] Output projection: sa_hidden_dim={sa_hidden_dim} -> output_dim={output_dim}")
-
-        self._remove_bias = remove_bias
-
-        print("[MSAT] Total number of MSAT parameters: ", sum(p.numel() for p in self.parameters() if p.requires_grad))
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,  # SA tokens
-        encoder_hidden_states: torch.Tensor,  # VL tokens
-        timestep: torch.LongTensor | None = None,
-        return_all_hidden_states: bool = False,  # noqa: FBT001, FBT002
-        encoder_attention_mask: torch.Tensor | None = None,  # [B, N_vl] VL attention mask (1=visible, 0=masked)
-        physics_embs: torch.Tensor | None = None,  # [B, N_p, sa_dim] Physics tokens (when use_physics=True)
-        physics_attention_mask: torch.Tensor | None = None,  # [B] per-sample physics mask (1=visible, 0=masked)
-    ) -> Any:  # noqa: ANN401
-        """Run a forward pass through MSAT.
-
-        Args:
-            hidden_states: State-action tokens ``[B, N_sa, sa_dim]``.
-            encoder_hidden_states: Vision-language tokens ``[B, N_vl, vl_dim]``.
-            timestep: Diffusion timestep tensor ``[B]``.
-            return_all_hidden_states: If True, return intermediate SA hidden states.
-            encoder_attention_mask: Optional VL visibility mask ``[B, N_vl]``.
-            physics_embs: Optional physics tokens ``[B, N_p, sa_dim]``.
-            physics_attention_mask: Optional per-sample physics visibility mask ``[B]``.
-
-        Returns:
-            Action output tensor or physics-aware output dict depending on
-            configuration. Returns ``(output, hidden_states)`` when
-            ``return_all_hidden_states=True``.
-        """
-        return self._forward_inner(
-            hidden_states,
-            encoder_hidden_states,
-            timestep,
-            return_all_hidden_states,
-            encoder_attention_mask,
-            physics_embs,
-            physics_attention_mask,
-        )

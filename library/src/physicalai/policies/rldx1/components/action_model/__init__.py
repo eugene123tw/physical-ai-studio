@@ -4,6 +4,6 @@
 
 """Action head modules (MSAT) for RLDX."""
 
-from physicalai.policies.rldx1.components.action_model.msat import MSAT, JointBase
+from physicalai.policies.rldx1.components.action_model.msat import MSAT
 
-__all__ = ["MSAT", "JointBase"]
+__all__ = ["MSAT"]

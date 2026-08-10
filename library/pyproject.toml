@@ -251,6 +251,8 @@ project-excludes = [
     "src/physicalai/gyms/robocasa.py",
     "src/physicalai/policies/pi05/pi_gemma.py",
     "src/physicalai/policies/groot/components/backbone.py",
+    "src/physicalai/policies/rldx1/augmentations.py",
+    "src/physicalai/policies/rldx1/model.py",
 ]
 
 

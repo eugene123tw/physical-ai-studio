@@ -10,7 +10,6 @@ from typing import Any, Literal
 
 import torch
 import torch.nn.functional as F  # noqa: N812
-from peft import LoraConfig, inject_adapter_in_model
 from safetensors.torch import load_file
 from torch import nn
 from torch.distributions import Beta
@@ -286,8 +285,15 @@ class RLDXActionModel(nn.Module):
         doesn't raise on a missing target.
 
         Raises:
+            ImportError: If peft is not installed.
             ValueError: If none of the requested target modules exist in the MSAT.
         """
+        try:
+            from peft import LoraConfig, inject_adapter_in_model  # noqa: PLC0415
+        except ImportError as e:
+            msg = "LoRA requires peft. Install with: pip install peft"
+            raise ImportError(msg) from e
+
         target_modules = list(self.action_model_lora_target_modules)
 
         # Keep only target names that actually appear in the MSAT. PEFT
@@ -932,7 +938,16 @@ class Rldx1Model(Model):
         the injected LoRA params trainable. Adapter params are immediately
         cast bf16 → fp32 to avoid NaN losses on the first optimizer step
         (mirrors VTC's ``trainable_params_fp32`` policy).
+
+        Raises:
+            ImportError: If peft is not installed.
         """
+        try:
+            from peft import LoraConfig, inject_adapter_in_model  # noqa: PLC0415
+        except ImportError as e:
+            msg = "LoRA requires peft. Install with: pip install peft"
+            raise ImportError(msg) from e
+
         layers = self.backbone.qwen_model.model.language_model.layers
         total = len(layers)
 

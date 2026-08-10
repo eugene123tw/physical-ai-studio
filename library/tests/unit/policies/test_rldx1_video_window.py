@@ -14,14 +14,28 @@ These tests cover the buffer mechanics offline -- no model weights required.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import numpy as np
 import torch
+from torch import nn
 
 if TYPE_CHECKING:
     from physicalai.policies.rldx1.model import Rldx1Model
 
 from physicalai.policies.rldx1 import Rldx1
+
+
+class _StubBackbone(nn.Module):
+    """Drop-in replacement for ``VTCQwen3VLBackbone`` that skips building the 8B VLM.
+
+    ``observation_delta_indices`` only depends on ``video_length``/``video_stride``,
+    set after backbone construction, so the real Qwen3-VL backbone (network fetch
+    of its config + multi-GB parameter allocation) is unnecessary here and times out CI.
+    """
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__()
 
 _VIEW = "observation.images.cam0"
 _VIDEO_LENGTH = 4
@@ -37,9 +51,12 @@ def _bare_policy() -> Rldx1:
     """Construct a model-less policy (offline, no weight download).
 
     ``pretrained_name_or_path=None`` takes the lazy init path so no HF Hub
-    download happens. The default config ships ``video_length=4`` / ``video_stride=2``.
+    download happens. The backbone is also stubbed as a defense-in-depth
+    guard against a future lazy-path change eagerly building the 8B VLM.
+    The default config ships ``video_length=4`` / ``video_stride=2``.
     """
-    return Rldx1(pretrained_name_or_path=None)
+    with patch("physicalai.policies.rldx1.model.VTCQwen3VLBackbone", _StubBackbone):
+        return Rldx1(pretrained_name_or_path=None)
 
 
 def test_window_samples_expected_strides() -> None:
@@ -65,7 +82,8 @@ def test_vlln_defaults_to_upstream_checkpoint_architecture() -> None:
 
 def test_vlln_can_be_enabled_explicitly() -> None:
     """Fine-tuning configurations may opt into the additional VLLN layer."""
-    assert Rldx1(pretrained_name_or_path=None, use_vlln=True).config.use_vlln
+    with patch("physicalai.policies.rldx1.model.VTCQwen3VLBackbone", _StubBackbone):
+        assert Rldx1(pretrained_name_or_path=None, use_vlln=True).config.use_vlln
 
 
 def test_window_clamps_when_history_short() -> None:
@@ -153,7 +171,8 @@ def test_multiframe_input_not_recorded() -> None:
 def _bare_model(video_length: int = 4, video_stride: int = 2) -> "Rldx1Model":
     from physicalai.policies.rldx1.model import Rldx1Model  # noqa: PLC0415
 
-    return Rldx1Model(video_length=video_length, video_stride=video_stride)
+    with patch("physicalai.policies.rldx1.model.VTCQwen3VLBackbone", _StubBackbone):
+        return Rldx1Model(video_length=video_length, video_stride=video_stride)
 
 
 def test_observation_delta_indices_default() -> None:

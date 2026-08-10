@@ -31,9 +31,10 @@ uv sync --active --extra cu128          # or cpu / xpu — do NOT use --extra al
 
 bash library/scripts/benchmark/install_robocasa.sh
 
-# Download kitchen assets (~4.4 GB on disk; prompts interactively)
+# Download kitchen assets (~34 GB on disk, including the objaverse object
+# pack; prompts interactively)
 yes y | python -m robocasa.scripts.download_kitchen_assets \
-    --type tex tex_generative fixtures_lw objs_lw
+    --type tex tex_generative fixtures_lw objs_lw objs_objaverse
 
 # Headless servers
 export MUJOCO_GL=egl
@@ -193,7 +194,7 @@ Three bugs from the lerobot port are already encoded as workarounds:
 
 2. **objaverse NaN crash** — sampling from a registry with zero objects causes
    `Probabilities contain NaN`. If you hit this at `reset()`, either re-run the
-   asset download with `--type objs_lw` or pass `obj_registries=("lightwheel",)`
+   asset download with `--type objs_objaverse` or pass `obj_registries=("lightwheel",)`
    explicitly to drop objaverse from the default.
 
 3. **`atomic_seen` → `split="target"`** — robocasa's own group maps to `split="target"`,

@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import torch
 from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import RemoteEntryNotFoundError
 from transformers.optimization import Adafactor
 
 from physicalai.data import Dataset, Observation
@@ -329,7 +330,14 @@ class Rldx1(Policy):
     ) -> tuple[Rldx1Config, dict[str, dict[str, list[float] | str | tuple]], list[Path]]:
         config_file = Path(hf_hub_download(pretrained_name_or_path, "config.json", revision=revision))  # nosec B615
         shard_files = retrieve_safetensors_shards(pretrained_name_or_path, revision=revision)
-        stats_file = Path(hf_hub_download(pretrained_name_or_path, "processor/statistics.json", revision=revision))  # nosec B615
+        try:
+            stats_file = Path(hf_hub_download(pretrained_name_or_path, "processor/statistics.json", revision=revision))  # nosec B615
+        except RemoteEntryNotFoundError:
+            try:
+                stats_file = Path(hf_hub_download(pretrained_name_or_path, "statistics.json", revision=revision))  # nosec B615
+            except RemoteEntryNotFoundError as e2:
+                msg = "statistics.json not found in the root of the repo. Falling back to processor/statistics.json"
+                raise RuntimeError(msg) from e2
 
         # --- parse config.json ---
         with Path(config_file).open(encoding="utf-8") as f:

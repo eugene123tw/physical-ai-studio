@@ -310,7 +310,7 @@ jobs:
         run: |
           source .venv-robocasa/bin/activate
           yes y | python -m robocasa.scripts.download_kitchen_assets \
-            --type tex tex_generative fixtures_lw objs_lw
+            --type tex tex_generative fixtures_lw objs_lw objs_objaverse
 
       - name: Run RoboCasa integration test
         working-directory: library

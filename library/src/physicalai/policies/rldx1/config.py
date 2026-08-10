@@ -6,7 +6,7 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from physicalai.training_config import Config
+from physicalai.config import Config
 
 
 @dataclass

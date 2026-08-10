@@ -10,7 +10,7 @@ from physicalai.training_config import Config
 
 
 @dataclass
-class RLDX1Config(Config):
+class Rldx1Config(Config):
     """Unified configuration for RLDX model with backbone and action model."""
 
     dtype: str = "bfloat16"  # Use bfloat16 for Flash Attention compatibility

@@ -14,11 +14,11 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn.functional as F  # noqa: N812
+from physicalai.training_config.mixin import FromConfig
 from torch import nn
 from torch.distributions import Beta
 
 from physicalai.policies.shared.components.nn import CategorySpecificMLP, MultiEmbodimentActionEncoder
-from physicalai.training_config.mixin import FromConfig
 
 from .transformer import get_dit_class, get_self_attention_transformer_class
 

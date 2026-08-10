@@ -53,7 +53,7 @@ from transformers.optimization import Adafactor
 
 from physicalai.data import Dataset, Observation
 from physicalai.policies.base import Policy
-from physicalai.policies.rldx1.config import RLDX1Config
+from physicalai.policies.rldx1.config import Rldx1Config
 from physicalai.policies.rldx1.model import Rldx1Model
 from physicalai.policies.rldx1.pretrained_utils import extract_dataset_stats, retrieve_safetensors_shards
 from physicalai.train.schedulers import cosine_decay_with_warmup_scheduler
@@ -229,7 +229,7 @@ class Rldx1(Policy):
                 embodiment_tag=embodiment_tag,
             )
         else:
-            self.config = RLDX1Config(
+            self.config = Rldx1Config(
                 base_model_path=pretrained_name_or_path,
                 revision=revision,
                 max_state_dim=max_state_dim,
@@ -326,7 +326,7 @@ class Rldx1(Policy):
         embodiment_tag: str,
         # Action prediciton
         action_horizon: int,
-    ) -> tuple[RLDX1Config, dict[str, dict[str, list[float] | str | tuple]], list[Path]]:
+    ) -> tuple[Rldx1Config, dict[str, dict[str, list[float] | str | tuple]], list[Path]]:
         config_file = Path(hf_hub_download(pretrained_name_or_path, "config.json", revision=revision))  # nosec B615
         shard_files = retrieve_safetensors_shards(pretrained_name_or_path, revision=revision)
         stats_file = Path(hf_hub_download(pretrained_name_or_path, "processor/statistics.json", revision=revision))  # nosec B615
@@ -367,7 +367,7 @@ class Rldx1(Policy):
         hf_config["embodiment_tag"] = embodiment_tag
 
         # from_dict skips unknown keys and coerces lists→tuples via type hints
-        config = RLDX1Config.from_dict(hf_config)
+        config = Rldx1Config.from_dict(hf_config)
 
         # --- build dataset_stats from HF artefacts ---
         dataset_stats = extract_dataset_stats(
@@ -389,7 +389,7 @@ class Rldx1(Policy):
             dataset_stats: Dataset normalization statistics.
             shard_files: List of shard files containing model weights.
         """
-        config: RLDX1Config = self.config
+        config: Rldx1Config = self.config
         self.model = Rldx1Model(
             base_model_path=config.base_model_path,
             max_state_dim=config.max_state_dim,

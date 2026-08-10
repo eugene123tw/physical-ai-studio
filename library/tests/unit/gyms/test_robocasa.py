@@ -90,14 +90,14 @@ class TestConvertAction:
             assert action_dict[key].shape == (width,), f"{key} has wrong shape"
 
     def test_convert_action_preserves_values(self):
-        """Slice values match the source array element-wise."""
+        """Slice values match the source array element-wise, per ``DEFAULT_ACTION_ORDER``."""
         flat = np.arange(ACTION_DIM, dtype=np.float32)
         action_dict = convert_action(flat)
-        np.testing.assert_array_equal(action_dict["action.base_motion"], flat[0:4])
-        np.testing.assert_array_equal(action_dict["action.control_mode"], flat[4:5])
-        np.testing.assert_array_equal(action_dict["action.end_effector_position"], flat[5:8])
-        np.testing.assert_array_equal(action_dict["action.end_effector_rotation"], flat[8:11])
-        np.testing.assert_array_equal(action_dict["action.gripper_close"], flat[11:12])
+        np.testing.assert_array_equal(action_dict["action.end_effector_position"], flat[0:3])
+        np.testing.assert_array_equal(action_dict["action.end_effector_rotation"], flat[3:6])
+        np.testing.assert_array_equal(action_dict["action.gripper_close"], flat[6:7])
+        np.testing.assert_array_equal(action_dict["action.base_motion"], flat[7:11])
+        np.testing.assert_array_equal(action_dict["action.control_mode"], flat[11:12])
 
 
 class TestObservationSpace:

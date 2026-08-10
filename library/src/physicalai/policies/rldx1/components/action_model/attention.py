@@ -4,10 +4,35 @@
 
 """Self-attention transformer blocks (extracted from msat.py)."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import torch
-from diffusers.models.attention import Attention, FeedForward
-from diffusers.models.embeddings import SinusoidalPositionalEmbedding
 from torch import nn
+
+if TYPE_CHECKING:
+    # Only for static type checking; runtime import is lazy via _import_diffusers().
+    from diffusers.models.embeddings import SinusoidalPositionalEmbedding
+
+
+def _import_diffusers() -> tuple:
+    """Lazy import of diffusers attention/embedding components.
+
+    Returns:
+        Tuple of (Attention, FeedForward, SinusoidalPositionalEmbedding).
+
+    Raises:
+        ImportError: If diffusers is not installed.
+    """
+    try:
+        from diffusers.models.attention import Attention, FeedForward  # noqa: PLC0415
+        from diffusers.models.embeddings import SinusoidalPositionalEmbedding  # noqa: PLC0415
+    except ImportError as e:
+        msg = "BasicTransformerBlock requires diffusers.\n\nInstall with:\n    pip install diffusers"
+        raise ImportError(msg) from e
+    else:
+        return Attention, FeedForward, SinusoidalPositionalEmbedding
 
 
 class BasicTransformerBlock(nn.Module):
@@ -68,6 +93,8 @@ class BasicTransformerBlock(nn.Module):
                 or if an unsupported ``positional_embeddings`` type is given.
         """
         super().__init__()
+        attention_cls, feedforward_cls, sinusoidal_pos_embed_cls = _import_diffusers()
+
         self.dim = dim
         self.num_attention_heads = num_attention_heads
         self.attention_head_dim = attention_head_dim
@@ -88,7 +115,7 @@ class BasicTransformerBlock(nn.Module):
             if max_seq_length is None:
                 msg = "If `positional_embedding` type is 'sinusoidal', `max_seq_length` must be defined."
                 raise ValueError(msg)
-            self.pos_embed = SinusoidalPositionalEmbedding(dim, max_seq_length=max_seq_length)
+            self.pos_embed = sinusoidal_pos_embed_cls(dim, max_seq_length=max_seq_length)
         elif positional_embeddings is None:
             self.pos_embed = None
         else:
@@ -98,7 +125,7 @@ class BasicTransformerBlock(nn.Module):
         # 1. Self-Attn
         self.norm1 = nn.LayerNorm(dim, elementwise_affine=norm_elementwise_affine, eps=norm_eps)
 
-        self.attn1 = Attention(
+        self.attn1 = attention_cls(
             query_dim=dim,
             heads=num_attention_heads,
             dim_head=attention_head_dim,
@@ -111,7 +138,7 @@ class BasicTransformerBlock(nn.Module):
 
         # 3. Feed-forward
         self.norm3 = nn.LayerNorm(dim, norm_eps, norm_elementwise_affine)
-        self.ff = FeedForward(
+        self.ff = feedforward_cls(
             dim,
             dropout=dropout,
             activation_fn=activation_fn,

@@ -9,16 +9,35 @@ This module implements a Transformer-based memory that fuses cognition token emb
 from multiple timesteps to provide temporal context for action prediction.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 import torch
 import torch.nn.functional as F  # noqa: N812
-from diffusers.models.embeddings import SinusoidalPositionalEmbedding
 from torch import nn
 from transformers import LlamaConfig
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from physicalai.policies.rldx1.components.norms import RMSNorm
+
+
+def _import_diffusers() -> type:
+    """Lazy import of diffusers' SinusoidalPositionalEmbedding.
+
+    Returns:
+        The SinusoidalPositionalEmbedding class.
+
+    Raises:
+        ImportError: If diffusers is not installed.
+    """
+    try:
+        from diffusers.models.embeddings import SinusoidalPositionalEmbedding  # noqa: PLC0415
+    except ImportError as e:
+        msg = "TransformerMemory requires diffusers.\n\nInstall with:\n    pip install diffusers"
+        raise ImportError(msg) from e
+    else:
+        return SinusoidalPositionalEmbedding
 
 
 class RotaryEmbedding(nn.Module):
@@ -378,7 +397,8 @@ class TransformerMemory(nn.Module):
 
         # Optional sinusoidal positional embedding (if not using RoPE)
         if not use_rope:
-            self.pos_emb = SinusoidalPositionalEmbedding(
+            sinusoidal_positional_embedding_cls = _import_diffusers()
+            self.pos_emb = sinusoidal_positional_embedding_cls(
                 hidden_size,
                 max_seq_length=max_position_embeddings,
             )

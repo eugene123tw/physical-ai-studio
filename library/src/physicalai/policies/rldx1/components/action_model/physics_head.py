@@ -234,7 +234,9 @@ class PhysicsHead(nn.Module):
             )
 
         logger.info(
-            "[Physics] Physics stream enabled (dim=%s, weight=%s)", physics_dim, physics_loss_weight,
+            "[Physics] Physics stream enabled (dim=%s, weight=%s)",
+            physics_dim,
+            physics_loss_weight,
         )
         logger.info(
             "[Physics] hist_len=%s, fut_len=%s, flow_matching=%s",

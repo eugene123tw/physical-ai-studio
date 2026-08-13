@@ -430,9 +430,6 @@ class RLDXActionModel(nn.Module):
 
         # Add Gaussian noise to state features.
         if self.training and self.state_additive_noise_scale > 0:
-            print(
-                f"Adding Gaussian noise to state features with scale {self.state_additive_noise_scale}",
-            )
             noise = torch.randn_like(state_features) * self.state_additive_noise_scale
             state_features = state_features + noise  # noqa: PLR6104
 

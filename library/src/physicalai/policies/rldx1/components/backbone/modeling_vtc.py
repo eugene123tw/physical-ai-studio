@@ -125,7 +125,7 @@ class VTCQwen3Model(Qwen3VLForConditionalGeneration):
 
         if "vtc" in pretrained_model_name_or_path.lower():
             print(
-                f"[i] VTC loading pretrained VTC + Qwe3nVL weights from {pretrained_model_name_or_path}",
+                f"[i] VTC loading pretrained VTC + Qwen3VL weights from {pretrained_model_name_or_path}",
             )
             # Reference architecture config — always the upstream Qwen3-VL.
             # revision pins the RLDX repo, not this reference, so don't thread

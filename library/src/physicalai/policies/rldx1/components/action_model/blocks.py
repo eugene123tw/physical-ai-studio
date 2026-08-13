@@ -30,7 +30,7 @@ class ModulationOut(NamedTuple):
 class Modulation(nn.Module):
     """Flux-style modulation for AdaLN."""
 
-    def __init__(self, dim: int, double: bool, remove_bias: bool = False) -> None:  # noqa: FBT001, FBT002
+    def __init__(self, dim: int, *, double: bool, remove_bias: bool = False) -> None:
         """Initialize Modulation.
 
         Args:

@@ -1,10 +1,10 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
-# ruff: noqa: T201
 
 """MSAT: Multi-Stream Action Transformer (top-level orchestrator)."""
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -22,6 +22,8 @@ from physicalai.policies.rldx1.components.action_model.blocks import (
 )
 from physicalai.policies.rldx1.components.action_model.ops import RoPEEmbedder1D
 from physicalai.policies.shared.components.nn import TimestepEncoder
+
+logger = logging.getLogger(__name__)
 
 
 class MSAT(nn.Module):
@@ -129,7 +131,7 @@ class MSAT(nn.Module):
         # If remove_bias=True, override attention_bias to False
         if remove_bias:
             attention_bias = False
-            print(
+            logger.info(
                 "[MSAT] remove_bias=True: overriding attention_bias to False for all attention layers",
             )
 
@@ -172,14 +174,14 @@ class MSAT(nn.Module):
             else:
                 self.shared_single_mod_proj = nn.Identity()
 
-        print("\nInitializing MSAT...")
+        logger.info("Initializing MSAT...")
 
         # Initialize RoPE embedder if needed
         if positional_embeddings == "rope_sa_only":
             # RoPE for SA stream only (attention_head_dim assumed to be 64 below)
             # Axis 0 (dim=16): 0 (unused)
             # Axis 1 (dim=48): SA sequence position
-            print(f"[MSAT] RoPE theta: {rope_theta}")
+            logger.info("[MSAT] RoPE theta: %s", rope_theta)
             self.rope_embedder = RoPEEmbedder1D(
                 head_dim=attention_head_dim,
                 axes_dim=[attention_head_dim // 4, attention_head_dim - attention_head_dim // 4],
@@ -203,9 +205,11 @@ class MSAT(nn.Module):
             self.use_rope = False
 
         use_pos_emb = self.use_rope
-        print(
-            f"[MSAT] 'positional_embeddings' of MSAT: {positional_embeddings}, "
-            f"action_model_max_seq_len: {action_model_max_seq_len}, enabled: {use_pos_emb}",
+        logger.info(
+            "[MSAT] 'positional_embeddings' of MSAT: %s, action_model_max_seq_len: %s, enabled: %s",
+            positional_embeddings,
+            action_model_max_seq_len,
+            use_pos_emb,
         )
 
         self.sa_dim = sa_dim
@@ -214,7 +218,7 @@ class MSAT(nn.Module):
         # VL→SA projection (used by both physics and non-physics paths)
         if sa_dim != vl_dim:
             self.vl_proj_to_sa = nn.Linear(vl_dim, sa_dim, bias=not remove_bias)
-            print(f"[MSAT] Projecting VL dimension from {vl_dim} to {sa_dim}")
+            logger.info("[MSAT] Projecting VL dimension from %s to %s", vl_dim, sa_dim)
         else:
             self.vl_proj_to_sa = nn.Identity()
 
@@ -223,9 +227,9 @@ class MSAT(nn.Module):
             # Lower: ExpandedDoubleStreamBlocks [VL | SA | P] — extends DoubleStreamBlock with P stream
             # Upper: ExpandedSingleStreamBlocks [VL+SA | P]  — extends SingleStreamBlock with P stream
             # Pretrained weights load directly (same attribute names as base blocks).
-            print(f"\n[MSAT] Physics mode: use_physics=True, physics_dim={physics_dim}")
-            print(f"[MSAT] Lower: {depth_multi_stream} ExpandedDoubleStreamBlocks [VL | SA | P]")
-            print(f"[MSAT] Upper: {depth_single_stream} ExpandedSingleStreamBlocks [VL+SA | P]")
+            logger.info("[MSAT] Physics mode: use_physics=True, physics_dim=%s", physics_dim)
+            logger.info("[MSAT] Lower: %s ExpandedDoubleStreamBlocks [VL | SA | P]", depth_multi_stream)
+            logger.info("[MSAT] Upper: %s ExpandedSingleStreamBlocks [VL+SA | P]", depth_single_stream)
 
             self.double_blocks = self._build_expanded_double_blocks(
                 depth=depth_multi_stream,
@@ -326,11 +330,14 @@ class MSAT(nn.Module):
         self.norm_out = nn.LayerNorm(sa_hidden_dim, elementwise_affine=False, eps=1e-6)
         self.proj_out_1 = nn.Linear(self.inner_dim, 2 * sa_hidden_dim, bias=not remove_bias)
         self.proj_out_2 = nn.Linear(sa_hidden_dim, output_dim, bias=not remove_bias)
-        print(f"[MSAT] Output projection: sa_hidden_dim={sa_hidden_dim} -> output_dim={output_dim}")
+        logger.info("[MSAT] Output projection: sa_hidden_dim=%s -> output_dim=%s", sa_hidden_dim, output_dim)
 
         self._remove_bias = remove_bias
 
-        print("[MSAT] Total number of MSAT parameters: ", sum(p.numel() for p in self.parameters() if p.requires_grad))
+        logger.info(
+            "[MSAT] Total number of MSAT parameters: %d",
+            sum(p.numel() for p in self.parameters() if p.requires_grad),
+        )
 
     def forward(
         self,

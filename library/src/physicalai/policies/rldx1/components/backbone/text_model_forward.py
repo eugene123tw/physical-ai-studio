@@ -94,6 +94,8 @@ def _vtc_qwen3vl_text_forward(  # noqa: PLR0912
     """
     # XOR check intentionally omitted: the adapter passes both `input_ids`
     # (for LayerWrapper image-token detection) and `inputs_embeds`.
+    if use_cache is None:
+        use_cache = self.config.use_cache
     if use_cache and past_key_values is None and not torch.jit.is_tracing():
         past_key_values = DynamicCache(config=self.config)
 

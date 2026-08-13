@@ -45,26 +45,27 @@ class BasicTransformerBlock(nn.Module):
     pos_embed: SinusoidalPositionalEmbedding | None
     final_dropout: nn.Dropout | None
 
-    def __init__(  # noqa: PLR0913, PLR0917
+    def __init__(  # noqa: PLR0913
         self,
         dim: int,
         num_attention_heads: int,
         attention_head_dim: int,
+        *,
         dropout: float = 0.0,
         cross_attention_dim: int | None = None,
         activation_fn: str = "geglu",
-        attention_bias: bool = False,  # noqa: FBT001, FBT002
-        upcast_attention: bool = False,  # noqa: FBT001, FBT002
-        norm_elementwise_affine: bool = True,  # noqa: FBT001, FBT002
+        attention_bias: bool = False,
+        upcast_attention: bool = False,
+        norm_elementwise_affine: bool = True,
         norm_type: str = "layer_norm",
         norm_eps: float = 1e-5,
-        final_dropout: bool = False,  # noqa: FBT001, FBT002
+        final_dropout: bool = False,
         attention_type: str = "default",  # noqa: ARG002
         positional_embeddings: str | None = None,
         max_seq_length: int | None = None,
         ff_inner_dim: int | None = None,
-        ff_bias: bool = True,  # noqa: FBT001, FBT002
-        attention_out_bias: bool = True,  # noqa: FBT001, FBT002
+        ff_bias: bool = True,
+        attention_out_bias: bool = True,
     ) -> None:
         """Initialize the transformer block.
 

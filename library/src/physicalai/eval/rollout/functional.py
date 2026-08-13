@@ -307,7 +307,9 @@ def run_rollout_loop(  # noqa: PLR0914
 
     # Some gyms (e.g. RoboCasa) only know the task description after reset(),
     # so refresh the caption here rather than relying on a value captured earlier.
-    if video_recorder is not None:
+    # Only do this when no caption was explicitly set, so callers who pass a
+    # custom caption to VideoRecorder don't have it silently overwritten.
+    if video_recorder is not None and not video_recorder.caption:
         description = getattr(env, "task_description", None)
         if description:
             video_recorder.caption = description

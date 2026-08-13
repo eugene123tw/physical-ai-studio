@@ -1,10 +1,10 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 # Vendored from RLWRLD/RLDX-1 (Apache-2.0)
-# ruff: noqa: T201
 
 """Physics conditioning + flow matching stream for RLDXActionModel."""
 
+import logging
 from typing import Any, NamedTuple
 
 import torch
@@ -16,6 +16,8 @@ from .physics import (
     PhysicalSignalEncoder,
     PhysicsNoiseEncoder,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PhysicsInferenceState(NamedTuple):
@@ -66,7 +68,7 @@ def remap_physics_keys(state_dict: dict) -> dict:
                 break
         remapped[new_key] = value
     if renamed_count > 0:
-        print(f"[Physics] Remapped {renamed_count} older-format keys → physics.* layout")
+        logger.info("[Physics] Remapped %d older-format keys → physics.* layout", renamed_count)
     return remapped
 
 
@@ -227,20 +229,22 @@ class PhysicsHead(nn.Module):
                 )
                 raise ValueError(msg)
         else:
-            print(
+            logger.info(
                 "[Physics] Flow matching disabled. Physics used as conditioning only (no prediction loss)",
             )
 
-        print(
-            f"\n[Physics] Physics stream enabled (dim={physics_dim}, weight={physics_loss_weight})",
+        logger.info(
+            "[Physics] Physics stream enabled (dim=%s, weight=%s)", physics_dim, physics_loss_weight,
         )
-        print(
-            f"[Physics] hist_len={self.physics_hist_len}, fut_len={self.physics_fut_len}, "
-            f"flow_matching={self.physics_use_flow_matching}",
+        logger.info(
+            "[Physics] hist_len=%s, fut_len=%s, flow_matching=%s",
+            self.physics_hist_len,
+            self.physics_fut_len,
+            self.physics_use_flow_matching,
         )
         if physics_dropout_prob > 0:
             mode = "hist-only" if self.physics_use_flow_matching else "all-conditioning"
-            print(f"[Physics] physics_dropout_prob={physics_dropout_prob} ({mode})")
+            logger.info("[Physics] physics_dropout_prob=%s (%s)", physics_dropout_prob, mode)
 
     def _maybe_dropout(self, tokens: torch.Tensor) -> torch.Tensor:
         """Apply per-sample dropout by replacing dropped tokens with the learned mask token.

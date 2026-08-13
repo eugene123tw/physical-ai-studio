@@ -185,26 +185,13 @@ yes y | python -m robocasa.scripts.download_kitchen_assets \
 export MUJOCO_GL=egl
 ```
 
-**CLI:**
-
-```bash
-physicalai benchmark \
-    --benchmark physicalai.benchmark.gyms.RoboCasaBenchmark \
-    --benchmark.task atomic_seen \
-    --benchmark.num_episodes 20 \
-    --policy physicalai.policies.ACT \
-    --ckpt_path experiments/lightning_logs/version_0/checkpoints/last.ckpt
-```
-
 **Python API:**
 
 ```python test="skip" reason="requires robocasa dedicated venv"
 from physicalai.benchmark.gyms import RoboCasaBenchmark
-from physicalai.policies import ACT
+from physicalai.policies import Rldx1
 
-policy = ACT.load_from_checkpoint(
-    "experiments/lightning_logs/version_0/checkpoints/last.ckpt"
-)
+policy = Rldx1(pretrained_name_or_path="RLWRLD/RLDX-1-FT-ROBOCASA")
 policy.eval()
 
 benchmark = RoboCasaBenchmark(task="atomic_seen", num_episodes=20)

@@ -244,6 +244,7 @@ def setup_rollout(
     policy: Policy,
     seed: int | None,
     max_steps: int | None,
+    rollout_idx: int = 0,
 ) -> tuple[Observation, int]:
     """Set up rollout by attaching max_steps, seed, resetting policy and providing first observation.
 
@@ -252,6 +253,7 @@ def setup_rollout(
         policy (Policy): policy to reset if it has attribute.
         seed (int | None): seed to init reset.
         max_steps (int | None): maximum number of steps
+        rollout_idx (int): index of the current rollout. Defaults to 0.
 
     Returns:
         tuple[Observation, int]: First Observation and maximum number of steps of rollout
@@ -259,7 +261,7 @@ def setup_rollout(
     max_steps = _get_max_steps(env, max_steps)
 
     # Reset environment → batched observation
-    observation, _ = env.reset(seed=seed)
+    observation, _ = env.reset(seed=seed, episode_index=rollout_idx)
 
     # Reset policy if needed
     if hasattr(policy, "reset") and callable(policy.reset):
@@ -442,6 +444,7 @@ def rollout(
     frame_key: str | Sequence[str] = "image",
     render_callback: Callable[[Gym], None] | None = None,
     video_recorder: VideoRecorder | None = None,
+    rollout_idx: int = 0,
 ) -> dict[str, Any]:
     """Runs a policy in an environment for a single episode.
 
@@ -475,6 +478,7 @@ def rollout(
         video_recorder (VideoRecorder | None, optional): Video recorder for capturing
             frames during the rollout. Call start_episode() before and finish_episode()
             after. Defaults to None.
+        rollout_idx (int, optional): Index of the current rollout. Defaults to 0.
 
     Returns:
         dict[str, Any]: Episode information containing:
@@ -490,7 +494,7 @@ def rollout(
             - observation: Observations - if return_observations=True
     """
     # init rollout and policy
-    initial_observation, max_steps = setup_rollout(env, policy, seed, max_steps)
+    initial_observation, max_steps = setup_rollout(env, policy, seed, max_steps, rollout_idx)
 
     # if render callback, call for first observation
     if render_callback:
@@ -621,7 +625,6 @@ def evaluate_policy(
 
     while episodes_collected < n_episodes:
         seed = None if start_seed is None else start_seed + rollout_idx
-        rollout_idx += 1
 
         # Start video recording for this episode
         if video_recorder is not None:
@@ -636,7 +639,10 @@ def evaluate_policy(
             return_observations=return_episode_data,
             frame_key=frame_key,
             video_recorder=video_recorder,
+            rollout_idx=rollout_idx,
         )
+
+        rollout_idx += 1
 
         # Finish video recording
         if video_recorder is not None:

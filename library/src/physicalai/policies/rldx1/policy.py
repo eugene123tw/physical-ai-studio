@@ -189,7 +189,10 @@ class Rldx1(Policy):
 
         shard_files = None
         if pretrained_name_or_path is not None:
-            self.config, dataset_stats, shard_files = self._from_hf(
+            # dataset_stats already provided (e.g. restored from a checkpoint's
+            # hparams during load_from_checkpoint) takes precedence -- _from_hf's
+            # own extract_dataset_stats() is only a narrow, defaulted fallback.
+            self.config, hf_dataset_stats, shard_files = self._from_hf(
                 pretrained_name_or_path,
                 revision=revision,
                 max_state_dim=max_state_dim,
@@ -229,6 +232,8 @@ class Rldx1(Policy):
                 action_horizon=n_action_steps,
                 embodiment_tag=embodiment_tag,
             )
+            if dataset_stats is None:
+                dataset_stats = hf_dataset_stats
         else:
             self.config = Rldx1Config(
                 base_model_path=pretrained_name_or_path,

@@ -649,66 +649,6 @@
       "severity": "error"
     },
     {
-      "line": 79,
-      "column": 5,
-      "stop_line": 79,
-      "stop_column": 50,
-      "path": "src/physicalai/gyms/libero.py",
-      "code": -2,
-      "name": "missing-import",
-      "description": "Cannot find module `libero.libero.benchmark`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
-      "concise_description": "Cannot find module `libero.libero.benchmark`",
-      "severity": "error"
-    },
-    {
-      "line": 88,
-      "column": 5,
-      "stop_line": 88,
-      "stop_column": 60,
-      "path": "src/physicalai/gyms/libero.py",
-      "code": -2,
-      "name": "missing-import",
-      "description": "Cannot find module `libero.libero`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
-      "concise_description": "Cannot find module `libero.libero`",
-      "severity": "error"
-    },
-    {
-      "line": 89,
-      "column": 5,
-      "stop_line": 89,
-      "stop_column": 46,
-      "path": "src/physicalai/gyms/libero.py",
-      "code": -2,
-      "name": "missing-import",
-      "description": "Cannot find module `libero.libero`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
-      "concise_description": "Cannot find module `libero.libero`",
-      "severity": "error"
-    },
-    {
-      "line": 90,
-      "column": 5,
-      "stop_line": 90,
-      "stop_column": 54,
-      "path": "src/physicalai/gyms/libero.py",
-      "code": -2,
-      "name": "missing-import",
-      "description": "Cannot find module `libero.libero.envs`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
-      "concise_description": "Cannot find module `libero.libero.envs`",
-      "severity": "error"
-    },
-    {
-      "line": 91,
-      "column": 5,
-      "stop_line": 91,
-      "stop_column": 63,
-      "path": "src/physicalai/gyms/libero.py",
-      "code": -2,
-      "name": "missing-import",
-      "description": "Cannot find module `robosuite.utils.transform_utils`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
-      "concise_description": "Cannot find module `robosuite.utils.transform_utils`",
-      "severity": "error"
-    },
-    {
       "line": 284,
       "column": 17,
       "stop_line": 284,
@@ -817,9 +757,9 @@
       "severity": "error"
     },
     {
-      "line": 411,
+      "line": 413,
       "column": 39,
-      "stop_line": 411,
+      "stop_line": 413,
       "stop_column": 52,
       "path": "src/physicalai/gyms/libero.py",
       "code": -2,
@@ -829,9 +769,9 @@
       "severity": "error"
     },
     {
-      "line": 417,
+      "line": 419,
       "column": 27,
-      "stop_line": 417,
+      "stop_line": 419,
       "stop_column": 49,
       "path": "src/physicalai/gyms/libero.py",
       "code": -2,
@@ -841,9 +781,9 @@
       "severity": "error"
     },
     {
-      "line": 458,
+      "line": 460,
       "column": 17,
-      "stop_line": 458,
+      "stop_line": 460,
       "stop_column": 31,
       "path": "src/physicalai/gyms/libero.py",
       "code": -2,
@@ -853,9 +793,9 @@
       "severity": "error"
     },
     {
-      "line": 481,
+      "line": 483,
       "column": 19,
-      "stop_line": 481,
+      "stop_line": 483,
       "stop_column": 31,
       "path": "src/physicalai/gyms/libero.py",
       "code": -2,
@@ -865,9 +805,9 @@
       "severity": "error"
     },
     {
-      "line": 586,
+      "line": 588,
       "column": 21,
-      "stop_line": 586,
+      "stop_line": 588,
       "stop_column": 43,
       "path": "src/physicalai/gyms/libero.py",
       "code": -2,
@@ -877,9 +817,9 @@
       "severity": "error"
     },
     {
-      "line": 663,
+      "line": 665,
       "column": 13,
-      "stop_line": 663,
+      "stop_line": 665,
       "stop_column": 48,
       "path": "src/physicalai/gyms/libero.py",
       "code": -2,
@@ -925,9 +865,21 @@
       "severity": "error"
     },
     {
-      "line": 587,
+      "line": 298,
+      "column": 16,
+      "stop_line": 298,
+      "stop_column": 31,
+      "path": "src/physicalai/policies/act/model.py",
+      "code": -2,
+      "name": "bad-return",
+      "description": "Returned type `tuple[Unknown, dict[str, float]]` is not assignable to declared return type `tuple[Tensor, dict[str, Tensor | float]]`",
+      "concise_description": "Returned type `tuple[Unknown, dict[str, float]]` is not assignable to declared return type `tuple[Tensor, dict[str, Tensor | float]]`",
+      "severity": "error"
+    },
+    {
+      "line": 591,
       "column": 17,
-      "stop_line": 587,
+      "stop_line": 591,
       "stop_column": 31,
       "path": "src/physicalai/policies/act/model.py",
       "code": -2,
@@ -937,9 +889,9 @@
       "severity": "error"
     },
     {
-      "line": 680,
+      "line": 684,
       "column": 49,
-      "stop_line": 680,
+      "stop_line": 684,
       "stop_column": 66,
       "path": "src/physicalai/policies/act/model.py",
       "code": -2,
@@ -949,9 +901,9 @@
       "severity": "error"
     },
     {
-      "line": 683,
+      "line": 687,
       "column": 42,
-      "stop_line": 683,
+      "stop_line": 687,
       "stop_column": 69,
       "path": "src/physicalai/policies/act/model.py",
       "code": -2,
@@ -961,9 +913,9 @@
       "severity": "error"
     },
     {
-      "line": 687,
+      "line": 691,
       "column": 25,
-      "stop_line": 687,
+      "stop_line": 691,
       "stop_column": 55,
       "path": "src/physicalai/policies/act/model.py",
       "code": -2,
@@ -973,9 +925,9 @@
       "severity": "error"
     },
     {
-      "line": 697,
+      "line": 701,
       "column": 41,
-      "stop_line": 700,
+      "stop_line": 704,
       "stop_column": 14,
       "path": "src/physicalai/policies/act/model.py",
       "code": -2,
@@ -985,9 +937,9 @@
       "severity": "error"
     },
     {
-      "line": 760,
+      "line": 764,
       "column": 60,
-      "stop_line": 760,
+      "stop_line": 764,
       "stop_column": 64,
       "path": "src/physicalai/policies/act/model.py",
       "code": -2,
@@ -997,9 +949,9 @@
       "severity": "error"
     },
     {
-      "line": 761,
+      "line": 765,
       "column": 66,
-      "stop_line": 761,
+      "stop_line": 765,
       "stop_column": 70,
       "path": "src/physicalai/policies/act/model.py",
       "code": -2,
@@ -1009,9 +961,9 @@
       "severity": "error"
     },
     {
-      "line": 788,
+      "line": 792,
       "column": 18,
-      "stop_line": 788,
+      "stop_line": 792,
       "stop_column": 68,
       "path": "src/physicalai/policies/act/model.py",
       "code": -2,
@@ -1021,9 +973,9 @@
       "severity": "error"
     },
     {
-      "line": 800,
+      "line": 804,
       "column": 16,
-      "stop_line": 800,
+      "stop_line": 804,
       "stop_column": 54,
       "path": "src/physicalai/policies/act/model.py",
       "code": -2,
@@ -1093,9 +1045,9 @@
       "severity": "error"
     },
     {
-      "line": 439,
+      "line": 443,
       "column": 16,
-      "stop_line": 439,
+      "stop_line": 443,
       "stop_column": 54,
       "path": "src/physicalai/policies/groot/model.py",
       "code": -2,
@@ -1148,8 +1100,8 @@
       "path": "src/physicalai/policies/groot/policy.py",
       "code": -2,
       "name": "bad-return",
-      "description": "Returned type `tuple[Tensor, dict[str, float]]` is not assignable to declared return type `Tensor | dict[str, Tensor]`",
-      "concise_description": "Returned type `tuple[Tensor, dict[str, float]]` is not assignable to declared return type `Tensor | dict[str, Tensor]`",
+      "description": "Returned type `tuple[Tensor, dict[str, Tensor | float]]` is not assignable to declared return type `Tensor | dict[str, Tensor]`",
+      "concise_description": "Returned type `tuple[Tensor, dict[str, Tensor | float]]` is not assignable to declared return type `Tensor | dict[str, Tensor]`",
       "severity": "error"
     },
     {
@@ -1297,9 +1249,9 @@
       "severity": "error"
     },
     {
-      "line": 537,
+      "line": 540,
       "column": 36,
-      "stop_line": 537,
+      "stop_line": 540,
       "stop_column": 46,
       "path": "src/physicalai/policies/lerobot/policy.py",
       "code": -2,
@@ -1309,9 +1261,9 @@
       "severity": "error"
     },
     {
-      "line": 635,
+      "line": 638,
       "column": 27,
-      "stop_line": 635,
+      "stop_line": 638,
       "stop_column": 37,
       "path": "src/physicalai/policies/lerobot/policy.py",
       "code": -2,
@@ -1321,9 +1273,9 @@
       "severity": "error"
     },
     {
-      "line": 795,
+      "line": 798,
       "column": 89,
-      "stop_line": 795,
+      "stop_line": 798,
       "stop_column": 94,
       "path": "src/physicalai/policies/lerobot/policy.py",
       "code": -2,
@@ -1333,9 +1285,9 @@
       "severity": "error"
     },
     {
-      "line": 818,
+      "line": 821,
       "column": 16,
-      "stop_line": 818,
+      "stop_line": 821,
       "stop_column": 46,
       "path": "src/physicalai/policies/lerobot/policy.py",
       "code": -2,
@@ -1345,9 +1297,9 @@
       "severity": "error"
     },
     {
-      "line": 849,
+      "line": 852,
       "column": 9,
-      "stop_line": 849,
+      "stop_line": 852,
       "stop_column": 24,
       "path": "src/physicalai/policies/lerobot/policy.py",
       "code": -2,
@@ -1357,27 +1309,15 @@
       "severity": "error"
     },
     {
-      "line": 976,
+      "line": 979,
       "column": 16,
-      "stop_line": 976,
+      "stop_line": 979,
       "stop_column": 28,
       "path": "src/physicalai/policies/lerobot/policy.py",
       "code": -2,
       "name": "bad-return",
       "description": "Returned type `PreTrainedConfig | None` is not assignable to declared return type `PreTrainedConfig`\n  The declared type does not allow `None`. Consider narrowing the value with an `is not None` check or changing the declared type to `PreTrainedConfig | None`.",
       "concise_description": "Returned type `PreTrainedConfig | None` is not assignable to declared return type `PreTrainedConfig`",
-      "severity": "error"
-    },
-    {
-      "line": 40,
-      "column": 9,
-      "stop_line": 40,
-      "stop_column": 52,
-      "path": "src/physicalai/policies/pi0/components/lora.py",
-      "code": -2,
-      "name": "missing-import",
-      "description": "Cannot find module `peft`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
-      "concise_description": "Cannot find module `peft`",
       "severity": "error"
     },
     {
@@ -1657,9 +1597,9 @@
       "severity": "error"
     },
     {
-      "line": 1322,
+      "line": 1323,
       "column": 77,
-      "stop_line": 1322,
+      "stop_line": 1323,
       "stop_column": 83,
       "path": "src/physicalai/policies/pi05/model.py",
       "code": -2,
@@ -1669,9 +1609,9 @@
       "severity": "error"
     },
     {
-      "line": 1322,
+      "line": 1323,
       "column": 85,
-      "stop_line": 1322,
+      "stop_line": 1323,
       "stop_column": 94,
       "path": "src/physicalai/policies/pi05/model.py",
       "code": -2,
@@ -1681,9 +1621,9 @@
       "severity": "error"
     },
     {
-      "line": 1331,
+      "line": 1332,
       "column": 26,
-      "stop_line": 1331,
+      "stop_line": 1332,
       "stop_column": 45,
       "path": "src/physicalai/policies/pi05/model.py",
       "code": -2,
@@ -1693,9 +1633,9 @@
       "severity": "error"
     },
     {
-      "line": 1333,
+      "line": 1334,
       "column": 27,
-      "stop_line": 1333,
+      "stop_line": 1334,
       "stop_column": 46,
       "path": "src/physicalai/policies/pi05/model.py",
       "code": -2,
@@ -1705,9 +1645,9 @@
       "severity": "error"
     },
     {
-      "line": 1408,
+      "line": 1409,
       "column": 43,
-      "stop_line": 1408,
+      "stop_line": 1409,
       "stop_column": 58,
       "path": "src/physicalai/policies/pi05/model.py",
       "code": -2,
@@ -1717,9 +1657,9 @@
       "severity": "error"
     },
     {
-      "line": 1411,
+      "line": 1412,
       "column": 26,
-      "stop_line": 1411,
+      "stop_line": 1412,
       "stop_column": 38,
       "path": "src/physicalai/policies/pi05/model.py",
       "code": -2,
@@ -1729,9 +1669,9 @@
       "severity": "error"
     },
     {
-      "line": 1412,
+      "line": 1413,
       "column": 29,
-      "stop_line": 1412,
+      "stop_line": 1413,
       "stop_column": 44,
       "path": "src/physicalai/policies/pi05/model.py",
       "code": -2,
@@ -1741,9 +1681,9 @@
       "severity": "error"
     },
     {
-      "line": 1413,
+      "line": 1414,
       "column": 27,
-      "stop_line": 1413,
+      "stop_line": 1414,
       "stop_column": 46,
       "path": "src/physicalai/policies/pi05/model.py",
       "code": -2,
@@ -1753,9 +1693,9 @@
       "severity": "error"
     },
     {
-      "line": 1415,
+      "line": 1416,
       "column": 25,
-      "stop_line": 1415,
+      "stop_line": 1416,
       "stop_column": 44,
       "path": "src/physicalai/policies/pi05/model.py",
       "code": -2,
@@ -1909,42 +1849,6 @@
       "severity": "error"
     },
     {
-      "line": 28,
-      "column": 8,
-      "stop_line": 28,
-      "stop_column": 27,
-      "path": "src/physicalai/policies/rldx1/augmentations.py",
-      "code": -2,
-      "name": "missing-import",
-      "description": "Cannot find module `albumentations`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
-      "concise_description": "Cannot find module `albumentations`",
-      "severity": "error"
-    },
-    {
-      "line": 190,
-      "column": 13,
-      "stop_line": 190,
-      "stop_column": 60,
-      "path": "src/physicalai/policies/rldx1/components/backbone/modeling_vtc.py",
-      "code": -2,
-      "name": "missing-import",
-      "description": "Cannot find module `accelerate`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
-      "concise_description": "Cannot find module `accelerate`",
-      "severity": "error"
-    },
-    {
-      "line": 12,
-      "column": 1,
-      "stop_line": 12,
-      "stop_column": 53,
-      "path": "src/physicalai/policies/rldx1/components/core_rldx.py",
-      "code": -2,
-      "name": "missing-import",
-      "description": "Cannot find module `peft`\n  Looked in these locations (from config in `/home/yuchunli/git/physical-ai-studio/library/pyproject.toml`):\n  Search path (from config file): [\"/home/yuchunli/git/physical-ai-studio/library/src\"]\n  Import root (inferred from project layout): \"/home/yuchunli/git/physical-ai-studio/library/src\"\n  Site package path queried from interpreter: [\"/home/yuchunli/git/physical-ai-studio/library/.venv/lib/python3.12/site-packages\", \"/home/yuchunli/git/physical-ai-studio/library/src\"]",
-      "concise_description": "Cannot find module `peft`",
-      "severity": "error"
-    },
-    {
       "line": 1972,
       "column": 43,
       "stop_line": 1972,
@@ -1969,9 +1873,9 @@
       "severity": "error"
     },
     {
-      "line": 585,
+      "line": 645,
       "column": 9,
-      "stop_line": 585,
+      "stop_line": 645,
       "stop_column": 29,
       "path": "src/physicalai/policies/smolvla/policy.py",
       "code": -2,
@@ -1981,9 +1885,9 @@
       "severity": "error"
     },
     {
-      "line": 108,
+      "line": 120,
       "column": 45,
-      "stop_line": 108,
+      "stop_line": 120,
       "stop_column": 64,
       "path": "src/physicalai/policies/smolvla/preprocessor.py",
       "code": -2,
@@ -1993,9 +1897,9 @@
       "severity": "error"
     },
     {
-      "line": 123,
+      "line": 135,
       "column": 40,
-      "stop_line": 123,
+      "stop_line": 135,
       "stop_column": 51,
       "path": "src/physicalai/policies/smolvla/preprocessor.py",
       "code": -2,
@@ -2005,9 +1909,9 @@
       "severity": "error"
     },
     {
-      "line": 320,
+      "line": 402,
       "column": 41,
-      "stop_line": 320,
+      "stop_line": 402,
       "stop_column": 60,
       "path": "src/physicalai/policies/smolvla/preprocessor.py",
       "code": -2,
@@ -2101,9 +2005,9 @@
       "severity": "error"
     },
     {
-      "line": 145,
+      "line": 146,
       "column": 9,
-      "stop_line": 145,
+      "stop_line": 146,
       "stop_column": 21,
       "path": "src/physicalai/train/callbacks.py",
       "code": -2,
@@ -2113,9 +2017,9 @@
       "severity": "error"
     },
     {
-      "line": 150,
+      "line": 151,
       "column": 9,
-      "stop_line": 150,
+      "stop_line": 151,
       "stop_column": 27,
       "path": "src/physicalai/train/callbacks.py",
       "code": -2,
@@ -2125,9 +2029,9 @@
       "severity": "error"
     },
     {
-      "line": 169,
+      "line": 170,
       "column": 9,
-      "stop_line": 169,
+      "stop_line": 170,
       "stop_column": 28,
       "path": "src/physicalai/train/callbacks.py",
       "code": -2,
@@ -2137,9 +2041,9 @@
       "severity": "error"
     },
     {
-      "line": 179,
+      "line": 180,
       "column": 9,
-      "stop_line": 179,
+      "stop_line": 180,
       "stop_column": 32,
       "path": "src/physicalai/train/callbacks.py",
       "code": -2,
@@ -2149,9 +2053,9 @@
       "severity": "error"
     },
     {
-      "line": 198,
+      "line": 199,
       "column": 9,
-      "stop_line": 198,
+      "stop_line": 199,
       "stop_column": 32,
       "path": "src/physicalai/train/callbacks.py",
       "code": -2,
@@ -2161,9 +2065,9 @@
       "severity": "error"
     },
     {
-      "line": 225,
+      "line": 226,
       "column": 9,
-      "stop_line": 225,
+      "stop_line": 226,
       "stop_column": 29,
       "path": "src/physicalai/train/callbacks.py",
       "code": -2,
@@ -2173,9 +2077,9 @@
       "severity": "error"
     },
     {
-      "line": 235,
+      "line": 236,
       "column": 9,
-      "stop_line": 235,
+      "stop_line": 236,
       "stop_column": 27,
       "path": "src/physicalai/train/callbacks.py",
       "code": -2,
@@ -2185,9 +2089,9 @@
       "severity": "error"
     },
     {
-      "line": 255,
+      "line": 256,
       "column": 53,
-      "stop_line": 255,
+      "stop_line": 256,
       "stop_column": 58,
       "path": "src/physicalai/train/callbacks.py",
       "code": -2,

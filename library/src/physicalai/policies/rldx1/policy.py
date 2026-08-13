@@ -611,9 +611,7 @@ class Rldx1(Policy):
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
         optimizer = self._build_optimizer(trainable_params)
 
-        total_steps = 10000
-        if hasattr(self, "trainer") and self.trainer is not None:
-            total_steps = int(getattr(self.trainer, "estimated_stepping_batches", total_steps))
+        total_steps = int(self.trainer.estimated_stepping_batches)
         warmup_steps = max(1, int(total_steps * self.config.warmup_ratio))
 
         scheduler = cosine_decay_with_warmup_scheduler(

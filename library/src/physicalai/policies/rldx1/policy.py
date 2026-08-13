@@ -591,27 +591,6 @@ class Rldx1(Policy):
         preprocessed = self._preprocessor(batch)
         return self.model.compute_val_loss(preprocessed)
 
-    def on_load_checkpoint(self, checkpoint: dict) -> None:  # noqa: PLR6301
-        """Remap legacy state-dict keys before loading.
-
-        Checkpoints saved before the action denormalizer was moved from
-        ``_preprocessor`` to ``_postprocessor`` carry keys such as::
-
-            _preprocessor._action_denormalizer.buffer_action.q01
-
-        These are remapped to the current layout::
-
-            _postprocessor._action_denormalizer.buffer_action.q01
-        """
-        state_dict = checkpoint.get("state_dict", {})
-        old_prefix = "_preprocessor._action_denormalizer."
-        new_prefix = "_postprocessor._action_denormalizer."
-        remapped = {
-            (new_prefix + k[len(old_prefix) :] if k.startswith(old_prefix) else k): v for k, v in state_dict.items()
-        }
-        if remapped != state_dict:
-            checkpoint["state_dict"] = remapped
-
     def configure_optimizers(self) -> OptimizerLRScheduler:  # type: ignore[override]
         """Create the configured optimizer and a cosine-decay-with-warmup scheduler.
 

@@ -86,7 +86,6 @@ class Rldx1(Policy):
       - model built immediately.
 
     Args:
-        chunk_size: Number of action predictions per forward pass (action horizon).
         n_action_steps: Number of action steps to execute per chunk.
         max_state_dim: Maximum state dimension (shorter states zero-padded).
         max_action_dim: Maximum action dimension (shorter actions zero-padded).
@@ -121,7 +120,6 @@ class Rldx1(Policy):
         warmup_ratio: Warmup ratio (0.0-1.0) of total training steps.
         scheduler_decay_lr: Final learning rate after cosine decay (default 1e-5).
         use_bf16: Whether to use bfloat16 precision.
-        compile_model: Whether to torch.compile the model.
         gradient_checkpointing: Whether to enable activation checkpointing in
             MSAT during training.
         color_jitter_params: Train-time ``A.ColorJitter`` params
@@ -171,7 +169,6 @@ class Rldx1(Policy):
         scheduler_decay_lr: float = 1e-5,
         # Precision / compilation
         use_bf16: bool = True,
-        compile_model: bool = False,
         gradient_checkpointing: bool = True,
         # VTC video window
         video_length: int = 4,
@@ -218,7 +215,6 @@ class Rldx1(Policy):
                 scheduler_decay_lr=scheduler_decay_lr,
                 # Precision / compilation
                 use_bf16=use_bf16,
-                compile_model=compile_model,
                 gradient_checkpointing=gradient_checkpointing,
                 # VTC video window
                 video_length=video_length,
@@ -261,7 +257,6 @@ class Rldx1(Policy):
                 scheduler_decay_lr=scheduler_decay_lr,
                 # Precision / compilation
                 use_bf16=use_bf16,
-                compile_model=compile_model,
                 gradient_checkpointing=gradient_checkpointing,
                 # VTC video window
                 video_length=video_length,
@@ -275,7 +270,10 @@ class Rldx1(Policy):
                 embodiment_tag=embodiment_tag,
             )
 
-        self.save_hyperparameters(ignore=["config", "pretrained_name_or_path", "compile_model"])
+        # Save `pretrained_name_or_path` so load_from_checkpoint() reconstructs
+        # from the same base repo the checkpoint was actually fine-tuned from,
+        # instead of silently falling back to this constructor's default.
+        self.save_hyperparameters(ignore=["config"])
 
         self.model: Rldx1Model | None = None  # type: ignore[assignment]
         self._preprocessor: Rldx1Preprocessor | None = None
@@ -319,7 +317,6 @@ class Rldx1(Policy):
         scheduler_decay_lr: float,
         # Precision / compilation
         use_bf16: bool,  # noqa: FBT001
-        compile_model: bool,  # noqa: FBT001
         gradient_checkpointing: bool,  # noqa: FBT001
         # VTC video window
         video_length: int,
@@ -370,7 +367,6 @@ class Rldx1(Policy):
         hf_config["warmup_ratio"] = warmup_ratio
         hf_config["scheduler_decay_lr"] = scheduler_decay_lr
         hf_config["use_bf16"] = use_bf16
-        hf_config["compile_model"] = compile_model
         hf_config["gradient_checkpointing"] = gradient_checkpointing
         hf_config["video_length"] = video_length
         hf_config["video_stride"] = video_stride
@@ -688,7 +684,7 @@ class Rldx1(Policy):
             batch: Input observation batch.
 
         Returns:
-            Action chunk tensor of shape ``(B, chunk_size, action_dim)``.
+            Action chunk tensor of shape ``(B, n_action_steps, action_dim)``.
 
         Raises:
             RuntimeError: If the model has not been initialized.

@@ -233,7 +233,6 @@ class Rldx1Config(Config):
 
     # Precision & compute
     use_bf16: bool = True
-    compile_model: bool = False
     # Top-level flag; ``diffusion_model_cfg["gradient_checkpointing"]`` above
     # remains the one MSAT actually constructs from.
     gradient_checkpointing: bool = False

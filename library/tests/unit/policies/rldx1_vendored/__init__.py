@@ -14,6 +14,8 @@ Modules:
     action_chunking         -> ActionChunk and concrete chunk types
     data_utils              -> numpy normalization / modality helpers
     state_action_processor  -> numpy StateActionProcessor oracle
-    processing_rldx         -> RLDXProcessor / RLDXDataCollator oracle
-    augmentations           -> albumentations image-aug pipeline oracle
+    processing_rldx         -> RLDXProcessor / RLDXDataCollator oracle (image
+                               geometry uses the production torchvision-based
+                               ``physicalai.policies.rldx1.augmentations``, no
+                               albumentations dependency anywhere)
 """

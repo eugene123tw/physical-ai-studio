@@ -1,6 +1,8 @@
 # Copyright (C) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
@@ -8,14 +10,10 @@ import re
 from typing import Any, Dict, Literal
 import warnings
 
-import albumentations as A
 import numpy as np
 from PIL import Image
+from physicalai.policies.rldx1.augmentations import AspectAreaResizeAndCrop
 from physicalai.policies.rldx1.components.embodiments import GENERAL_EMBODIMENT_ID
-from tests.unit.policies.rldx1_vendored.augmentations import (
-    apply_with_replay,
-    build_image_transformations_albumentations,
-)
 from tests.unit.policies.rldx1_vendored.data_utils import (
     parse_modality_configs,
     to_json_serializable,
@@ -26,11 +24,9 @@ from physicalai.policies.rldx1.components.processing.qwen_vision_process import 
 )
 from tests.unit.policies.rldx1_vendored.state_action_processor import StateActionProcessor
 import torch
-import torchvision.transforms.v2 as transforms
 from transformers import AutoProcessor, ProcessorMixin
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.utils import cached_file
-
 
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="google.protobuf")
 
@@ -233,8 +229,7 @@ class RLDXProcessor(ProcessorMixin):
         # training recipe that produced them never tripped the
         # ``math.sqrt(max_area / (h * w))`` path (256x256 inputs are a no-op
         # at the default 65536 budget). At inference we still need a concrete
-        # int, so coerce here and warn loudly instead of crashing later inside
-        # albumentations.
+        # int, so coerce here and warn loudly instead of crashing later.
         if image_max_area is None:
             print(
                 f"[!] processor: image_max_area=None in checkpoint; "
@@ -262,15 +257,11 @@ class RLDXProcessor(ProcessorMixin):
         self.embodiment_id = embodiment_id
         self.conversation_image_first = conversation_image_first
 
-        self.train_image_transform, self.eval_image_transform = (
-            build_image_transformations_albumentations(
-                image_max_area=image_max_area,
-                image_resize_m=image_resize_m,
-                random_crop_fraction=random_crop_fraction,
-                random_rotation_angle=random_rotation_angle,
-                color_jitter_params=color_jitter_params,
-            )
-        )
+        # Deterministic torchvision geometry (no train-time stochastic aug), shared
+        # by train/eval -- see physicalai.policies.rldx1.augmentations docstring.
+        image_transform = AspectAreaResizeAndCrop(target_area=image_max_area, m_alignment=image_resize_m)
+        self.train_image_transform = image_transform
+        self.eval_image_transform = image_transform
         self._collator = self.data_collator_class(
             model_name=model_name,
             model_type=model_type,
@@ -548,18 +539,19 @@ class RLDXProcessor(ProcessorMixin):
         self,
         image_keys: list[str],
         images: dict[str, Any],
-        image_transform: transforms.Compose | A.Compose,
+        image_transform: AspectAreaResizeAndCrop,
         language: str,
         memory_length: int = 1,
     ):
         temporal_stacked_images = {}
 
-        # Albumentations-based pipeline with replay so all views share the
-        # same stochastic params (rotation, jitter, crop origin, ...).
-        replay = None
+        # Deterministic per-frame resize+crop; no shared-randomness replay needed.
         for view in image_keys:
             assert view in images, f"{view} not in {images}"
-            transformed_images, replay = apply_with_replay(image_transform, images[view], replay)
+            transformed_images = [
+                image_transform(torch.from_numpy(np.array(img)).permute(2, 0, 1))
+                for img in images[view]
+            ]
             temporal_stacked_images[view] = torch.stack(transformed_images)  # (T, C, H, W)
 
         for k, v in temporal_stacked_images.items():

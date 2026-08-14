@@ -9,10 +9,10 @@ import json
 import pathlib
 from typing import Any
 
-from huggingface_hub import hf_hub_download, snapshot_download
+from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from safetensors import safe_open
-from transformers import AutoConfig, AutoProcessor, Qwen3VLForConditionalGeneration
+from transformers import AutoConfig, Qwen3VLForConditionalGeneration
 
 from .layer_wrapper import LayerWrapper
 from .text_model_forward import install_vtc_text_forward
@@ -92,7 +92,7 @@ class VTCQwen3Model(Qwen3VLForConditionalGeneration):
     """VTC Qwen3-VL model with motion module support."""
 
     @classmethod
-    def from_pretrained(  # type: ignore[override]  # noqa: PLR0912
+    def from_pretrained(  # type: ignore[override]
         cls,
         pretrained_model_name_or_path: str,
         motion_config: dict | None = None,
@@ -196,25 +196,4 @@ class VTCQwen3Model(Qwen3VLForConditionalGeneration):
         # Stock transformers never threads input_ids into decoder layers and
         # expects a bare-tensor layer return; the wrapped stack needs both.
         install_vtc_text_forward(model.model.language_model)
-        if "vtc" in pretrained_model_name_or_path.lower():
-            from accelerate import load_checkpoint_in_model  # noqa: PLC0415
-
-            if pathlib.Path(pretrained_model_name_or_path).is_dir():
-                local_dir = pretrained_model_name_or_path
-            else:
-                # Thread revision/cache_dir/token so the weight blobs we
-                # load below match the pinned commit, not HEAD.
-                local_dir = snapshot_download(pretrained_model_name_or_path, revision=revision, **download_kwargs)
-
-            processor = AutoProcessor.from_pretrained(
-                pretrained_model_name_or_path,
-                revision=revision,
-                **download_kwargs,
-            )
-
-            model.resize_token_embeddings(len(processor.tokenizer))
-
-            load_checkpoint_in_model(model, local_dir, device_map={"": "cpu"})  # type: ignore[arg-type]
-            print(f"[VTC] weights loaded from {local_dir}")
-
         return model

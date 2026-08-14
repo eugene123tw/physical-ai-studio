@@ -3059,7 +3059,6 @@ pi0 = [
     { name = "transformers" },
 ]
 rldx1 = [
-    { name = "accelerate" },
     { name = "albumentations" },
     { name = "diffusers" },
     { name = "peft" },
@@ -3076,7 +3075,6 @@ smolvla = [
 
 [package.metadata]
 requires-dist = [
-    { name = "accelerate", marker = "extra == 'rldx1'", specifier = ">=0.26.0,<2.0.0" },
     { name = "albumentations", marker = "extra == 'rldx1'", specifier = ">=2.0.0,<3.0.0" },
     { name = "decord", marker = "(platform_machine == 'AMD64' and extra == 'groot') or (platform_machine == 'x86_64' and extra == 'groot')", specifier = ">=0.6.0,<1.0.0" },
     { name = "diffusers", marker = "extra == 'diffusion'", specifier = ">=0.38.0" },

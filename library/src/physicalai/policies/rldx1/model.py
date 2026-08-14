@@ -844,6 +844,7 @@ class Rldx1Model(Model):
             transformers_loading_kwargs=transformers_loading_kwargs,
             skip_pretrained_weights=skip_pretrained_weights,
             attn_implementation=attn_implementation,
+            gradient_checkpointing=gradient_checkpointing,
             **kwargs,
         )
 

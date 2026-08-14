@@ -377,6 +377,9 @@ class Rldx1(Policy):
             "qwen3_collator",
             "transformers_version",
             "use_relative_action",
+            "color_jitter_params",
+            "random_crop_fraction",
+            "random_rotation_angle",
         ]:
             hf_config.pop(unused_key, None)
 

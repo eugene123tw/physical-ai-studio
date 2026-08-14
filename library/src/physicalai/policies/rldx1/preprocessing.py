@@ -25,13 +25,10 @@ reproduces the in-``__call__`` padding from the vendored ``RLDXProcessor``
 (zero-pad state to ``max_state_dim``; zero-pad the action chunk to
 ``max_action_horizon`` x ``max_action_dim`` and build the validity mask).
 
-Stage 3 scope: image geometry. :func:`compute_aspect_area_resize_crop` ports the
-integer geometry of the vendored ``resize_preserve_aspect_area_then_crop`` (with
-an optional ``min_area`` upscale floor). Both the eval and train paths consume it
-through the albumentations ``AspectAreaResizeAndCrop`` in :mod:`augmentations`;
-``cv2.INTER_AREA`` is used when downscaling for bit-exact parity (torch ``area``
-interpolation diverges by tens of levels at non-integer scales), ``cv2.INTER_CUBIC``
-when the ``min_area`` floor enlarges a tiny frame.
+Stage 3 scope: image geometry. The deterministic area-budget resize + ``m``-
+aligned center crop lives in :class:`~physicalai.policies.rldx1.augmentations.AspectAreaResizeAndCrop`
+(torchvision-based, same transform at train and eval time; no train-time
+stochastic augmentation).
 
 Stage 4 scope: Qwen VLM tokenization orchestration. :func:`formalize_language`
 ports the vendored lowercase + punctuation strip; :func:`build_qwen_conversation`
@@ -42,15 +39,13 @@ batch -- replacing ``RLDXProcessor._apply_vlm_processing`` /
 retained (loaded lazily, pinned revision, ``trust_remote_code=False`` by the
 owning preprocessor).
 
-Out of scope (deferred): train-time stochastic image augmentation (random
-fractional crop, rotation, color jitter), relative-action pose math, sin/cos
-state encoding, multi-joint-group modality configs, physics streams. Those
-still route through the vendored processor until later migration stages.
+Out of scope (deferred): relative-action pose math, sin/cos state encoding,
+multi-joint-group modality configs, physics streams. Those still route through
+the vendored processor until later migration stages.
 """
 
 from __future__ import annotations
 
-import math
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -369,68 +364,6 @@ def pad_state_action(
         batch[ACTION_MASK] = mask
 
     return batch
-
-
-def compute_aspect_area_resize_crop(
-    height: int,
-    width: int,
-    *,
-    max_area: int,
-    m: int,
-    min_area: int | None = None,
-) -> tuple[tuple[int, int], tuple[int, int]]:
-    """Compute aspect-preserving resize + ``m``-aligned crop sizes.
-
-    Integer port of the vendored ``resize_preserve_aspect_area_then_crop``
-    (``components/processing/augmentations.py``), extended with an optional
-    ``min_area`` upscale floor.
-
-    Without ``min_area`` (default) the geometry is byte-identical to upstream and
-    never upscales: it picks the largest scale whose area is at most ``max_area``
-    with the shorter side a multiple of ``m``; the longer side follows from the
-    aspect ratio and both dims are floored to a multiple of ``m``.
-
-    With ``min_area`` set, any image whose area is below it is *upscaled* so the
-    resized area is approximately ``min_area``, aspect ratio preserved, both dims
-    rounded to the nearest multiple of ``m`` (``round``, not ``floor``, so a
-    tiny square such as 96x96 lands exactly on 256x256 rather than undershooting
-    to 224 through float truncation). ``min_area`` takes precedence over the
-    ``max_area`` cap when both would apply.
-
-    Args:
-        height: Input image height.
-        width: Input image width.
-        max_area: Maximum pixel-area budget for the resized image.
-        m: Alignment multiple for the output dimensions.
-        min_area: Optional minimum pixel-area floor. ``None`` (default) keeps the
-            upstream never-upscale behavior.
-
-    Returns:
-        ``((h_r, w_r), (h_c, w_c))`` -- the aspect-preserving resize target and
-        the final ``m``-aligned center crop.
-    """
-    area = height * width
-    if min_area is not None and area < min_area:
-        # Upscale branch (new, non-parity): scale so the resized area is about
-        # ``min_area``, then round each side to a multiple of ``m``. round()
-        # avoids float-floor undershoot and keeps square inputs square.
-        scale = math.sqrt(min_area / area)
-        h_r = max(m, round(height * scale / m) * m)
-        w_r = max(m, round(width * scale / m) * m)
-    else:
-        # Vendored geometry (parity-tested): never upscales.
-        smax = min(1.0, math.sqrt(max_area / area))
-        short, long_ = (height, width) if height <= width else (width, height)
-
-        short_r = max(m, int((short * smax) // m) * m)
-        scale = short_r / short
-        long_r = int(long_ * scale)
-
-        h_r, w_r = (short_r, long_r) if height <= width else (long_r, short_r)
-
-    h_c = h_r - (h_r % m)
-    w_c = w_r - (w_r % m)
-    return (h_r, w_r), (h_c, w_c)
 
 
 # Qwen vision tiler patch size used by the vendored collator (image_patch_size).

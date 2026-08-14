@@ -63,15 +63,10 @@ class Rldx1Config(Config):
     )
 
     # Image pipeline parameters
-    # Step 1 — aspect-ratio-preserving resize + m-aligned crop
+    # Aspect-ratio-preserving resize + m-aligned crop (torchvision).
     image_max_area: int = 65536  # 256 * 256 by default
     image_resize_m: int = 32
     image_min_area: int | None = None
-    # Step 2 — optional fractional crop + resize-back (train: random, eval: center)
-    random_crop_fraction: float | None = None  # None = no-op
-    # Step 3 — optional photometric / geometric augmentation (train only)
-    random_rotation_angle: int | None = None
-    color_jitter_params: dict[str, float] | None = None
     formalize_language: bool = True
     apply_sincos_state_encoding: bool = False  # Global flag to enable per-embodiment sin/cos encoding
     use_percentiles: bool = True

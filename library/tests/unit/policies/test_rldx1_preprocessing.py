@@ -25,7 +25,6 @@ from physicalai.policies.rldx1.preprocessing import (
     build_state_action_features,
     build_state_action_norm_map,
     clip_state_action,
-    compute_aspect_area_resize_crop,
     formalize_language,
     pad_state_action,
     tokenize_vlm_batch,
@@ -346,51 +345,32 @@ _IMAGE_SHAPES = [
 
 
 @pytest.mark.parametrize(("height", "width"), _IMAGE_SHAPES)
-def test_compute_resize_crop_matches_vendored(height: int, width: int) -> None:
-    """Native geometry matches the vendored resize_preserve_aspect_area_then_crop."""
-    from tests.unit.policies.rldx1_vendored.augmentations import (
-        resize_preserve_aspect_area_then_crop,
-    )
-
-    gold = resize_preserve_aspect_area_then_crop(
-        height,
-        width,
-        max_area=_IMAGE_MAX_AREA,
-        m=_IMAGE_RESIZE_M,
-    )
-    native = compute_aspect_area_resize_crop(
-        height,
-        width,
-        max_area=_IMAGE_MAX_AREA,
-        m=_IMAGE_RESIZE_M,
-    )
-    assert native == gold
-
-
-@pytest.mark.parametrize(("height", "width"), _IMAGE_SHAPES)
-def test_aspect_area_resize_crop_matches_vendored(height: int, width: int) -> None:
-    """Native eval geometry is pixel-identical to the vendored eval transform."""
-    import albumentations as A
-
+def test_aspect_area_resize_crop_shape(height: int, width: int) -> None:
+    """Torchvision geometry produces an m-aligned, area-budgeted crop."""
     from physicalai.policies.rldx1.augmentations import AspectAreaResizeAndCrop
-    from tests.unit.policies.rldx1_vendored.augmentations import (
-        AspectAreaResizeAndCrop as VendoredAspectAreaResizeAndCrop,
-    )
 
+    transform = AspectAreaResizeAndCrop(target_area=_IMAGE_MAX_AREA, m_alignment=_IMAGE_RESIZE_M)
     rng = np.random.default_rng(height * 1000 + width)
-    image = rng.integers(0, 256, size=(height, width, 3), dtype=np.uint8)
+    image = torch.from_numpy(rng.integers(0, 256, size=(3, height, width), dtype=np.uint8))
 
-    vendored = A.Compose(
-        [VendoredAspectAreaResizeAndCrop(max_area=_IMAGE_MAX_AREA, m=_IMAGE_RESIZE_M)],
-    )
-    native = A.Compose(
-        [AspectAreaResizeAndCrop(max_area=_IMAGE_MAX_AREA, m=_IMAGE_RESIZE_M)],
-    )
-    gold = vendored(image=image)["image"]
-    got = native(image=image)["image"]
+    out = transform(image)
 
-    assert got.shape == gold.shape
-    np.testing.assert_array_equal(got, gold)
+    assert out.dtype == torch.uint8
+    assert out.shape[0] == 3
+    assert out.shape[1] % _IMAGE_RESIZE_M == 0
+    assert out.shape[2] % _IMAGE_RESIZE_M == 0
+
+
+def test_aspect_area_resize_crop_min_area_floor() -> None:
+    """A frame below ``min_area`` is upscaled toward the floor, not ``target_area``."""
+    from physicalai.policies.rldx1.augmentations import AspectAreaResizeAndCrop
+
+    transform = AspectAreaResizeAndCrop(target_area=65536, m_alignment=32, min_area=50176)
+    image = torch.zeros(3, 96, 96, dtype=torch.uint8)
+
+    out = transform(image)
+
+    assert out.shape[1:] == (224, 224)
 
 
 # ---------------------------------------------------------------------------- #

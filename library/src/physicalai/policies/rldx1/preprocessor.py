@@ -12,8 +12,8 @@ network (``components/core_rldx.py``):
 - :class:`Rldx1Postprocessor`: RLDX ``action_pred`` -> environment action space
 
 Both run the PAS-native pipeline in ``preprocessing.py`` -- batched torch,
-library normalization, ``cv2`` image geometry, HF Qwen tokenization. The native
-pipeline is parity-tested against the original vendored processor; see
+library normalization, torchvision image geometry, HF Qwen tokenization. The
+native pipeline is parity-tested against the original vendored processor; see
 ``tests/unit/policies/test_rldx1_preprocessing.py`` for the numerical-parity
 proofs. The preprocessor produces the exact keys consumed by
 :meth:`RLDX.forward` / :meth:`RLDX.get_action`:
@@ -29,9 +29,9 @@ Action-head keys:
 VTC video: each camera view can carry ``num_frames`` temporal frames per step
 (the ``delta_timestamps`` video window ``[-6, -4, -2, 0]``). Frames are ordered
 frame-major / view-inner into the Qwen conversation, matching upstream
-``_get_vlm_inputs``; ``num_frames`` is reported per sample. Train mode applies
-replay-consistent augmentation (:mod:`augmentations`) so all frames of a sample
-share one sampled param set; eval uses the deterministic ``cv2`` geometry.
+``_get_vlm_inputs``; ``num_frames`` is reported per sample. The same
+deterministic geometry (:mod:`augmentations`) is used at train and eval time;
+there is no train-time image augmentation.
 
 Scope (v1): absolute actions, no relative actions / motion / memory / physics
 streams.
@@ -51,7 +51,7 @@ from transformers import AutoProcessor
 from physicalai.data.observation import ACTION, IMAGES, STATE, TASK, Observation
 from physicalai.policies.utils.normalization import FeatureNormalizeTransform
 
-from .augmentations import apply_with_replay, build_image_transformations_albumentations
+from .augmentations import AspectAreaResizeAndCrop
 from .preprocessing import (
     build_qwen_conversation,
     build_state_action_degenerate_masks,
@@ -175,14 +175,6 @@ class Rldx1Preprocessor(nn.Module):
             tiler's own floor untouched. Set to e.g. ``65536`` (256x256) to lift
             tiny frames such as 96x96 PushT into a richer visual token sequence.
         image_resize_m: Alignment multiple for resized/cropped dimensions.
-        random_crop_fraction: Train-time fractional crop size in ``(0, 1]``.
-            ``None`` (default) disables the crop stage. Eval always uses a
-            deterministic center crop / no crop.
-        random_rotation_angle: Train-time ``A.Rotate`` limit in degrees. ``None``
-            or ``0`` (default) disables rotation.
-        color_jitter_params: Train-time ``A.ColorJitter`` params
-            ``{"brightness", "contrast", "saturation", "hue"}``. ``None``
-            (default) disables color jitter.
         default_task: Fallback instruction when an observation has no task.
         embodiment_id: Per-embodiment projector slot in the MSAT action head.
             Default 0 (general_embodiment) for a fresh new-robot fine-tune; set
@@ -195,7 +187,7 @@ class Rldx1Preprocessor(nn.Module):
         >>> out = model.net.get_action(inputs)
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         *,
         max_state_dim: int = MAX_STATE_DIM,
@@ -209,9 +201,6 @@ class Rldx1Preprocessor(nn.Module):
         image_max_area: int = 65536,
         image_min_area: int | None = None,
         image_resize_m: int = 32,
-        random_crop_fraction: float | None = None,
-        random_rotation_angle: int | None = None,
-        color_jitter_params: dict[str, float] | None = None,
         default_task: str = DEFAULT_TASK,
         embodiment_id: int = DEFAULT_EMBODIMENT_ID,
         stats: dict[str, dict[str, list[float]]] | None = None,
@@ -233,19 +222,13 @@ class Rldx1Preprocessor(nn.Module):
         self.default_task = default_task
         self.embodiment_id = embodiment_id
 
-        # Image geometry runs through the albumentations ``AspectAreaResizeAndCrop``
-        # for both eval and train. Eval uses a deterministic ``A.Compose``; train
-        # adds the configured stochastic stages in a ``ReplayCompose`` so one
-        # sampled param set is shared across a sample's frames/views. ``_augment``
-        # selects the train pipeline; both composes are built lazily to defer the
-        # albumentations import until the first frame is processed.
-        self.random_crop_fraction = random_crop_fraction
-        self.random_rotation_angle = random_rotation_angle
-        self.color_jitter_params = color_jitter_params
-        self._augment = (
-            random_crop_fraction is not None or bool(random_rotation_angle) or color_jitter_params is not None
+        # Deterministic image geometry, shared by train and eval (no stochastic
+        # augmentation).
+        self._image_transform = AspectAreaResizeAndCrop(
+            target_area=image_max_area,
+            m_alignment=image_resize_m,
+            min_area=image_min_area,
         )
-        self._image_transforms_cache: tuple[Any, Any] | None = None
 
         # PAS-native state/action normalizer (Stage 1). An nn.Module submodule so
         # its min/max/q01/q99 buffers move with `.to(device)` and export cleanly.
@@ -291,58 +274,22 @@ class Rldx1Preprocessor(nn.Module):
             self._vlm_processor_cache = processor
         return self._vlm_processor_cache
 
-    # -- image geometry / augmentation ------------------------------------- #
-    @property
-    def _image_transforms(self) -> tuple[Any, Any]:
-        """Lazily build and cache the ``(train, eval)`` albumentations transforms.
-
-        Both share the deterministic ``AspectAreaResizeAndCrop`` geometry
-        (area-budget resize + ``m``-aligned center crop, optional ``min_area``
-        upscale). The train transform adds the configured stochastic stages in a
-        ``ReplayCompose``; the eval transform is a deterministic ``A.Compose``.
-        Built lazily so the albumentations import is deferred until the first
-        frame is processed.
-
-        Returns:
-            ``(train_transform, eval_transform)``.
-        """
-        if self._image_transforms_cache is None:
-            self._image_transforms_cache = build_image_transformations_albumentations(
-                image_max_area=self.image_max_area,
-                image_resize_m=self.image_resize_m,
-                random_crop_fraction=self.random_crop_fraction,
-                random_rotation_angle=self.random_rotation_angle,
-                color_jitter_params=self.color_jitter_params,
-                image_min_area=self.image_min_area,
-            )
-        return self._image_transforms_cache
-
-    def _transform_frames(
-        self,
-        frames: list[np.ndarray],
-        replay: dict | None,
-    ) -> tuple[list[Image.Image], dict | None]:
-        """Resize a sample's frames into PIL images via the albumentations geometry.
-
-        Both eval and train route through ``AspectAreaResizeAndCrop``. In train
-        mode with augmentation configured, the ``ReplayCompose`` blob is shared
-        across every frame of the sample (threaded via ``replay``) so the random
-        params are identical across frames and views -- matching upstream
-        ``_get_vlm_inputs``. Otherwise the deterministic eval compose is applied.
+    # -- image geometry ------------------------------------------------------ #
+    def _transform_frames(self, frames: list[np.ndarray]) -> list[Image.Image]:
+        """Resize a sample's frames into PIL images via the torchvision geometry.
 
         Args:
             frames: ``(H, W, 3)`` uint8 frames for one view of one sample.
-            replay: Running replay blob for the sample (``None`` for the first
-                view; reused for subsequent views/frames).
 
         Returns:
-            ``(pil_frames, replay)``.
+            List of resized/cropped PIL images, one per input frame.
         """
-        train_transform, eval_transform = self._image_transforms
-        transform = train_transform if (self.training and self._augment) else eval_transform
-        tensors, replay = apply_with_replay(transform, frames, replay)
-        pil = [Image.fromarray(np.ascontiguousarray(t.permute(1, 2, 0).numpy())) for t in tensors]
-        return pil, replay
+        pil_frames = []
+        for frame in frames:
+            tensor = torch.from_numpy(frame).permute(2, 0, 1)
+            transformed = self._image_transform(tensor)
+            pil_frames.append(Image.fromarray(np.ascontiguousarray(transformed.permute(1, 2, 0).numpy())))
+        return pil_frames
 
     # -- native forward ---------------------------------------------------- #
     def _normalize_pad_state_action(
@@ -404,9 +351,8 @@ class Rldx1Preprocessor(nn.Module):
         """Build one Qwen conversation per sample and report the frame count.
 
         Each view can carry ``num_frames`` temporal frames (the VTC video
-        window). Frames are resized (eval) or replay-augmented (train) then
-        flattened frame-major / view-inner -- ``[t0v0, t0v1, ..., t1v0, ...]`` --
-        matching upstream ``_get_vlm_inputs``.
+        window). Frames are resized then flattened frame-major / view-inner --
+        ``[t0v0, t0v1, ..., t1v0, ...]`` -- matching upstream ``_get_vlm_inputs``.
 
         Returns:
             ``(conversations, num_frames)`` -- ``batch_size`` conversations and
@@ -415,14 +361,10 @@ class Rldx1Preprocessor(nn.Module):
         conversations: list[list[dict[str, Any]]] = []
         num_frames = 1
         for index in range(batch_size):
-            # One replay blob per sample: shared across all views and frames so
-            # the sampled augmentation params are identical (upstream parity).
-            replay: dict | None = None
             per_view_frames: list[list[Image.Image]] = []
             for view in view_keys:
                 frames = self._frames_for_view(batch_dict[view], index)
-                pil_frames, replay = self._transform_frames(frames, replay)
-                per_view_frames.append(pil_frames)
+                per_view_frames.append(self._transform_frames(frames))
 
             num_frames = len(per_view_frames[0])
             # Frame-major, view-inner ordering (upstream: for t: for view).
@@ -464,7 +406,7 @@ class Rldx1Preprocessor(nn.Module):
         """Preprocess an observation batch into RLDX ``inputs``.
 
         Runs the PAS-native pipeline: state/action normalization + padding,
-        ``cv2`` image geometry, and Qwen3-VL tokenization (see
+        torchvision image geometry, and Qwen3-VL tokenization (see
         ``preprocessing.py``). Supports the v1 configuration only: absolute
         actions, single observation step, deterministic image geometry.
 
@@ -704,7 +646,7 @@ class Rldx1Postprocessor(nn.Module):
 # ============================================================================ #
 
 
-def make_rldx1_transforms(  # noqa: PLR0913
+def make_rldx1_transforms(
     *,
     stats: dict[str, dict[str, list[float]]] | None,
     max_state_dim: int = MAX_STATE_DIM,
@@ -718,9 +660,6 @@ def make_rldx1_transforms(  # noqa: PLR0913
     image_max_area: int = 65536,
     image_min_area: int = 50176,
     image_resize_m: int = 32,
-    random_crop_fraction: float | None = None,
-    random_rotation_angle: int | None = None,
-    color_jitter_params: dict[str, float] | None = None,
     embodiment_id: int = DEFAULT_EMBODIMENT_ID,
 ) -> tuple[Rldx1Preprocessor, Rldx1Postprocessor]:
     """Build the matched RLDX-1 preprocessor / postprocessor pair.
@@ -746,12 +685,6 @@ def make_rldx1_transforms(  # noqa: PLR0913
             preserving). ``None`` (default) leaves the tiler's floor untouched;
             e.g. ``65536`` lifts 96x96 PushT frames to 256x256.
         image_resize_m: Alignment multiple for resized/cropped dimensions.
-        random_crop_fraction: Train-time fractional crop size in ``(0, 1]``
-            (``None`` disables the crop stage).
-        random_rotation_angle: Train-time rotation limit in degrees (``None`` /
-            ``0`` disables rotation).
-        color_jitter_params: Train-time ``A.ColorJitter`` params (``None``
-            disables color jitter).
         embodiment_id: Per-embodiment projector slot in the MSAT action head
             (default 0 = general_embodiment for a fresh new-robot fine-tune).
 
@@ -770,9 +703,6 @@ def make_rldx1_transforms(  # noqa: PLR0913
         image_max_area=image_max_area,
         image_min_area=image_min_area,
         image_resize_m=image_resize_m,
-        random_crop_fraction=random_crop_fraction,
-        random_rotation_angle=random_rotation_angle,
-        color_jitter_params=color_jitter_params,
         embodiment_id=embodiment_id,
         stats=stats,
     )

@@ -122,9 +122,6 @@ class Rldx1(Policy):
         use_bf16: Whether to use bfloat16 precision.
         gradient_checkpointing: Whether to enable activation checkpointing in
             MSAT during training.
-        color_jitter_params: Train-time ``A.ColorJitter`` params
-            (``{"brightness", "contrast", "saturation", "hue"}``). ``None``
-            (default) disables color augmentation.
         video_length: Number of VTC temporal frames per observation step (default 4).
         video_stride: Action-step stride between VTC video frames (default 2).
             With ``video_length=4, video_stride=2`` the offsets are ``[-6,-4,-2,0]``
@@ -173,8 +170,7 @@ class Rldx1(Policy):
         # VTC video window
         video_length: int = 4,
         video_stride: int = 2,
-        # Image augmentation (train only)
-        color_jitter_params: dict[str, float] | None = None,
+        # Image geometry
         image_min_area: int | None = None,
         # Normalization
         clip_outliers: bool = True,
@@ -219,8 +215,7 @@ class Rldx1(Policy):
                 # VTC video window
                 video_length=video_length,
                 video_stride=video_stride,
-                # Image augmentation (train only)
-                color_jitter_params=color_jitter_params,
+                # Image geometry
                 image_min_area=image_min_area,
                 # Normalization
                 clip_outliers=clip_outliers,
@@ -261,8 +256,7 @@ class Rldx1(Policy):
                 # VTC video window
                 video_length=video_length,
                 video_stride=video_stride,
-                # Image augmentation (train only)
-                color_jitter_params=color_jitter_params,
+                # Image geometry
                 image_min_area=image_min_area,
                 # Normalization
                 clip_outliers=clip_outliers,
@@ -321,8 +315,7 @@ class Rldx1(Policy):
         # VTC video window
         video_length: int,
         video_stride: int,
-        # Image augmentation (train only)
-        color_jitter_params: dict[str, float] | None,
+        # Image geometry
         image_min_area: int | None,
         # Normalization
         clip_outliers: bool,  # noqa: FBT001
@@ -346,7 +339,6 @@ class Rldx1(Policy):
             hf_config = json.load(f)
 
         hf_config["base_model_path"] = pretrained_name_or_path
-        hf_config["color_jitter_params"] = color_jitter_params
         hf_config["backbone_trainable_params_fp32"] = backbone_trainable_params_fp32
         hf_config["max_state_dim"] = max_state_dim
         hf_config["max_action_dim"] = max_action_dim
@@ -459,9 +451,6 @@ class Rldx1(Policy):
             image_max_area=config.image_max_area,
             image_min_area=config.image_min_area or 0,  # type: ignore[arg-type]
             image_resize_m=config.image_resize_m,
-            random_crop_fraction=config.random_crop_fraction,
-            random_rotation_angle=config.random_rotation_angle,
-            color_jitter_params=config.color_jitter_params,
             embodiment_id=int(config.embodiment_id),  # type: ignore[arg-type]
         )
 
@@ -525,9 +514,6 @@ class Rldx1(Policy):
             image_max_area=config.image_max_area,
             image_min_area=config.image_min_area or 0,  # type: ignore[arg-type]
             image_resize_m=config.image_resize_m,
-            random_crop_fraction=config.random_crop_fraction,
-            random_rotation_angle=config.random_rotation_angle,
-            color_jitter_params=config.color_jitter_params,
             embodiment_id=int(config.embodiment_id),  # type: ignore[arg-type]
         )
         self._dataset_stats = dataset_stats

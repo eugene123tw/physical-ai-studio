@@ -3,7 +3,7 @@
 
 """Shared neural network components for policy modules."""
 
-from physicalai.policies.shared.components.nn import (
+from physicalai.policies.components.nn import (
     CategorySpecificLinear,
     CategorySpecificMLP,
     MultiEmbodimentActionEncoder,

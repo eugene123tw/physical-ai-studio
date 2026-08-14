@@ -21,7 +21,7 @@ import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import nn
 
-from physicalai.policies.shared.components import TimestepEncoder
+from physicalai.policies.components import TimestepEncoder
 
 logger = logging.getLogger(__name__)
 

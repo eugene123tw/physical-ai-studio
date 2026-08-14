@@ -12,6 +12,7 @@ import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import nn
 
+from physicalai.policies.components.nn import TimestepEncoder
 from physicalai.policies.rldx1.components.action_model.blocks import (
     DoubleStreamBlock,
     ExpandedDoubleStreamBlock,
@@ -21,7 +22,6 @@ from physicalai.policies.rldx1.components.action_model.blocks import (
     SingleStreamBlock,
 )
 from physicalai.policies.rldx1.components.action_model.ops import RoPEEmbedder1D
-from physicalai.policies.shared.components.nn import TimestepEncoder
 
 logger = logging.getLogger(__name__)
 

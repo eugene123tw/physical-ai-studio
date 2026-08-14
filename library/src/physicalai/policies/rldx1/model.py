@@ -16,11 +16,11 @@ from torch.distributions import Beta
 from transformers.feature_extraction_utils import BatchFeature
 
 from physicalai.policies.base import Model
+from physicalai.policies.components.nn import CategorySpecificMLP, MultiEmbodimentActionEncoder
 from physicalai.policies.rldx1.components.action_model.msat import MSAT
 from physicalai.policies.rldx1.components.action_model.physics import init_physics_params_near_zero
 from physicalai.policies.rldx1.components.action_model.physics_head import NoOpPhysicsHead, PhysicsHead
 from physicalai.policies.rldx1.components.backbone.adapter import VTCQwen3VLBackbone
-from physicalai.policies.shared.components.nn import CategorySpecificMLP, MultiEmbodimentActionEncoder
 
 
 def compute_video_window_offsets(video_length: int, video_stride: int) -> list[int]:

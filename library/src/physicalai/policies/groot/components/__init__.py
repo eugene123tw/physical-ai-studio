@@ -21,6 +21,13 @@ Note:
     pretrained Eagle2 model from HuggingFace.
 """
 
+from physicalai.policies.components.nn import (
+    CategorySpecificLinear,
+    CategorySpecificMLP,
+    MultiEmbodimentActionEncoder,
+    SinusoidalPositionalEncoding,
+    swish,
+)
 from physicalai.policies.groot.components.action_head import (
     FlowMatchingActionHead,
     FlowMatchingActionHeadConfig,
@@ -32,13 +39,6 @@ from physicalai.policies.groot.components.transformer import (
     TimestepEncoder,
     get_dit_class,
     get_self_attention_transformer_class,
-)
-from physicalai.policies.shared.components.nn import (
-    CategorySpecificLinear,
-    CategorySpecificMLP,
-    MultiEmbodimentActionEncoder,
-    SinusoidalPositionalEncoding,
-    swish,
 )
 
 __all__ = [

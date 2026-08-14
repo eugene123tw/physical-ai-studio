@@ -18,7 +18,7 @@ from physicalai.config.mixin import FromConfig
 from torch import nn
 from torch.distributions import Beta
 
-from physicalai.policies.shared.components.nn import CategorySpecificMLP, MultiEmbodimentActionEncoder
+from physicalai.policies.components.nn import CategorySpecificMLP, MultiEmbodimentActionEncoder
 
 from .transformer import get_dit_class, get_self_attention_transformer_class
 

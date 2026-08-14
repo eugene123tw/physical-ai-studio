@@ -11,11 +11,11 @@ import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import nn
 
+from physicalai.policies.components.nn import SinusoidalPositionalEncoding
 from physicalai.policies.rldx1.components.action_model.blocks import (
     ExpandedDoubleStreamBlock,
     ExpandedSingleStreamBlock,
 )
-from physicalai.policies.shared.components.nn import SinusoidalPositionalEncoding
 
 if TYPE_CHECKING:
     from physicalai.policies.rldx1.components.action_model.msat import MSAT

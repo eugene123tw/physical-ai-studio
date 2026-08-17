@@ -520,12 +520,18 @@ class Rldx1Preprocessor(nn.Module):
     def _image_keys(batch: dict[str, Any]) -> list[str]:
         """Find sorted image keys, supporting LeRobot and Observation formats.
 
+        Excludes LeRobot's per-key ``*_is_pad`` padding masks: with a VTC video
+        window, ``reformat_dataset_to_match_policy`` sets ``delta_indices`` on
+        every ``observation.*`` key, and the dataset attaches a sibling
+        ``{key}_is_pad`` bool mask for each -- which shares the
+        ``observation.images.`` prefix and would otherwise be misread as a camera.
+
         Returns:
             Sorted list of image keys (possibly empty).
         """
-        keys = sorted(k for k in batch if k.startswith(OBSERVATION_IMAGES_PREFIX))
+        keys = sorted(k for k in batch if k.startswith(OBSERVATION_IMAGES_PREFIX) and "is_pad" not in k)
         if not keys:
-            keys = sorted(k for k in batch if k.startswith(f"{IMAGES}.") and k != IMAGES)
+            keys = sorted(k for k in batch if k.startswith(f"{IMAGES}.") and k != IMAGES and "is_pad" not in k)
         if not keys and OBSERVATION_IMAGE in batch:
             keys = [OBSERVATION_IMAGE]
         if not keys and isinstance(batch.get(IMAGES), torch.Tensor):

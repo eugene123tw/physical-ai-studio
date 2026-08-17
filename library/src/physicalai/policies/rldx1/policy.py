@@ -367,24 +367,10 @@ class Rldx1(Policy):
         hf_config["action_horizon"] = action_horizon
         hf_config["embodiment_tag"] = embodiment_tag
 
-        # pop unused keys to avoid dataclass validation errors
-        for unused_key in [
-            "architectures",
-            "backbone_model_type",
-            "memory_video_delta_indices",
-            "model_name",
-            "model_type",
-            "qwen3_collator",
-            "transformers_version",
-            "use_relative_action",
-            "color_jitter_params",
-            "random_crop_fraction",
-            "random_rotation_angle",
-        ]:
-            hf_config.pop(unused_key, None)
-
-        # from_dict skips unknown keys and coerces lists→tuples via type hints
-        config = Rldx1Config.from_dict(hf_config)
+        # strict=False: ignore upstream config.json keys with no Rldx1Config field
+        # (e.g. architectures, model_type, rtc_inference_*) instead of denylisting
+        # them one by one.
+        config = Rldx1Config.from_dict(hf_config, strict=False)
 
         # --- build dataset_stats from HF artefacts ---
         dataset_stats = extract_dataset_stats(

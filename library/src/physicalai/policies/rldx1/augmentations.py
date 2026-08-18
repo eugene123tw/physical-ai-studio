@@ -52,11 +52,16 @@ class AspectAreaResizeAndCrop(nn.Module):
         """
         orig_h, orig_w = F.get_size(inpt)
 
-        # 1. Compute target scale based on the area budget (min_area is an upscale-only floor).
+        # 1. Compute target scale: downscale only if over target_area, upscale only up to
+        # min_area (never all the way to target_area); otherwise leave the size untouched.
         current_area = orig_h * orig_w
         min_area = self.min_area
-        target_area = min_area if min_area is not None and current_area < min_area else self.target_area
-        scale = math.sqrt(target_area / current_area)
+        if min_area is not None and current_area < min_area:
+            scale = math.sqrt(min_area / current_area)
+        elif current_area > self.target_area:
+            scale = math.sqrt(self.target_area / current_area)
+        else:
+            scale = 1.0
 
         resized_h = round(orig_h * scale)
         resized_w = round(orig_w * scale)

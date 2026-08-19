@@ -45,8 +45,9 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
+from physicalai.inference.manifest import ComponentSpec
 import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.errors import RemoteEntryNotFoundError
@@ -59,6 +60,15 @@ from physicalai.policies.rldx1.model import Rldx1Model
 from physicalai.policies.rldx1.pretrained_utils import extract_dataset_stats, retrieve_safetensors_shards
 from physicalai.train.schedulers import cosine_decay_with_warmup_scheduler
 from physicalai.train.utils import reformat_dataset_to_match_policy
+from physicalai.export import ExportablePolicyMixin, ExportBackend
+from physicalai.inference.data import InferenceFeature, InferenceFeatureDtype, InferenceFeatureType
+from physicalai.export.backends import (
+    ExportParameters,
+    ONNXExportParameters,
+    OpenVINOExportParameters,
+    TorchExportParameters,
+)
+from physicalai.data.observation import ACTION, IMAGES, STATE, TASK, FeatureType
 
 try:
     from lightning.pytorch.utilities.types import OptimizerLRScheduler
@@ -74,7 +84,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class Rldx1(Policy):
+class Rldx1(ExportablePolicyMixin, Policy):
     """RLDX-1 Policy - first-party Lightning wrapper.
 
     All hyperparameters are explicit in the signature for discoverability.
@@ -280,7 +290,7 @@ class Rldx1(Policy):
             video_length=self.config.video_length,
             video_stride=self.config.video_stride,
         )
-
+        self._dataset_stats = dataset_stats
         if dataset_stats is not None:
             self._initialize_model(dataset_stats, shard_files)
 
@@ -745,3 +755,182 @@ class Rldx1(Policy):
 
         # Fallback for tasks without compatible state-to-action mapping.
         return torch.zeros(batch_size, env_action_dim, dtype=torch.bfloat16, device=self.device)
+
+    @staticmethod
+    def get_supported_export_backends() -> list[str | ExportBackend]:
+        """Get a list of export backends supported by policy.
+
+        This method returns a list of supported export backends as strings.
+
+        Returns:
+            list[str | ExportBackend]: A list of supported export backends.
+        """
+        return [ExportBackend.TORCH, ExportBackend.OPENVINO]
+
+    @property
+    def inputs_schema(self) -> list[InferenceFeature] | None:
+        """Describe the policy's expected model inputs for export tracing.
+
+        Returns:
+            A list of feature descriptors matching the model's expected input format,
+            covering the robot state, image observations, language task, and any
+            real-time chunking control tensors when ``enable_rtc`` is set on the model.
+            Returns ``None`` if the underlying model or dataset stats have not been
+            initialized yet.
+        """
+        if self.model is None or self._dataset_stats is None:
+            return None
+
+        dataset_stats = self._dataset_stats
+
+        schema: list[InferenceFeature] = []
+
+        num_image_features = sum(
+            1 for feature in dataset_stats.values() if str(FeatureType.VISUAL) in str(feature.get("type", ""))
+        )
+        ## TODO: I think we need to have input_features in __init__, 
+        ## pi05 has visual type in datasets, however, it's not the case for rldx1.
+        ## we don't have information on image feautres, so below code wouldn't work.
+        ## check this code alfie.md
+        for feature_id, feature in dataset_stats.items():
+            feature_type = str(feature.get("type", ""))
+            if STATE in feature_id:
+                schema.append(
+                    InferenceFeature(
+                        ftype=InferenceFeatureType.STATE,
+                        shape=cast("tuple", feature["shape"]),
+                        name=STATE,
+                        dtype=InferenceFeatureDtype.FLOAT32,
+                    ),
+                )
+            elif str(FeatureType.VISUAL) in feature_type:
+                feature_name = (
+                    str(feature.get("name", feature_id)).removeprefix("observation.").removeprefix(f"{IMAGES}.")
+                )
+                name = IMAGES if num_image_features == 1 else f"{IMAGES}.{feature_name}"
+                schema.append(
+                    InferenceFeature(
+                        ftype=InferenceFeatureType.VISUAL,
+                        shape=cast("tuple", feature["shape"]),
+                        name=name,
+                        dtype=InferenceFeatureDtype.FLOAT32,
+                    ),
+                )
+
+        schema.append(
+            InferenceFeature(
+                ftype=InferenceFeatureType.LANGUAGE,
+                shape=(),
+                name=TASK,
+                dtype=InferenceFeatureDtype.STRING,
+            ),
+        )
+
+        return schema
+
+    @property
+    def outputs_schema(self) -> list[InferenceFeature] | None:
+        """Describe the policy's model output for export.
+
+        Returns:
+            A list with a single ``action`` feature of shape
+            ``(chunk_size, *action_dim)``, where ``action_dim`` is the actual
+            action dimension taken from the dataset stats. Returns ``None`` if the
+            underlying model or dataset stats have not been initialized yet.
+        """
+        if self.model is None or self._dataset_stats is None:
+            return None
+
+        action_shape = cast("tuple", self._dataset_stats[ACTION]["shape"])
+
+        return [
+            InferenceFeature(
+                ftype=InferenceFeatureType.ACTION,
+                shape=(self.config.chunk_size, *action_shape),
+                name=ACTION,
+                dtype=InferenceFeatureDtype.FLOAT32,
+            ),
+        ]
+
+    @property
+    def extra_export_args(self) -> dict[str, ExportParameters]:
+        """Additional export arguments for model conversion.
+
+        Returns:
+            dict[str, ExportParameters]: A dictionary mapping format names to their export parameters.
+
+        Raises:
+            ValueError: If dataset stats are not available for export.
+        """
+        if self._dataset_stats is None:
+            msg = (
+                "Dataset stats are required for export. Initialize the policy with dataset_stats"
+                " or train for at least one epoch to populate them."
+            )
+            raise ValueError(msg)
+
+        base_preproc_specs = [
+            ComponentSpec(
+                type="normalize",
+                stats={STATE: self._dataset_stats[f"observation.{STATE}"]},
+                mode=self.config.normalization_mode.lower(),
+            ),
+            ComponentSpec(
+                type="rldx1",   # <------- implement this in physicalai.preprocessors.rldx1
+                image_resolution=self._dataset_stats[f"observation.{IMAGES}"]["shape"][-2:],
+            ),
+        ]
+        postproc_specs = [
+            ComponentSpec(
+                type="denormalize",
+                stats={ACTION: self._dataset_stats[ACTION]},
+                mode=self.config.normalization_mode.lower(),
+            ),
+        ]
+        torch_postproc_specs = []
+        if self.config.chunk_size != self.config.n_action_steps:
+            chunk_trimmer = ComponentSpec(
+                type="action_chunk_trimmer",
+                n_action_steps=self.config.n_action_steps,
+            )
+            postproc_specs.append(chunk_trimmer)
+            torch_postproc_specs.append(chunk_trimmer)
+
+        extra_args: dict[str, ExportParameters] = {}
+        output_names = [feature.name for feature in (self.outputs_schema or [])]
+        extra_args["onnx"] = ONNXExportParameters(
+            exporter_kwargs={
+                "output_names": output_names,
+            },
+            export_tokenizer=False,
+            preprocessors_specs=[
+                *base_preproc_specs,
+                ComponentSpec(
+                    type="hf_tokenizer",
+                    tokenizer_name="RLWRLD/RLDX-1-VLM",
+                    max_token_len=self.config.tokenizer_max_length, # ???
+                ),
+            ],
+            postprocessors_specs=postproc_specs,
+        )
+        extra_args["openvino"] = OpenVINOExportParameters(
+            outputs=output_names,
+            compress_to_fp16=True,
+            via_onnx=True,
+            export_tokenizer=True,
+            exporter_kwargs={},
+            preprocessors_specs=[
+                *base_preproc_specs,
+                ComponentSpec(
+                    type="ov_tokenizer",
+                    artifact="tokenizer.xml",
+                ),
+            ],
+            postprocessors_specs=postproc_specs,
+        )
+        extra_args["torch"] = TorchExportParameters(
+            preprocessors_specs=[ComponentSpec(type="to_float_tensor")],
+            postprocessors_specs=torch_postproc_specs,
+        )
+
+        return extra_args

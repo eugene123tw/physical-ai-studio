@@ -571,6 +571,9 @@ class VTCQwen3VLBackbone(nn.Module):
             )
             visual_pos_masks = torch.cat([visual_pos_masks, vis_pad], dim=1)
 
+        if input_ids is None:
+            msg = "input_ids is required for cog-token forward pass"
+            raise ValueError(msg)
         meta_ids = torch.full(
             (bsz, self.n_cog_tokens),
             placeholder_token_id,

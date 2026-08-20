@@ -336,24 +336,6 @@ class RLDXActionModel(nn.Module):
         )
         print(f"[ActionModel LoRA] trainable params: {trainable} / {total} ({ratio:.2f}%)")
 
-    def set_frozen_modules_to_eval_mode(self) -> None:
-        """Set frozen submodules to eval mode.
-
-        HuggingFace will call model.train() at each training_step. To ensure
-        the expected behaviors for modules like dropout, batchnorm, etc., we
-        need to call model.eval() for the frozen modules.
-        """
-        if self.training:
-            if not self.tune_projector:
-                self.state_encoder.eval()
-                self.action_encoder.eval()
-                self.action_decoder.eval()
-                self.physics.eval()
-                if self.add_pos_embed:
-                    self.position_embedding.eval()
-            if not self.tune_diffusion_model:
-                self.model.eval()
-
     def sample_time(self, batch_size: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
         """Sample random flow-matching timesteps from the Beta distribution.
 
@@ -399,7 +381,6 @@ class RLDXActionModel(nn.Module):
             RuntimeError: If ``mask_token`` is ``None`` when ``state_dropout_prob > 0``.
         """
         # Set frozen modules to eval
-        self.set_frozen_modules_to_eval_mode()
 
         backbone_output = self.process_backbone_output(backbone_output)
 

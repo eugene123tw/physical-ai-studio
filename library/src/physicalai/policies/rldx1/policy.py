@@ -45,30 +45,35 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal
 
-from physicalai.inference.manifest import ComponentSpec
 import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.errors import RemoteEntryNotFoundError
+from physicalai.inference.data import InferenceFeature, InferenceFeatureDtype, InferenceFeatureType
+from physicalai.inference.manifest import ComponentSpec
 from transformers.optimization import Adafactor
 
 from physicalai.data import Dataset, Observation
-from physicalai.policies.base import Policy
-from physicalai.policies.rldx1.config import Rldx1Config
-from physicalai.policies.rldx1.model import Rldx1Model
-from physicalai.policies.rldx1.pretrained_utils import extract_camera_names, extract_dataset_stats, retrieve_safetensors_shards
-from physicalai.train.schedulers import cosine_decay_with_warmup_scheduler
-from physicalai.train.utils import reformat_dataset_to_match_policy
+from physicalai.data.observation import ACTION, IMAGES, STATE, TASK, Feature, FeatureType
 from physicalai.export import ExportablePolicyMixin, ExportBackend
-from physicalai.inference.data import InferenceFeature, InferenceFeatureDtype, InferenceFeatureType
 from physicalai.export.backends import (
     ExportParameters,
     ONNXExportParameters,
     OpenVINOExportParameters,
     TorchExportParameters,
 )
-from physicalai.data.observation import ACTION, IMAGES, STATE, TASK, Feature, FeatureType
+from physicalai.policies.base import Policy
+from physicalai.policies.rldx1.config import Rldx1Config
+from physicalai.policies.rldx1.model import Rldx1Model
+from physicalai.policies.rldx1.pretrained_utils import (
+    extract_camera_names,
+    extract_dataset_stats,
+    retrieve_safetensors_shards,
+)
+from physicalai.policies.utils.features import infer_shape_from_stats
+from physicalai.train.schedulers import cosine_decay_with_warmup_scheduler
+from physicalai.train.utils import reformat_dataset_to_match_policy
 
 try:
     from lightning.pytorch.utilities.types import OptimizerLRScheduler
@@ -112,6 +117,50 @@ def _merge_explicit_features(
             key = name
         merged[key] = {"name": feature.name or name, "shape": feature.shape, "type": str(feature.ftype)}
     return merged or None
+
+
+def _resolve_feature_shape(feature: dict[str, Any]) -> tuple[int, ...]:
+    """Return a feature's shape, raising if it can't be inferred from stats.
+
+    RLDX1's own ``extract_dataset_stats`` (used when loading a raw HF release
+    checkpoint via ``_from_hf``) returns bare ``min``/``max``/``mean``/``std``/
+    ``q01``/``q99`` vectors with no ``"shape"`` key at all -- unlike the
+    LeRobot-style enriched stats (e.g. a Studio-trained checkpoint's full
+    ``train_dataset.stats``, or an explicit ``input_features``/``output_features``
+    override) which carry an explicit ``"shape"``. Both are valid dataset_stats
+    entries for this policy; :func:`infer_shape_from_stats` handles both.
+
+    Returns:
+        The feature's shape as a tuple.
+
+    Raises:
+        ValueError: If neither ``"shape"`` nor a stat vector is present.
+    """
+    shape = infer_shape_from_stats(feature)
+    if shape is None:
+        msg = f"Cannot resolve a shape for feature {feature!r}: no 'shape' key and no stat vector to infer it from."
+        raise ValueError(msg)
+    return shape
+
+
+def _get_dataset_stats_entry(dataset_stats: dict[str, dict[str, Any]], *keys: str) -> dict[str, Any]:
+    """Return the first present entry among candidate ``dataset_stats`` keys.
+
+    ``extract_dataset_stats`` (raw HF release checkpoints) uses bare keys like
+    ``"state"``; a Studio-trained checkpoint's full LeRobot-style stats use
+    ``"observation.state"``. Callers pass both spellings as candidates.
+
+    Returns:
+        The matching stats dict.
+
+    Raises:
+        KeyError: If none of ``keys`` is present in ``dataset_stats``.
+    """
+    for key in keys:
+        if key in dataset_stats:
+            return dataset_stats[key]
+    msg = f"None of {keys!r} found in dataset_stats (keys present: {sorted(dataset_stats)!r})"
+    raise KeyError(msg)
 
 
 class Rldx1(ExportablePolicyMixin, Policy):
@@ -849,7 +898,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
                 schema.append(
                     InferenceFeature(
                         ftype=InferenceFeatureType.STATE,
-                        shape=cast("tuple", feature["shape"]),
+                        shape=infer_shape_from_stats(feature),
                         name=STATE,
                         dtype=InferenceFeatureDtype.FLOAT32,
                     ),
@@ -862,7 +911,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
                 schema.append(
                     InferenceFeature(
                         ftype=InferenceFeatureType.VISUAL,
-                        shape=cast("tuple", feature["shape"]),
+                        shape=infer_shape_from_stats(feature),
                         name=name,
                         dtype=InferenceFeatureDtype.FLOAT32,
                     ),
@@ -905,7 +954,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         if self.model is None or self._dataset_stats is None:
             return None
 
-        action_shape = cast("tuple", self._dataset_stats[ACTION]["shape"])
+        action_shape = _resolve_feature_shape(_get_dataset_stats_entry(self._dataset_stats, ACTION))
 
         return [
             InferenceFeature(
@@ -957,8 +1006,8 @@ class Rldx1(ExportablePolicyMixin, Policy):
         base_preproc_specs = [
             ComponentSpec(
                 type="normalize",
-                stats={STATE: self._dataset_stats[f"observation.{STATE}"]},
-                mode=self.config.normalization_mode.lower(),
+                stats={STATE: _get_dataset_stats_entry(self._dataset_stats, f"observation.{STATE}", STATE)},
+                mode="quantiles",
             ),
             ComponentSpec(
                 type="rldx1",
@@ -969,7 +1018,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
             ComponentSpec(
                 type="denormalize",
                 stats={ACTION: self._dataset_stats[ACTION]},
-                mode=self.config.normalization_mode.lower(),
+                mode="quantiles",
             ),
         ]
         torch_postproc_specs = []
@@ -993,7 +1042,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
                 ComponentSpec(
                     type="hf_tokenizer",
                     tokenizer_name="RLWRLD/RLDX-1-VLM",
-                    max_token_len=self.config.tokenizer_max_length, # ???
+                    max_token_len=self.config.tokenizer_max_length,  # ???
                 ),
             ],
             postprocessors_specs=postproc_specs,

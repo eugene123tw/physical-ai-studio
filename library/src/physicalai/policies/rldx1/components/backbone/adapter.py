@@ -354,24 +354,6 @@ class VTCQwen3VLBackbone(nn.Module):
             if trainable_params == 0:
                 print("[w] No backbone trainable parameters found.")
 
-    def set_frozen_modules_to_eval_mode(self) -> None:
-        """Put frozen sub-modules into eval mode while keeping trainable ones in train mode.
-
-        Called at the start of every forward pass. Ensures frozen BatchNorm /
-        Dropout layers use their running statistics rather than batch statistics,
-        while the trainable motion-module block stays in train mode for correct
-        BatchNorm behaviour.
-        """
-        if self.training:
-            if not self.tune_llm:
-                self.qwen_model.eval()
-            if not self.tune_visual:
-                self.qwen_model.model.visual.eval()
-            # motion module block must stay in train mode for correct BatchNorm behavior
-            motion_block = getattr(self.qwen_model.model.visual, "motion_block", None)
-            if motion_block is not None:
-                motion_block.train()
-
     def _process_moss_features(  # noqa: PLR0914
         self,
         moss_feats: torch.Tensor,
@@ -473,11 +455,8 @@ class VTCQwen3VLBackbone(nn.Module):
         inputs_embeds = qwen_input.get("inputs_embeds")
         pixel_values = qwen_input.get("pixel_values")
         image_grid_thw = qwen_input.get("image_grid_thw")
-        video_grid_thw = qwen_input.get("video_grid_thw")
         cache_position = qwen_input.get("cache_position")
-        image_wise_encoding = qwen_input.get("image_wise_encoding")
         num_views = qwen_input.get("num_views")
-        num_frames = qwen_input.get("num_frames")
 
         if (input_ids is None) ^ (inputs_embeds is not None):
             msg = "You must specify exactly one of input_ids or inputs_embeds"
@@ -492,19 +471,11 @@ class VTCQwen3VLBackbone(nn.Module):
         deepstack_image_embeds: list[torch.Tensor] | None = None
         deepstack_video_embeds: list[torch.Tensor] | None = None
 
-        # Build motion module kwargs for get_image_features
-        moss_kwargs = {}
-        if num_frames is not None:
-            moss_kwargs["num_frames"] = int(num_frames[0]) if isinstance(num_frames, torch.Tensor) else int(num_frames)
-        if num_views is not None:
-            moss_kwargs["num_views"] = int(num_views[0]) if isinstance(num_views, torch.Tensor) else int(num_views)
-
         if pixel_values is not None:
             image_outputs = self.qwen_model.model.get_image_features(
                 pixel_values,
                 image_grid_thw,
                 return_dict=True,
-                **moss_kwargs,
             )
             image_embeds = image_outputs.pooler_output
             deepstack_image_embeds = image_outputs.deepstack_features
@@ -683,7 +654,6 @@ class VTCQwen3VLBackbone(nn.Module):
                     extended_input_ids,
                     mm_token_type_ids,
                     image_grid_thw,
-                    video_grid_thw,
                     attention_mask=attention_mask_tensor,
                 )
                 self.qwen_model.model.rope_deltas = rope_deltas
@@ -720,7 +690,7 @@ class VTCQwen3VLBackbone(nn.Module):
             visual_pos_masks=visual_pos_masks,
             deepstack_visual_embeds=deepstack_visual_embeds,
             output_hidden_states=True,
-            image_wise_encoding=image_wise_encoding,
+            image_wise_encoding=True,
             num_views=num_views,
             motion_drop_info=motion_drop_info,
         )
@@ -802,8 +772,8 @@ class VTCQwen3VLBackbone(nn.Module):
         Args:
             vl_input: Full VLM feature dict produced by the RLDX data-collator.
                 Must contain at minimum ``input_ids``, ``attention_mask``,
-                ``pixel_values``, ``image_grid_thw``, ``image_wise_encoding``,
-                and ``num_views``; ``num_frames`` is passed through when present.
+                ``pixel_values``, ``image_grid_thw` ,
+                and ``num_views``.
 
         Returns:
             A :class:`~transformers.BatchFeature` with three entries:
@@ -812,18 +782,14 @@ class VTCQwen3VLBackbone(nn.Module):
             - ``backbone_attention_mask``: ``(B, T_out)`` attention mask.
             - ``image_mask``: ``(B, L)`` image-token boolean mask.
         """
-        self.set_frozen_modules_to_eval_mode()
         keys_to_use = [
             "input_ids",
             "attention_mask",
             "pixel_values",
             "image_grid_thw",
-            "image_wise_encoding",
             "num_views",
         ]
         filtered = {k: vl_input[k] for k in keys_to_use}
-        if "num_frames" in vl_input:
-            filtered["num_frames"] = vl_input["num_frames"]
         vl_input = BatchFeature(data=filtered)
         outputs, attention_mask, image_mask = self.forward_qwen(vl_input)
 

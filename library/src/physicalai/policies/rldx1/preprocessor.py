@@ -441,15 +441,10 @@ class Rldx1Preprocessor(nn.Module):
             ATTENTION_MASK: vlm[ATTENTION_MASK],
             PIXEL_VALUES: vlm[PIXEL_VALUES],
             IMAGE_GRID_THW: vlm[IMAGE_GRID_THW],
-            # vtc scalars: bool image-wise flag, per-sample view/frame counts.
-            IMAGE_WISE_ENCODING: torch.tensor([True] * batch_size),
             NUM_VIEWS: torch.tensor([len(view_keys)] * batch_size),
-            NUM_FRAMES: torch.tensor([num_frames] * batch_size),
             STATE: sa_inputs[STATE],
             "embodiment_id": torch.tensor([self.embodiment_id] * batch_size),
         }
-        if MM_TOKEN_TYPE_IDS in vlm:
-            inputs[MM_TOKEN_TYPE_IDS] = vlm[MM_TOKEN_TYPE_IDS]
         if has_action:
             inputs[ACTION] = sa_inputs[ACTION]
             inputs[ACTION_MASK] = sa_inputs[ACTION_MASK]

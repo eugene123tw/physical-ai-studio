@@ -354,24 +354,6 @@ class VTCQwen3VLBackbone(nn.Module):
             if trainable_params == 0:
                 print("[w] No backbone trainable parameters found.")
 
-    def set_frozen_modules_to_eval_mode(self) -> None:
-        """Put frozen sub-modules into eval mode while keeping trainable ones in train mode.
-
-        Called at the start of every forward pass. Ensures frozen BatchNorm /
-        Dropout layers use their running statistics rather than batch statistics,
-        while the trainable motion-module block stays in train mode for correct
-        BatchNorm behaviour.
-        """
-        if self.training:
-            if not self.tune_llm:
-                self.qwen_model.eval()
-            if not self.tune_visual:
-                self.qwen_model.model.visual.eval()
-            # motion module block must stay in train mode for correct BatchNorm behavior
-            motion_block = getattr(self.qwen_model.model.visual, "motion_block", None)
-            if motion_block is not None:
-                motion_block.train()
-
     def _process_moss_features(  # noqa: PLR0914
         self,
         moss_feats: torch.Tensor,
@@ -812,7 +794,6 @@ class VTCQwen3VLBackbone(nn.Module):
             - ``backbone_attention_mask``: ``(B, T_out)`` attention mask.
             - ``image_mask``: ``(B, L)`` image-token boolean mask.
         """
-        self.set_frozen_modules_to_eval_mode()
         keys_to_use = [
             "input_ids",
             "attention_mask",

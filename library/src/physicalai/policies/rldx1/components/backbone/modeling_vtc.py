@@ -12,10 +12,10 @@ from typing import Any
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from safetensors import safe_open
-from transformers import AutoConfig, Qwen3VLForConditionalGeneration
+from transformers import AutoConfig
 
 from .layer_wrapper import LayerWrapper
-from .text_model_forward import install_vtc_text_forward
+from .modeling_qwen3_vl import Qwen3VLForConditionalGeneration
 
 # Pinned commit for the upstream Qwen3-VL reference architecture config (lib.security
 # rule 9). This only supplies the base config schema for the VTC variant, never weights,
@@ -193,7 +193,4 @@ class VTCQwen3Model(Qwen3VLForConditionalGeneration):
                 img_pattern=[151652],
                 motion_token=1,
             )
-        # Stock transformers never threads input_ids into decoder layers and
-        # expects a bare-tensor layer return; the wrapped stack needs both.
-        install_vtc_text_forward(model.model.language_model)
         return model

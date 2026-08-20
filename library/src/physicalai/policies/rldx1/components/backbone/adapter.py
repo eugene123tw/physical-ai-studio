@@ -16,7 +16,6 @@ from transformers.initialization import no_init_weights
 from transformers.utils import is_torchdynamo_compiling
 
 from physicalai.policies.rldx1.components.backbone.modeling_vtc import LayerWrapper, VTCQwen3Model
-from physicalai.policies.rldx1.components.backbone.text_model_forward import install_vtc_text_forward
 
 
 class VTCQwen3VLBackbone(nn.Module):
@@ -125,7 +124,6 @@ class VTCQwen3VLBackbone(nn.Module):
                 )
             # Stock transformers never threads input_ids into decoder layers and
             # expects a bare-tensor layer return; the wrapped stack needs both.
-            install_vtc_text_forward(self.qwen_model.model.language_model)
             if load_bf16:
                 self.qwen_model = self.qwen_model.to(torch.bfloat16)
         else:
@@ -443,9 +441,6 @@ class VTCQwen3VLBackbone(nn.Module):
                 motion-module tokens need to be injected.
             ValueError: If ``attention_mask`` or ``input_ids`` is missing during
                 the cognition-token forward pass.
-            RuntimeError: If ``deepstack_image_embeds`` or
-                ``deepstack_video_embeds`` is ``None`` when the corresponding
-                visual mask is set.
         """
         # Unwrap the qwen_input dictionary
         input_ids = qwen_input.get("input_ids")
@@ -469,10 +464,6 @@ class VTCQwen3VLBackbone(nn.Module):
             inputs_embeds = self.qwen_model.model.get_input_embeddings()(input_ids)
 
         device = inputs_embeds.device
-        image_mask = None
-        video_mask = None
-        deepstack_image_embeds: list[torch.Tensor] | None = None
-        deepstack_video_embeds: list[torch.Tensor] | None = None
 
         # Build motion module kwargs for get_image_features
         moss_kwargs = {}
@@ -481,59 +472,22 @@ class VTCQwen3VLBackbone(nn.Module):
         if num_views is not None:
             moss_kwargs["num_views"] = int(num_views[0]) if isinstance(num_views, torch.Tensor) else int(num_views)
 
-        if pixel_values is not None:
-            image_outputs = self.qwen_model.model.get_image_features(
-                pixel_values,
-                image_grid_thw,
-                return_dict=True,
-                **moss_kwargs,
-            )
-            image_embeds = image_outputs.pooler_output
-            deepstack_image_embeds = image_outputs.deepstack_features
-            image_embeds = torch.cat(image_embeds, dim=0).to(device, inputs_embeds.dtype)
-            image_mask, _ = self.qwen_model.model.get_placeholder_mask(
-                input_ids,
-                inputs_embeds=inputs_embeds,
-                image_features=image_embeds,
-            )
-            inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+        image_embeds, deepstack_image_embeds = self.qwen_model.model.get_image_features(
+            pixel_values,
+            image_grid_thw,
+            **moss_kwargs,
+        )
+        image_embeds = torch.cat(image_embeds, dim=0).to(device, inputs_embeds.dtype)
+        image_mask, _ = self.qwen_model.model.get_placeholder_mask(
+            input_ids,
+            inputs_embeds=inputs_embeds,
+            image_features=image_embeds,
+        )
+        inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
-        visual_pos_masks = None
-        deepstack_visual_embeds = None
-        if image_mask is not None and video_mask is not None:
-            if deepstack_image_embeds is None:
-                msg = "deepstack_image_embeds is None but image_mask is set"
-                raise RuntimeError(msg)
-            if deepstack_video_embeds is None:
-                msg = "deepstack_video_embeds is None but video_mask is set"
-                raise RuntimeError(msg)
-            image_mask = image_mask[..., 0]
-            video_mask = video_mask[..., 0]
-            visual_pos_masks = image_mask | video_mask
-            deepstack_visual_embeds = []
-            image_mask_joint = image_mask[visual_pos_masks]
-            video_mask_joint = video_mask[visual_pos_masks]
-            for img_embed, vid_embed in zip(deepstack_image_embeds, deepstack_video_embeds, strict=False):
-                embed_joint = img_embed.new_zeros(visual_pos_masks.sum(), img_embed.shape[-1]).to(
-                    img_embed.device,
-                )
-                embed_joint[image_mask_joint, :] = img_embed
-                embed_joint[video_mask_joint, :] = vid_embed
-                deepstack_visual_embeds.append(embed_joint)
-        elif image_mask is not None:
-            image_mask = image_mask[..., 0]
-            visual_pos_masks = image_mask
-            if deepstack_image_embeds is None:
-                msg = "deepstack_image_embeds is None but image_mask is set"
-                raise RuntimeError(msg)
-            deepstack_visual_embeds = deepstack_image_embeds
-        elif video_mask is not None:
-            video_mask = video_mask[..., 0]
-            visual_pos_masks = video_mask
-            if deepstack_video_embeds is None:
-                msg = "deepstack_video_embeds is None but video_mask is set"
-                raise RuntimeError(msg)
-            deepstack_visual_embeds = deepstack_video_embeds
+        image_mask = image_mask[..., 0]
+        visual_pos_masks = image_mask
+        deepstack_visual_embeds = deepstack_image_embeds
 
         # Extract and process motion module features for vl_input injection
         moss_tokens = None
@@ -617,10 +571,6 @@ class VTCQwen3VLBackbone(nn.Module):
             )
             visual_pos_masks = torch.cat([visual_pos_masks, vis_pad], dim=1)
 
-        # Extend input_ids with placeholder tokens
-        if input_ids is None:
-            msg = "input_ids is required for cog-token forward pass"
-            raise ValueError(msg)
         meta_ids = torch.full(
             (bsz, self.n_cog_tokens),
             placeholder_token_id,
@@ -653,17 +603,8 @@ class VTCQwen3VLBackbone(nn.Module):
                 or (past_key_values is None or past_key_values.get_seq_length() == 0)
             )
             if (prefill_compiled_stage or prefill_noncompiled_stage) or self.qwen_model.model.rope_deltas is None:
-                # Build mm_token_type_ids for newer transformers versions
-                # 0 = text, 1 = image, 2 = video
-                image_token_id = self.qwen_model.model.config.image_token_id
-                video_token_id = self.qwen_model.model.config.video_token_id
-                mm_token_type_ids = torch.zeros_like(extended_input_ids)
-                mm_token_type_ids[extended_input_ids == image_token_id] = 1
-                mm_token_type_ids[extended_input_ids == video_token_id] = 2
-
                 position_ids, rope_deltas = self.qwen_model.model.get_rope_index(
                     extended_input_ids,
-                    mm_token_type_ids,
                     image_grid_thw,
                     video_grid_thw,
                     attention_mask=attention_mask_tensor,
@@ -689,9 +630,6 @@ class VTCQwen3VLBackbone(nn.Module):
         if n_motion_tokens > 0 and self.motion_drop:
             motion_drop_info = {"start": motion_insert_pos, "count": n_motion_tokens}
 
-        # The patched Qwen3VLTextModel.forward (install_vtc_text_forward) drops
-        # the input_ids/inputs_embeds XOR check and threads input_ids into every
-        # wrapped decoder layer so LayerWrapper can locate image-token spans.
         outputs = self.qwen_model.model.language_model(
             input_ids=extended_input_ids,
             position_ids=position_ids,

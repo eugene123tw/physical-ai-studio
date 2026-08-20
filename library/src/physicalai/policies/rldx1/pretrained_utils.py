@@ -95,6 +95,47 @@ def retrieve_safetensors_shards(base_model_path: str, revision: str | None) -> l
     return shards
 
 
+def extract_camera_names(
+    processor_config_path: Path | None,
+    embodiment_tag: str = "general_embodiment",
+) -> list[str]:
+    """Read camera view names for one embodiment from ``processor_config.json``.
+
+    Robust to a missing/unreadable file or an ``embodiment_tag``/``video`` section
+    absent from it: any of those return an empty list rather than raising. Note
+    RLWRLD checkpoints never record pixel resolution here (or anywhere else in
+    the repo) -- callers must still supply that separately.
+
+    Args:
+        processor_config_path: Path to the ``processor_config.json`` file, or ``None``.
+        embodiment_tag: Key selecting the embodiment's modality config block.
+
+    Returns:
+        Ordered camera view names (``video.modality_keys`` for ``embodiment_tag``
+        under ``processor_kwargs.modality_configs``), or an empty list when
+        unavailable.
+    """
+    if processor_config_path is None or not processor_config_path.exists():
+        logger.warning("No processor_config.json found; camera names must be supplied explicitly.")
+        return []
+
+    with processor_config_path.open(encoding="utf-8") as f:
+        processor_config = json.load(f)
+
+    video_config = (
+        processor_config.get("processor_kwargs", {}).get("modality_configs", {}).get(embodiment_tag, {}).get("video")
+    )
+    if not video_config:
+        logger.warning(
+            "Embodiment tag %r has no video modality config in %s; camera names must be supplied explicitly.",
+            embodiment_tag,
+            processor_config_path,
+        )
+        return []
+
+    return list(video_config.get("modality_keys", []))
+
+
 def extract_dataset_stats(
     stats_path: Path | None,
     embodiment_tag: str = "general_embodiment",

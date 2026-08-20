@@ -57,7 +57,7 @@ from physicalai.data import Dataset, Observation
 from physicalai.policies.base import Policy
 from physicalai.policies.rldx1.config import Rldx1Config
 from physicalai.policies.rldx1.model import Rldx1Model
-from physicalai.policies.rldx1.pretrained_utils import extract_dataset_stats, retrieve_safetensors_shards
+from physicalai.policies.rldx1.pretrained_utils import extract_camera_names, extract_dataset_stats, retrieve_safetensors_shards
 from physicalai.train.schedulers import cosine_decay_with_warmup_scheduler
 from physicalai.train.utils import reformat_dataset_to_match_policy
 from physicalai.export import ExportablePolicyMixin, ExportBackend
@@ -68,7 +68,7 @@ from physicalai.export.backends import (
     OpenVINOExportParameters,
     TorchExportParameters,
 )
-from physicalai.data.observation import ACTION, IMAGES, STATE, TASK, FeatureType
+from physicalai.data.observation import ACTION, IMAGES, STATE, TASK, Feature, FeatureType
 
 try:
     from lightning.pytorch.utilities.types import OptimizerLRScheduler
@@ -82,6 +82,36 @@ if TYPE_CHECKING:
     from .preprocessor import Rldx1Postprocessor, Rldx1Preprocessor
 
 logger = logging.getLogger(__name__)
+
+
+def _merge_explicit_features(
+    dataset_stats: dict[str, dict[str, Any]] | None,
+    input_features: dict[str, Feature] | None,
+    output_features: dict[str, Feature] | None,
+) -> dict[str, dict[str, Any]] | None:
+    """Merge explicit ``Feature`` overrides into a ``dataset_stats``-shaped dict.
+
+    User-supplied features take precedence over anything already in
+    ``dataset_stats`` (e.g. auto-fetched state/action stats) -- required for
+    RLWRLD checkpoints, whose ``statistics.json`` never records camera shapes.
+
+    Returns:
+        The merged dict, or ``None`` if there is nothing to merge.
+    """
+    merged = dict(dataset_stats or {})
+    for name, feature in {**(input_features or {}), **(output_features or {})}.items():
+        if feature.shape is None:
+            continue
+        if feature.ftype == FeatureType.VISUAL:
+            key = f"observation.{IMAGES}.{name}"
+        elif feature.ftype == FeatureType.STATE:
+            key = f"observation.{STATE}"
+        elif feature.ftype == FeatureType.ACTION:
+            key = ACTION
+        else:
+            key = name
+        merged[key] = {"name": feature.name or name, "shape": feature.shape, "type": str(feature.ftype)}
+    return merged or None
 
 
 class Rldx1(ExportablePolicyMixin, Policy):
@@ -142,6 +172,18 @@ class Rldx1(ExportablePolicyMixin, Policy):
             truncate task-critical extremes (e.g. PushT).
         env_action_dim: Environment action dimension. If provided, enables eager init.
         dataset_stats: Dataset normalization statistics for eager init.
+        input_features: Explicit observation feature overrides (e.g. camera shapes), merged
+            into ``dataset_stats`` and taking precedence over it. Required for export when
+            ``dataset_stats`` carries no visual entries -- true for every RLWRLD release
+            checkpoint (their ``statistics.json`` is pretrain-stage state/action stats only;
+            no file in the repo records pixel resolution). Camera *names* are auto-discovered
+            from the checkpoint's ``processor_config.json`` in :meth:`_from_hf` (see
+            ``self._camera_names``) purely to guide this override -- only the shape must be
+            supplied. For ``RLWRLD/RLDX-1-FT-LIBERO``:
+            ``{"front_view": Feature(ftype=FeatureType.VISUAL, shape=(3, 256, 256)),
+            "left_wrist_view": Feature(ftype=FeatureType.VISUAL, shape=(3, 256, 256))}``.
+        output_features: Explicit action feature overrides, merged into ``dataset_stats``
+            the same way as ``input_features``.
     """
 
     def __init__(  # noqa: PLR0913
@@ -186,16 +228,19 @@ class Rldx1(ExportablePolicyMixin, Policy):
         clip_outliers: bool = True,
         dataset_stats: dict[str, dict[str, list[float] | str | tuple]] | None = None,
         embodiment_tag: str = "general_embodiment",
+        input_features: dict[str, Feature] | None = None,
+        output_features: dict[str, Feature] | None = None,
     ) -> None:
         """Initialize the RLDX-1 policy and save hyperparameters."""
         super().__init__(n_action_steps=n_action_steps)
+        self._camera_names: list[str] = []
 
         shard_files = None
         if pretrained_name_or_path is not None:
             # dataset_stats already provided (e.g. restored from a checkpoint's
             # hparams during load_from_checkpoint) takes precedence -- _from_hf's
             # own extract_dataset_stats() is only a narrow, defaulted fallback.
-            self.config, hf_dataset_stats, shard_files = self._from_hf(
+            self.config, hf_dataset_stats, shard_files, self._camera_names = self._from_hf(
                 pretrained_name_or_path,
                 revision=revision,
                 max_state_dim=max_state_dim,
@@ -290,6 +335,9 @@ class Rldx1(ExportablePolicyMixin, Policy):
             video_length=self.config.video_length,
             video_stride=self.config.video_stride,
         )
+        # Explicit Feature overrides win over anything auto-fetched/user-supplied above --
+        # required for RLWRLD checkpoints, which never record camera shapes anywhere.
+        dataset_stats = _merge_explicit_features(dataset_stats, input_features, output_features)
         self._dataset_stats = dataset_stats
         if dataset_stats is not None:
             self._initialize_model(dataset_stats, shard_files)
@@ -332,7 +380,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         embodiment_tag: str,
         # Action prediciton
         action_horizon: int,
-    ) -> tuple[Rldx1Config, dict[str, dict[str, list[float] | str | tuple]], list[Path]]:
+    ) -> tuple[Rldx1Config, dict[str, dict[str, list[float] | str | tuple]], list[Path], list[str]]:
         config_file = Path(hf_hub_download(pretrained_name_or_path, "config.json", revision=revision))  # nosec B615
         shard_files = retrieve_safetensors_shards(pretrained_name_or_path, revision=revision)
         try:
@@ -343,6 +391,12 @@ class Rldx1(ExportablePolicyMixin, Policy):
             except RemoteEntryNotFoundError as e2:
                 msg = "statistics.json not found in the root of the repo. Falling back to processor/statistics.json"
                 raise RuntimeError(msg) from e2
+        try:
+            processor_config_file = Path(
+                hf_hub_download(pretrained_name_or_path, "processor_config.json", revision=revision),  # nosec B615
+            )
+        except RemoteEntryNotFoundError:
+            processor_config_file = None
 
         # --- parse config.json ---
         with Path(config_file).open(encoding="utf-8") as f:
@@ -389,7 +443,8 @@ class Rldx1(ExportablePolicyMixin, Policy):
             max_state_dim=max_state_dim,
             max_action_dim=max_action_dim,
         )
-        return config, dataset_stats, shard_files
+        camera_names = extract_camera_names(processor_config_file, embodiment_tag=embodiment_tag)
+        return config, dataset_stats, shard_files, camera_names
 
     def _initialize_model(
         self,
@@ -788,10 +843,6 @@ class Rldx1(ExportablePolicyMixin, Policy):
         num_image_features = sum(
             1 for feature in dataset_stats.values() if str(FeatureType.VISUAL) in str(feature.get("type", ""))
         )
-        ## TODO: I think we need to have input_features in __init__, 
-        ## pi05 has visual type in datasets, however, it's not the case for rldx1.
-        ## we don't have information on image feautres, so below code wouldn't work.
-        ## check this code alfie.md
         for feature_id, feature in dataset_stats.items():
             feature_type = str(feature.get("type", ""))
             if STATE in feature_id:
@@ -816,6 +867,19 @@ class Rldx1(ExportablePolicyMixin, Policy):
                         dtype=InferenceFeatureDtype.FLOAT32,
                     ),
                 )
+
+        # RLWRLD release checkpoints never carry visual entries in dataset_stats
+        # (their statistics.json is pretrain-stage state/action stats only). Camera
+        # *names* are auto-discovered from processor_config.json in _from_hf, but the
+        # shape must come from an explicit input_features override (see __init__).
+        if num_image_features == 0:
+            msg = (
+                "dataset_stats carries no visual features. Pass input_features={'<view>': "
+                "Feature(ftype=FeatureType.VISUAL, shape=(3, height, width)), ...} to "
+                f"Rldx1(...) to export this policy. Camera names discovered from "
+                f"processor_config.json: {self._camera_names or '(none found)'}."
+            )
+            raise ValueError(msg)
 
         schema.append(
             InferenceFeature(
@@ -869,6 +933,27 @@ class Rldx1(ExportablePolicyMixin, Policy):
             )
             raise ValueError(msg)
 
+        # RLWRLD release checkpoints never carry visual entries in dataset_stats
+        # (see inputs_schema) unless input_features merged one in -- find the first
+        # visual entry, whatever its key (single observation.images or per-camera
+        # observation.images.<name>); the Runtime rldx1 preprocessor assumes one
+        # shared resolution across views.
+        image_resolution = next(
+            (
+                tuple(feature["shape"])[-2:]
+                for feature in self._dataset_stats.values()
+                if str(FeatureType.VISUAL) in str(feature.get("type", ""))
+            ),
+            None,
+        )
+        if image_resolution is None:
+            msg = (
+                "dataset_stats carries no visual features. Pass input_features={'<view>': "
+                "Feature(ftype=FeatureType.VISUAL, shape=(3, height, width)), ...} to "
+                "Rldx1(...) to export this policy."
+            )
+            raise ValueError(msg)
+
         base_preproc_specs = [
             ComponentSpec(
                 type="normalize",
@@ -876,8 +961,8 @@ class Rldx1(ExportablePolicyMixin, Policy):
                 mode=self.config.normalization_mode.lower(),
             ),
             ComponentSpec(
-                type="rldx1",   # <------- implement this in physicalai.preprocessors.rldx1
-                image_resolution=self._dataset_stats[f"observation.{IMAGES}"]["shape"][-2:],
+                type="rldx1",
+                image_resolution=image_resolution,
             ),
         ]
         postproc_specs = [

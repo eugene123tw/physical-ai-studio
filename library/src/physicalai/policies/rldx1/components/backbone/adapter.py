@@ -75,7 +75,10 @@ class VTCQwen3VLBackbone(nn.Module):
                 call (e.g. ``revision``, ``cache_dir``, ``token``).
                 ``trust_remote_code`` defaults to ``True`` if not supplied.
             gradient_checkpointing: Enable activation checkpointing on the LLM
-                and visual tower for training memory savings.
+                and visual tower for training memory savings. Checkpointing is
+                scoped to the sub-modules that actually train (see
+                ``set_trainable_parameters``), so frozen towers or frozen lower
+                LLM layers are never checkpointed.
             skip_pretrained_weights: When ``True``, builds the architecture
                 from config only and skips downloading pretrained weights
                 (weights are expected to arrive via a Lightning checkpoint).
@@ -137,10 +140,9 @@ class VTCQwen3VLBackbone(nn.Module):
                 **transformers_loading_kwargs,
             )
 
-        if gradient_checkpointing:
-            self.qwen_model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
-        else:
-            self.qwen_model.gradient_checkpointing_disable()
+        # Gradient checkpointing is configured in set_trainable_parameters (below), so it
+        # can be scoped to the sub-modules that actually train (see that method).
+        self.gradient_checkpointing = gradient_checkpointing
 
         # Keep BatchNorm running stats in float32 for bf16 compatibility
         motion_block = getattr(self.qwen_model.model.visual, "motion_block", None)
@@ -292,6 +294,10 @@ class VTCQwen3VLBackbone(nn.Module):
         blocks. The motion-module block (if present) is always kept trainable
         even when the rest of the visual tower is frozen.
 
+        Once ``requires_grad`` is finalized, activation checkpointing is
+        (re)configured via ``_configure_gradient_checkpointing`` so it only
+        applies to sub-modules that train.
+
         Args:
             tune_llm: Unfreeze the full LLM (language model + lm_head).
             tune_visual: Unfreeze the full visual tower (except the motion
@@ -324,6 +330,10 @@ class VTCQwen3VLBackbone(nn.Module):
             # Unfreeze lm_head if top layers are trainable, since it depends on the last layer
             self.qwen_model.lm_head.requires_grad_(True)  # noqa: FBT003
 
+        # Configure activation checkpointing after requires_grad is finalized so it can
+        # be scoped to the sub-modules that actually train.
+        self._configure_gradient_checkpointing()
+
         if print_params:
             print("=" * 50)
             print(f"[i] Tune backbone llm: {self.tune_llm}")
@@ -351,6 +361,28 @@ class VTCQwen3VLBackbone(nn.Module):
                     print(f"[i] Backbone trainable parameter: {name}")
             if trainable_params == 0:
                 print("[w] No backbone trainable parameters found.")
+
+    def _configure_gradient_checkpointing(self) -> None:
+        """Enable activation checkpointing only on sub-modules that train.
+
+        Checkpointing a frozen module recomputes its forward pass in the backward
+        pass for no memory gain, so it is pure wasted compute. Each backbone layer
+        (LLM decoder layers, vision blocks) and the vision tower (for its motion
+        block) self-checks its own ``gradient_checkpointing`` flag, so we can scope
+        checkpointing per module: when ``tune_llm`` is off but ``tune_top_llm_layers``
+        is set, only the unfrozen top LLM layers are checkpointed; when the visual
+        tower is frozen, only the always-trainable motion block is checkpointed.
+        """
+        if not self.gradient_checkpointing:
+            self.qwen_model.gradient_checkpointing_disable()
+            return
+
+        # Enable globally first so every layer receives ``_gradient_checkpointing_func``,
+        # then switch it off on any module that has no trainable parameters.
+        self.qwen_model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        for module in self.qwen_model.modules():
+            if hasattr(module, "gradient_checkpointing"):
+                module.gradient_checkpointing = any(p.requires_grad for p in module.parameters())
 
     def _process_moss_features(  # noqa: PLR0914
         self,

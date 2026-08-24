@@ -1021,14 +1021,6 @@ class Rldx1(ExportablePolicyMixin, Policy):
                 mode="quantiles",
             ),
         ]
-        torch_postproc_specs = []
-        if self.config.chunk_size != self.config.n_action_steps:
-            chunk_trimmer = ComponentSpec(
-                type="action_chunk_trimmer",
-                n_action_steps=self.config.n_action_steps,
-            )
-            postproc_specs.append(chunk_trimmer)
-            torch_postproc_specs.append(chunk_trimmer)
 
         extra_args: dict[str, ExportParameters] = {}
         output_names = [feature.name for feature in (self.outputs_schema or [])]
@@ -1064,7 +1056,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         )
         extra_args["torch"] = TorchExportParameters(
             preprocessors_specs=[ComponentSpec(type="to_float_tensor")],
-            postprocessors_specs=torch_postproc_specs,
+            postprocessors_specs=[],
         )
 
         return extra_args

@@ -140,9 +140,6 @@ class RLDXActionModel(nn.Module):
         self.model = MSAT(
             **diffusion_model_cfg,
         )
-        # Intended checkpointing flag; set_trainable_parameters scopes it to when
-        # the diffusion model actually trains (full fine-tune or LoRA).
-        self.gradient_checkpointing = self.model.gradient_checkpointing
         self.action_dim = max_action_dim
         self.action_horizon = action_horizon
         self.num_inference_timesteps = num_inference_timesteps
@@ -264,18 +261,10 @@ class RLDXActionModel(nn.Module):
             # never moves. fp32 storage lets small updates accumulate.
             self.vlln.to(torch.float32)
 
-        # Checkpointing a fully frozen MSAT only recomputes its forward for no
-        # memory gain, so keep it on only when the diffusion model trains (full
-        # fine-tune or LoRA, which leaves trainable adapters inside self.model).
-        self.model.gradient_checkpointing = self.gradient_checkpointing and any(
-            p.requires_grad for p in self.model.parameters()
-        )
-
         print(f"[MSAT] Tune action model projector: {self.tune_projector}")
         print(f"[MSAT] Tune action model diffusion model: {self.tune_diffusion_model}")
         print(f"[MSAT] Tune action model vlln: {self.tune_vlln}")
         print(f"[MSAT] Action model LoRA: {use_lora}")
-        print(f"[MSAT] Action model gradient checkpointing: {self.model.gradient_checkpointing}")
 
         # Check if any parameters are still trainable. If not, _print a warning.
         if not tune_projector and not tune_diffusion_model and not tune_vlln and not use_lora:

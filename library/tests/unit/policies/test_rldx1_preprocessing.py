@@ -542,7 +542,6 @@ def test_native_forward_contract(rldx1_preprocessor, with_action: bool) -> None:
         "attention_mask",
         "pixel_values",
         "image_grid_thw",
-        "image_wise_encoding",
         "num_views",
         "num_frames",
         STATE,
@@ -552,8 +551,11 @@ def test_native_forward_contract(rldx1_preprocessor, with_action: bool) -> None:
 
     assert out[STATE].shape == (batch_size, 1, MAX_STATE_DIM)
     assert out[STATE].dtype == torch.float32
-    for key in ("image_wise_encoding", "num_views", "num_frames", "embodiment_id"):
-        assert out[key].shape == (batch_size,), key
+    assert out["embodiment_id"].shape == (batch_size,)
+    # num_views / num_frames are Python ints (uniform across the batch), baked as
+    # graph constants at export time rather than data-dependent fake tensors.
+    assert out["num_views"] == 2
+    assert out["num_frames"] == 1
     assert out["input_ids"].shape[0] == batch_size
     assert out["attention_mask"].shape == out["input_ids"].shape
 
@@ -780,7 +782,7 @@ def test_multiframe_forward_matches_vendored() -> None:
     pre.eval()
     out = pre.forward(native_batch)
 
-    assert int(out["num_frames"][0]) == _VIDEO_LENGTH
-    assert int(out["num_views"][0]) == _NUM_VIEWS
+    assert out["num_frames"] == _VIDEO_LENGTH
+    assert out["num_views"] == _NUM_VIEWS
     torch.testing.assert_close(out["image_grid_thw"], gold["image_grid_thw"], atol=0, rtol=0)
     torch.testing.assert_close(out["pixel_values"], gold["pixel_values"], atol=0.0, rtol=0.0)

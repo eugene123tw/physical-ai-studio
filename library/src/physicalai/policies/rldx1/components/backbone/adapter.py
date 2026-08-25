@@ -461,18 +461,9 @@ class VTCQwen3VLBackbone(nn.Module):
             inputs_embeds = self.qwen_model.model.get_input_embeddings()(input_ids)
 
         device = inputs_embeds.device
-
-        # Build motion module kwargs for get_image_features
-        moss_kwargs = {}
-        if num_frames is not None:
-            moss_kwargs["num_frames"] = int(num_frames[0]) if isinstance(num_frames, torch.Tensor) else int(num_frames)
-        if num_views is not None:
-            moss_kwargs["num_views"] = int(num_views[0]) if isinstance(num_views, torch.Tensor) else int(num_views)
-
         image_embeds, deepstack_image_embeds = self.qwen_model.model.get_image_features(
             pixel_values,
             image_grid_thw,
-            **moss_kwargs,
         )
         image_embeds = torch.cat(image_embeds, dim=0).to(device, inputs_embeds.dtype)
         image_mask, _ = self.qwen_model.model.get_placeholder_mask(

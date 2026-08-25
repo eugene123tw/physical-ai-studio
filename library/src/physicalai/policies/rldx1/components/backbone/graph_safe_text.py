@@ -1,0 +1,214 @@
+# Copyright (C) 2026 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
+# Vendored from RLWRLD/RLDX-1 (Apache-2.0)
+
+"""Graph-safe Qwen3-VL text model (LLM decoder + VTC compression) for export.
+
+Ports ``rldx/inference/backbone/llm/model/graph_safe_qwen3vl_text_model.py``
+from RLWRLD/RLDX-1 for the v1 export path (SDPA attention, no KV cache).
+
+The eager decoder wraps each layer in a ``LayerWrapper`` that, at the
+``internal_projection`` layer, compresses the image-token span via
+``torch.nonzero`` + a data-dependent ``.item()`` -- untraceable. Because
+``input_ids`` (and thus the image span) is fixed for a given export,
+:func:`_find_compress_info` resolves the begin/end indices **once, eagerly**,
+into Python ints, and :class:`GraphSafeQwen3VLTextModel.forward` performs the
+same compression with static slices. SDPA attention with ``attention_mask=None``
+is causal (the attention sets ``is_causal=True``), so no data-dependent mask is
+built.
+"""
+
+from __future__ import annotations
+
+import torch
+from torch import nn
+from transformers.modeling_outputs import BaseModelOutputWithPast
+
+
+def _compute_fa_kwargs(seq_len: int, device: torch.device) -> tuple[torch.Tensor, int]:
+    """Static flash-attention varlen kwargs for one contiguous sequence."""
+    cu = torch.tensor([0, seq_len], dtype=torch.int32, device=device)
+    return cu, int(seq_len)
+
+
+def _find_compress_info(
+    language_model: nn.Module,
+    input_ids: torch.Tensor,
+    n_cog_tokens: int,
+    num_views: int | None = None,
+) -> dict[str, int] | None:
+    """Resolve the VTC compression layer and its static begin/end indices.
+
+    Runs ``LayerWrapper.get_removing_indices`` once, eagerly, and materializes
+    the begin/end positions as Python ints.
+
+    Args:
+        language_model: The decoder whose ``.layers`` are ``LayerWrapper``s.
+        input_ids: The fixed export token ids (with the image-token span).
+        n_cog_tokens: Number of appended cognition tokens.
+        num_views: Camera-view count. ``num_views >= 2`` keeps the last
+            ``num_views - 1`` image sets uncompressed. When ``begin >= end`` the
+            vanilla path skips compression, so this returns ``None``.
+
+    Returns:
+        A dict with ``compress_layer_idx`` / ``static_begin`` / ``static_end`` /
+        ``static_out_len``, or ``None`` when no compression happens.
+    """
+    for idx, layer in enumerate(language_model.layers):
+        if (
+            hasattr(layer, "layer")
+            and hasattr(layer, "internal_projection")
+            and layer.layer_idx == layer.internal_projection
+        ):
+            with torch.no_grad():
+                dummy = torch.zeros(1, input_ids.shape[1], 1, device=input_ids.device)
+                begin_idx, end_idx = layer.get_removing_indices(dummy, input_ids, num_views=[num_views])
+            begin = int(begin_idx[0, 0].item())
+            end = int(end_idx[0, 0].item())
+            if begin >= end:
+                return None
+            length_llm = input_ids.shape[1] + n_cog_tokens
+            out_len = begin + 1 + (length_llm - end)
+            return {
+                "compress_layer_idx": idx,
+                "static_begin": begin,
+                "static_end": end,
+                "static_out_len": out_len,
+            }
+    return None
+
+
+class GraphSafeQwen3VLTextModel(nn.Module):
+    """Qwen3-VL text decoder with static VTC compression and no KV cache.
+
+    Data-dependent ops replaced:
+      - ``LayerWrapper`` compression (``torch.nonzero`` + ``.item()``) -> static
+        begin/end slice with a mean cognition token.
+      - causal-mask construction -> ``attention_mask=None`` (SDPA ``is_causal``).
+    """
+
+    def __init__(
+        self,
+        text_model: nn.Module,
+        input_ids: torch.Tensor,
+        n_cog_tokens: int = 0,
+        attn_impl: str = "sdpa",
+        num_views: int | None = None,
+    ) -> None:
+        super().__init__()
+        self._text_model = text_model
+        self.attn_impl = attn_impl
+
+        length_ids = input_ids.shape[1]
+        device = input_ids.device
+        length_pre = length_ids + n_cog_tokens
+
+        self.compress_info = _find_compress_info(text_model, input_ids, n_cog_tokens, num_views=num_views)
+        length_post = self.compress_info["static_out_len"] if self.compress_info is not None else length_pre
+
+        # Static FA varlen params (Python int + constant tensor; no runtime .item()).
+        # Register the tensors as buffers so torch.export treats them as buffers
+        # rather than lifted constants (non-persistent buffers are lifted as
+        # constants, which trips a fake-tensor check).
+        pre_cu, self.pre_max_seqlen = _compute_fa_kwargs(length_pre, device)
+        post_cu, self.post_max_seqlen = _compute_fa_kwargs(length_post, device)
+        self.register_buffer("pre_cu_seqlens", pre_cu)
+        self.register_buffer("post_cu_seqlens", post_cu)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
+        deepstack_add: torch.Tensor | None = None,
+    ) -> BaseModelOutputWithPast:
+        """Run the decoder with static compression.
+
+        Args:
+            input_ids: Token ids (used only when ``inputs_embeds`` is ``None``).
+            inputs_embeds: Precomputed input embeddings ``(B, L, D)``.
+            position_ids: ``(B, L)`` or ``(3, B, L)`` M-RoPE ids.
+            position_embeddings: Optional precomputed ``(cos, sin)``; computed
+                from ``position_ids`` when omitted.
+            deepstack_add: Optional ``(num_ds, B, L, D)`` additive DeepStack
+                features applied after the first ``num_ds`` layers.
+
+        Returns:
+            ``BaseModelOutputWithPast`` with the final hidden states.
+        """
+        tm = self._text_model
+
+        if inputs_embeds is None:
+            inputs_embeds = tm.embed_tokens(input_ids)
+
+        if position_ids is not None and position_ids.ndim == 2:
+            position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
+
+        hidden_states = inputs_embeds
+        if position_embeddings is None:
+            position_embeddings = tm.rotary_emb(hidden_states, position_ids)
+
+        ci = self.compress_info
+        use_fa = self.attn_impl == "flash_attention_2"
+        cu_seqlens = self.pre_cu_seqlens
+        max_seqlen = self.pre_max_seqlen
+
+        for idx, layer in enumerate(tm.layers):
+            inner = layer.layer if hasattr(layer, "layer") else layer
+
+            if ci is not None and idx == ci["compress_layer_idx"]:
+                begin, end = ci["static_begin"], ci["static_end"]
+                n_drop = end - begin
+                drop_mask = torch.zeros(
+                    1,
+                    hidden_states.shape[1],
+                    1,
+                    dtype=hidden_states.dtype,
+                    device=hidden_states.device,
+                )
+                drop_mask[:, begin:end, :] = 1.0
+                motion = (hidden_states * drop_mask).sum(dim=1, keepdim=True) / n_drop
+                front = hidden_states[:, :begin, :]
+                back = hidden_states[:, end:, :]
+                hidden_states = torch.cat([front, motion, back], dim=1)
+
+                cos, sin = position_embeddings
+                cos = torch.cat([cos[:, :begin], cos[:, begin : begin + 1], cos[:, end:]], dim=1)
+                sin = torch.cat([sin[:, :begin], sin[:, begin : begin + 1], sin[:, end:]], dim=1)
+                position_embeddings = (cos, sin)
+
+                cu_seqlens = self.post_cu_seqlens
+                max_seqlen = self.post_max_seqlen
+
+            if use_fa:
+                hidden_states = inner(
+                    hidden_states,
+                    position_embeddings=position_embeddings,
+                    attention_mask=None,
+                    cu_seq_lens_q=cu_seqlens,
+                    cu_seq_lens_k=cu_seqlens,
+                    max_length_q=max_seqlen,
+                    max_length_k=max_seqlen,
+                )
+            else:
+                hidden_states = inner(
+                    hidden_states,
+                    position_embeddings=position_embeddings,
+                    attention_mask=None,
+                )
+            if isinstance(hidden_states, tuple):
+                hidden_states = hidden_states[0]
+
+            if deepstack_add is not None and idx < deepstack_add.shape[0]:
+                hidden_states = hidden_states + deepstack_add[idx]
+
+        hidden_states = tm.norm(hidden_states)
+        return BaseModelOutputWithPast(last_hidden_state=hidden_states)
+
+    def __getattr__(self, name: str) -> object:
+        """Delegate unknown attributes to the wrapped text model."""
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self._text_model, name)

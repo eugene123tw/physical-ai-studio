@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -84,6 +85,9 @@ from .preprocessor import make_rldx1_transforms
 from .vtc_buffer import VtcWindowBuffer
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+    from os import PathLike
+
     from .preprocessor import Rldx1Postprocessor, Rldx1Preprocessor
 
 logger = logging.getLogger(__name__)
@@ -387,6 +391,15 @@ class Rldx1(ExportablePolicyMixin, Policy):
         # Explicit Feature overrides win over anything auto-fetched/user-supplied above --
         # required for RLWRLD checkpoints, which never record camera shapes anywhere.
         dataset_stats = _merge_explicit_features(dataset_stats, input_features, output_features)
+
+        # TODO(Eugene): Make this nicer
+        if input_features is not None:
+            num_views = 0
+            for feature in input_features.values():
+                if feature.ftype == FeatureType.VISUAL:
+                    num_views += 1
+                self.config.num_views = num_views
+
         self._dataset_stats = dataset_stats
         if dataset_stats is not None:
             self._initialize_model(dataset_stats, shard_files)
@@ -555,6 +568,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
             image_min_area=config.image_min_area or 0,  # type: ignore[arg-type]
             image_resize_m=config.image_resize_m,
             embodiment_id=int(config.embodiment_id),  # type: ignore[arg-type]
+            max_token_len=config.tokenizer_max_length,
         )
 
     def setup(self, stage: str) -> None:
@@ -618,6 +632,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
             image_min_area=config.image_min_area or 0,  # type: ignore[arg-type]
             image_resize_m=config.image_resize_m,
             embodiment_id=int(config.embodiment_id),  # type: ignore[arg-type]
+            max_token_len=config.tokenizer_max_length,
         )
         self._dataset_stats = dataset_stats
         self.hparams["dataset_stats"] = dataset_stats
@@ -959,7 +974,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         return [
             InferenceFeature(
                 ftype=InferenceFeatureType.ACTION,
-                shape=(self.config.chunk_size, *action_shape),
+                shape=(self.config.action_horizon, *action_shape),
                 name=ACTION,
                 dtype=InferenceFeatureDtype.FLOAT32,
             ),
@@ -1034,7 +1049,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
                 ComponentSpec(
                     type="hf_tokenizer",
                     tokenizer_name="RLWRLD/RLDX-1-VLM",
-                    max_token_len=self.config.tokenizer_max_length,  # ???
+                    max_token_len=self.config.tokenizer_max_length,
                 ),
             ],
             postprocessors_specs=postproc_specs,
@@ -1060,3 +1075,106 @@ class Rldx1(ExportablePolicyMixin, Policy):
         )
 
         return extra_args
+
+    # ------------------------------------------------------------------ #
+    # Export (graph-safe tracing)                                        #
+    # ------------------------------------------------------------------ #
+    # RLDX-1's eager forward runs data-dependent ops (fast_pos_embed_interpolate,
+    # rot_pos_emb, cu_seqlens, VTC token compression, M-RoPE get_rope_index) that
+    # torch.export / torch.onnx.export cannot trace. For tracing backends we swap
+    # ``self.model`` for a graph-safe view that shares the trained parameters by
+    # reference and precomputes every data-dependent tensor from the eager sample.
+
+    def _build_graph_safe_model(
+        self,
+        model: Rldx1Model,
+        input_sample: dict[str, torch.Tensor],
+    ) -> torch.nn.Module:
+        """Build the export-only graph-safe view over a trained model.
+
+        The returned module shares parameters with ``model`` by reference (no
+        state-dict copy) and precomputes all data-dependent buffers from
+        ``input_sample`` in its constructor, so its ``forward(batch)`` is a
+        static graph. Imported lazily to keep the graph-safe port off the
+        training import path.
+
+        Returns:
+            An ``nn.Module`` with the same ``forward(batch)`` contract as
+            :class:`Rldx1Model`, safe to hand to the tracer.
+        """
+        from physicalai.policies.rldx1.components.backbone.graph_safe_rldx1 import GraphSafeRldx1Model
+
+        return GraphSafeRldx1Model(model, input_sample, self.config)
+
+    @contextmanager
+    def _graph_safe_export_model(self, input_sample: dict[str, torch.Tensor]) -> Generator[None, None, None]:
+        """Temporarily swap ``self.model`` for its graph-safe export view.
+
+        Restores the trained model on exit (including on error) so exporting
+        never mutates the in-memory model.
+
+        Raises:
+            RuntimeError: If the model has not been initialized yet.
+        """
+        if self.model is None:
+            msg = "Cannot export before the model is initialized (call setup / load a checkpoint first)."
+            raise RuntimeError(msg)
+        original = self.model
+        graph_safe = self._build_graph_safe_model(original, input_sample)
+        try:
+            self.model = graph_safe  # type: ignore[assignment]
+            yield
+        finally:
+            # Undo any in-place submodule swaps before restoring the trained model.
+            if hasattr(graph_safe, "restore"):
+                graph_safe.restore()
+            self.model = original
+
+    @torch.no_grad()
+    def to_onnx(
+        self,
+        output_path: PathLike | str,
+        input_sample: dict[str, torch.Tensor] | None = None,
+        **export_kwargs: Any,
+    ) -> None:
+        """Export to ONNX, tracing the graph-safe view of the model."""
+        if input_sample is None:
+            input_sample = self._get_default_export_input_sample()
+        with self._graph_safe_export_model(input_sample or {}):
+            traced_sample = self._trim_export_sample(input_sample)
+            super().to_onnx(output_path, input_sample=traced_sample, **export_kwargs)
+
+    @torch.no_grad()
+    def to_openvino(
+        self,
+        output_path: PathLike | str,
+        input_sample: dict[str, torch.Tensor] | None = None,
+        **export_kwargs: Any,
+    ) -> None:
+        """Export to OpenVINO, tracing the graph-safe view of the model."""
+        if input_sample is None:
+            input_sample = self._get_default_export_input_sample()
+        with self._graph_safe_export_model(input_sample or {}):
+            traced_sample = self._trim_export_sample(input_sample)
+            super().to_openvino(output_path, input_sample=traced_sample, **export_kwargs)
+
+    def _trim_export_sample(
+        self,
+        input_sample: dict[str, torch.Tensor] | None,
+    ) -> dict[str, torch.Tensor] | None:
+        """Trim the export sample to the inputs the static graph consumes.
+
+        The graph-safe model bakes ``input_ids`` / ``image_grid_thw`` / position
+        ids into static buffers, so they are not graph inputs. Passing them to
+        the tracer makes OpenVINO's ``input=`` shapes reference tensors absent
+        from the converted model. Restrict the sample to the model's declared
+        ``input_keys``.
+
+        Returns:
+            The sample filtered to the consumed inputs (unchanged when the model
+            declares no ``input_keys``).
+        """
+        keys = getattr(self.model, "input_keys", None)
+        if not keys or input_sample is None:
+            return input_sample
+        return {key: input_sample[key] for key in keys if key in input_sample}

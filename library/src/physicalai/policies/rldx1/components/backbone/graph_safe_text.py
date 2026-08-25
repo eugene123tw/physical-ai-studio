@@ -122,6 +122,7 @@ class GraphSafeQwen3VLTextModel(nn.Module):
         position_ids: torch.Tensor | None = None,
         position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
         deepstack_add: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
     ) -> BaseModelOutputWithPast:
         """Run the decoder with static compression.
 
@@ -133,6 +134,10 @@ class GraphSafeQwen3VLTextModel(nn.Module):
                 from ``position_ids`` when omitted.
             deepstack_add: Optional ``(num_ds, B, L, D)`` additive DeepStack
                 features applied after the first ``num_ds`` layers.
+            attention_mask: Optional ``(B, L)`` 1/0 pad mask (dynamic-prompt
+                export). When given, a causal+pad additive mask is built and
+                threaded through the layers; when ``None`` the layers rely on
+                SDPA ``is_causal`` (static single-prompt export).
 
         Returns:
             ``BaseModelOutputWithPast`` with the final hidden states.
@@ -148,6 +153,11 @@ class GraphSafeQwen3VLTextModel(nn.Module):
         hidden_states = inputs_embeds
         if position_embeddings is None:
             position_embeddings = tm.rotary_emb(hidden_states, position_ids)
+
+        pad_2d = attention_mask
+        attn_mask_4d = (
+            self._causal_pad_mask(pad_2d, hidden_states.dtype, hidden_states.device) if pad_2d is not None else None
+        )
 
         ci = self.compress_info
         use_fa = self.attn_impl == "flash_attention_2"
@@ -178,6 +188,12 @@ class GraphSafeQwen3VLTextModel(nn.Module):
                 sin = torch.cat([sin[:, :begin], sin[:, begin : begin + 1], sin[:, end:]], dim=1)
                 position_embeddings = (cos, sin)
 
+                # The image span is all real tokens, so the collapsed slot stays
+                # attended; rebuild the mask for the shortened sequence.
+                if pad_2d is not None:
+                    pad_2d = torch.cat([pad_2d[:, :begin], pad_2d[:, begin : begin + 1], pad_2d[:, end:]], dim=1)
+                    attn_mask_4d = self._causal_pad_mask(pad_2d, hidden_states.dtype, hidden_states.device)
+
                 cu_seqlens = self.post_cu_seqlens
                 max_seqlen = self.post_max_seqlen
 
@@ -195,7 +211,7 @@ class GraphSafeQwen3VLTextModel(nn.Module):
                 hidden_states = inner(
                     hidden_states,
                     position_embeddings=position_embeddings,
-                    attention_mask=None,
+                    attention_mask=attn_mask_4d,
                 )
             if isinstance(hidden_states, tuple):
                 hidden_states = hidden_states[0]
@@ -205,6 +221,25 @@ class GraphSafeQwen3VLTextModel(nn.Module):
 
         hidden_states = tm.norm(hidden_states)
         return BaseModelOutputWithPast(last_hidden_state=hidden_states)
+
+    @staticmethod
+    def _causal_pad_mask(pad_2d: torch.Tensor, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+        """Build a ``(B, 1, L, L)`` additive causal + padding attention mask.
+
+        Args:
+            pad_2d: ``(B, L)`` 1/0 mask (1 = real token).
+            dtype: Additive-mask dtype (``0`` where attended, ``dtype.min`` else).
+            device: Target device.
+
+        Returns:
+            Additive mask suitable for SDPA ``attn_mask``.
+        """
+        batch, length = pad_2d.shape
+        causal = torch.tril(torch.ones(length, length, dtype=torch.bool, device=device))
+        keep = causal[None, None] & pad_2d[:, None, None, :].to(torch.bool)
+        mask = torch.zeros(batch, 1, length, length, dtype=dtype, device=device)
+        return mask.masked_fill(~keep, torch.finfo(dtype).min)
+
 
     def __getattr__(self, name: str) -> object:
         """Delegate unknown attributes to the wrapped text model."""

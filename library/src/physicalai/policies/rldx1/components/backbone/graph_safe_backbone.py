@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 INPUT_IDS = "input_ids"
 PIXEL_VALUES = "pixel_values"
 IMAGE_GRID_THW = "image_grid_thw"
+POSITION_IDS = "position_ids"
+ATTENTION_MASK = "attention_mask"
 
 # Placeholder token id appended for cog-token M-RoPE positions (matches the
 # eager VTCQwen3VLBackbone._forward_qwen_with_cog_tokens).
@@ -40,21 +42,34 @@ _PLACEHOLDER_TOKEN_ID = 248068
 class GraphSafeQwen3VLBackbone(nn.Module):
     """Static, trace-safe unified VLM backbone (vision + glue + LLM)."""
 
-    def __init__(self, backbone: nn.Module, vl_input: dict[str, torch.Tensor], config: Rldx1Config) -> None:
+    def __init__(
+        self,
+        backbone: nn.Module,
+        vl_input: dict[str, torch.Tensor],
+        config: Rldx1Config,
+        *,
+        dynamic_prompt: bool = False,
+    ) -> None:
         """Build the graph-safe backbone.
 
         Args:
             backbone: The trained ``VTCQwen3VLBackbone`` (params reused by
                 reference).
             vl_input: The eager export sample; needs ``input_ids`` and
-                ``image_grid_thw`` to precompute static buffers.
+                ``image_grid_thw`` to precompute static buffers. For dynamic
+                prompt this must already be padded to the fixed export length.
             config: Policy config (``attn_implementation`` / ``num_views``).
+            dynamic_prompt: When ``True`` the forward reads ``input_ids`` /
+                ``position_ids`` / ``attention_mask`` from the input dict (one
+                model, many prompts); when ``False`` the prompt is baked.
         """
         super().__init__()
+        self.dynamic_prompt = dynamic_prompt
         inner = backbone.qwen_model.model
         input_ids = vl_input[INPUT_IDS]
         grid_thw = vl_input[IMAGE_GRID_THW]
         device = input_ids.device
+        self.qwen_config = backbone.qwen_model.model.config
 
         self.n_cog_tokens = backbone.n_cog_tokens if getattr(backbone, "use_cog_tokens", False) else 0
         self.cog_mode = backbone.cog_mode
@@ -65,7 +80,7 @@ class GraphSafeQwen3VLBackbone(nn.Module):
             input_ids,
             n_cog_tokens=self.n_cog_tokens,
             attn_impl=config.attn_implementation,
-            num_views=config.num_views,
+            num_views=vl_input["num_views"],
         )
 
         # Shared modules (references, not owned).
@@ -105,16 +120,27 @@ class GraphSafeQwen3VLBackbone(nn.Module):
         self.gs_visual.restore()
 
     def forward(self, vl_input: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Encode ``pixel_values`` into backbone features.
+        """Encode the VLM inputs into backbone features.
 
-        Args:
-            vl_input: Dict with ``pixel_values``; other keys are ignored (static
-                buffers are used instead).
+        In static mode only ``pixel_values`` is read (the prompt is baked). In
+        dynamic mode ``input_ids`` / ``position_ids`` / ``attention_mask`` are
+        read too, so one exported model serves many prompts.
 
         Returns:
             Backbone features ``(B, M_out, D)`` -- the cog tokens in
             ``cog_only`` mode.
         """
+        if self.dynamic_prompt:
+            input_ids = vl_input[INPUT_IDS]
+            position_ids = vl_input[POSITION_IDS]
+            attention_mask = vl_input[ATTENTION_MASK]
+            image_mask_2d = input_ids == self.image_token_id
+        else:
+            input_ids = self.static_input_ids
+            position_ids = self.static_position_ids
+            attention_mask = None
+            image_mask_2d = self.image_mask_3d[:, :, 0]
+
         pixel_values = vl_input[PIXEL_VALUES]
         if pixel_values.ndim == 3:
             pixel_values = pixel_values.reshape(-1, pixel_values.shape[-1])
@@ -125,8 +151,9 @@ class GraphSafeQwen3VLBackbone(nn.Module):
         dtype = self.embed_tokens.weight.dtype
         image_emb = image_emb.to(dtype=dtype)
 
-        token_emb = self.embed_tokens(self.static_input_ids)
-        token_emb = token_emb.masked_scatter(self.image_mask_3d, image_emb)
+        token_emb = self.embed_tokens(input_ids)
+        image_mask_3d = image_mask_2d.unsqueeze(-1).expand_as(token_emb)
+        token_emb = token_emb.masked_scatter(image_mask_3d, image_emb)
 
         if self.n_cog_tokens > 0 and self.static_cog_emb is not None:
             meta = self.static_cog_emb.to(dtype).unsqueeze(0).expand(token_emb.size(0), -1, -1)
@@ -137,10 +164,9 @@ class GraphSafeQwen3VLBackbone(nn.Module):
         deepstack_add = None
         if len(deepstack_features) > 0:
             batch, length_full, dim = full_emb.shape
-            vis_mask_2d = self.image_mask_3d[:, :, 0]  # (B, L_ids) bool
             vis_mask_full = torch.cat(
                 [
-                    vis_mask_2d,
+                    image_mask_2d,
                     torch.zeros(batch, self.n_cog_tokens, dtype=torch.bool, device=full_emb.device),
                 ],
                 dim=1,
@@ -154,7 +180,8 @@ class GraphSafeQwen3VLBackbone(nn.Module):
 
         lm_out = self.gs_text(
             inputs_embeds=full_emb,
-            position_ids=self.static_position_ids,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
             deepstack_add=deepstack_add,
         )
         hidden_states = lm_out.last_hidden_state

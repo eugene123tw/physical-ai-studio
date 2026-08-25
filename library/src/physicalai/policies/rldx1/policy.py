@@ -283,6 +283,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         embodiment_tag: str = "general_embodiment",
         input_features: dict[str, Feature] | None = None,
         output_features: dict[str, Feature] | None = None,
+        tokenizer_max_length: int = 512,
     ) -> None:
         """Initialize the RLDX-1 policy and save hyperparameters."""
         super().__init__(n_action_steps=n_action_steps)
@@ -330,6 +331,8 @@ class Rldx1(ExportablePolicyMixin, Policy):
                 # Action prediciton
                 action_horizon=n_action_steps,
                 embodiment_tag=embodiment_tag,
+                # tokenizer config
+                tokenizer_max_length=tokenizer_max_length,
             )
             if dataset_stats is None:
                 dataset_stats = hf_dataset_stats
@@ -370,6 +373,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
                 clip_outliers=clip_outliers,
                 action_horizon=n_action_steps,
                 embodiment_tag=embodiment_tag,
+                tokenizer_max_length=tokenizer_max_length,
             )
 
         # Save `pretrained_name_or_path` so load_from_checkpoint() reconstructs
@@ -392,7 +396,11 @@ class Rldx1(ExportablePolicyMixin, Policy):
         # required for RLWRLD checkpoints, which never record camera shapes anywhere.
         dataset_stats = _merge_explicit_features(dataset_stats, input_features, output_features)
 
-        # TODO(Eugene): Make this nicer
+
+        # TODO(Eugene): hardcode this first
+        self.config.export_dynamic_prompt = True
+
+        # TODO(Eugene): Make this nicer        
         if input_features is not None:
             num_views = 0
             for feature in input_features.values():
@@ -440,8 +448,10 @@ class Rldx1(ExportablePolicyMixin, Policy):
         # Normalization
         clip_outliers: bool,  # noqa: FBT001
         embodiment_tag: str,
-        # Action prediciton
+        # Action prediction
         action_horizon: int,
+        # Tokenizer
+        tokenizer_max_length: int,
     ) -> tuple[Rldx1Config, dict[str, dict[str, list[float] | str | tuple]], list[Path], list[str]]:
         config_file = Path(hf_hub_download(pretrained_name_or_path, "config.json", revision=revision))  # nosec B615
         shard_files = retrieve_safetensors_shards(pretrained_name_or_path, revision=revision)
@@ -492,6 +502,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         hf_config["image_min_area"] = image_min_area
         hf_config["action_horizon"] = action_horizon
         hf_config["embodiment_tag"] = embodiment_tag
+        hf_config["tokenizer_max_length"] = tokenizer_max_length
 
         # strict=False: ignore upstream config.json keys with no Rldx1Config field
         # (e.g. architectures, model_type, rtc_inference_*) instead of denylisting
@@ -980,7 +991,6 @@ class Rldx1(ExportablePolicyMixin, Policy):
             ),
         ]
 
-    @property
     def extra_export_args(self) -> dict[str, ExportParameters]:
         """Additional export arguments for model conversion.
 
@@ -1037,6 +1047,25 @@ class Rldx1(ExportablePolicyMixin, Policy):
             ),
         ]
 
+
+        # Dynamic-prompt export keeps input_ids dynamic, so the runtime rebuilds
+        # position_ids / attention_mask (numpy get_rope_index) after tokenization.
+        rope_specs: list[ComponentSpec] = []
+        if self.config.export_dynamic_prompt and self.model is not None:
+            # During export self.model may be a GraphSafeRldx1Model (gs_backbone)
+            # or the regular Rldx1Model (backbone).
+            backbone = getattr(self.model, "backbone", None) or getattr(self.model, "gs_backbone", None)
+            qwen_config = backbone.qwen_config
+            rope_specs = [
+                ComponentSpec(
+                    type="rldx1_rope",
+                    image_token_id=qwen_config.image_token_id,
+                    vision_start_token_id=qwen_config.vision_start_token_id,
+                    spatial_merge_size=qwen_config.vision_config.spatial_merge_size,
+                    n_cog_tokens=self.config.n_cog_tokens,
+                ),
+            ]
+
         extra_args: dict[str, ExportParameters] = {}
         output_names = [feature.name for feature in (self.outputs_schema or [])]
         extra_args["onnx"] = ONNXExportParameters(
@@ -1051,6 +1080,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
                     tokenizer_name="RLWRLD/RLDX-1-VLM",
                     max_token_len=self.config.tokenizer_max_length,
                 ),
+                *rope_specs,
             ],
             postprocessors_specs=postproc_specs,
         )
@@ -1066,6 +1096,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
                     type="ov_tokenizer",
                     artifact="tokenizer.xml",
                 ),
+                *rope_specs,
             ],
             postprocessors_specs=postproc_specs,
         )
@@ -1177,4 +1208,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         keys = getattr(self.model, "input_keys", None)
         if not keys or input_sample is None:
             return input_sample
-        return {key: input_sample[key] for key in keys if key in input_sample}
+        # Dynamic-prompt export replaces the raw sample with a padded one that
+        # carries host-computed position_ids / attention_mask.
+        source = getattr(self.model, "export_sample", None) or input_sample
+        return {key: source[key] for key in keys if key in source}

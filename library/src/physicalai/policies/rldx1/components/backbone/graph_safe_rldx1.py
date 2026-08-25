@@ -59,6 +59,15 @@ ACTION_PRED = "action_pred"
 PIXEL_VALUES = "pixel_values"
 STATE = "state"
 EMBODIMENT_ID = "embodiment_id"
+POSITION_IDS = "position_ids"
+ATTENTION_MASK = "attention_mask"
+
+# Placeholder token appended for the cog-token M-RoPE positions (matches the
+# eager VTCQwen3VLBackbone._forward_qwen_with_cog_tokens).
+_PLACEHOLDER_TOKEN_ID = 248068
+# Pad token value is irrelevant numerically: pads are masked as attention keys
+# and their own outputs are discarded (only cog tokens are read), so 0 is fine.
+_PAD_TOKEN_ID = 0
 
 
 class GraphSafeRldx1Model(nn.Module):
@@ -69,12 +78,6 @@ class GraphSafeRldx1Model(nn.Module):
     :meth:`restore` after export to undo the in-place attention swaps and leave
     the trained model untouched.
     """
-
-    # Runtime-varying inputs the static graph consumes. Every other preprocessed
-    # tensor (input_ids, image_grid_thw, num_views, ...) is baked into a buffer at
-    # build time, so the export sample must be trimmed to these to keep the tracer
-    # inputs aligned with the converted graph.
-    input_keys: tuple[str, ...] = (PIXEL_VALUES, STATE, EMBODIMENT_ID)
 
     def __init__(
         self,
@@ -89,8 +92,8 @@ class GraphSafeRldx1Model(nn.Module):
                 reference (never copied).
             input_sample: The eagerly preprocessed export sample (tensor
                 entries only). Used to precompute static buffers.
-            config: The policy config, source of the fixed ``num_views`` /
-                ``video_length`` constants baked into the graph.
+            config: The policy config. ``export_dynamic_prompt`` selects between
+                the single-prompt bake and the multi-prompt dynamic export.
 
         Raises:
             KeyError: If ``input_sample`` lacks the tensors required to
@@ -98,15 +101,96 @@ class GraphSafeRldx1Model(nn.Module):
         """
         super().__init__()
         self._config = config
+        self._dynamic = bool(config.export_dynamic_prompt)
 
         for required in (IMAGE_GRID_THW, INPUT_IDS):
             if required not in input_sample:
                 msg = f"input_sample is missing '{required}', required to build the graph-safe backbone."
                 raise KeyError(msg)
 
+        if self._dynamic:
+            # Pad to the fixed export length; the backbone bakes its compression
+            # / image-mask positions from this padded layout, and the tracer is
+            # fed the same padded input_ids/position_ids/attention_mask.
+            build_sample = self._build_padded_sample(model, input_sample, config)
+            self.export_sample: dict[str, torch.Tensor] | None = build_sample
+            self.input_keys: tuple[str, ...] = (PIXEL_VALUES, INPUT_IDS, POSITION_IDS, ATTENTION_MASK, STATE)
+        else:
+            build_sample = input_sample
+            self.export_sample = None
+            self.input_keys = (PIXEL_VALUES, STATE)
+
         # Wrap-by-reference: reuse the trained submodules, precompute static buffers.
-        self.gs_backbone = GraphSafeQwen3VLBackbone(model.backbone, input_sample, config)
+        self.gs_backbone = GraphSafeQwen3VLBackbone(
+            model.backbone,
+            build_sample,
+            config,
+            dynamic_prompt=self._dynamic,
+        )
         self._action_model = model.action_model
+
+        # embodiment_id is fixed by config, so bake it as a buffer instead of a graph
+        # input; the category-specific MLP gathers then constant-fold to one slot.
+        embodiment_id = input_sample.get(EMBODIMENT_ID)
+        if embodiment_id is None:
+            embodiment_id = torch.tensor([int(config.embodiment_id)], dtype=torch.long)
+        self.register_buffer("embodiment_id", embodiment_id.clone())
+
+
+    @staticmethod
+    def _build_padded_sample(
+        model: Rldx1Model,
+        input_sample: dict[str, torch.Tensor],
+        config: Rldx1Config,
+    ) -> dict[str, torch.Tensor]:
+        """Left-pad ``input_ids`` to the fixed length and add host layout tensors.
+
+        Produces the fixed-shape ``input_ids`` / ``position_ids`` /
+        ``attention_mask`` (over ``[padded ids | cog placeholders]``) the dynamic
+        graph consumes. Left-padding keeps the image block right-aligned so the
+        backbone's compression / image-mask positions stay constant.
+
+        Returns:
+            A copy of ``input_sample`` with padded ``input_ids`` plus
+            ``position_ids`` and ``attention_mask``.
+
+        Raises:
+            ValueError: If the prompt is longer than ``tokenizer_max_length``.
+        """
+        input_ids = input_sample[INPUT_IDS]
+        grid_thw = input_sample[IMAGE_GRID_THW]
+        device = input_ids.device
+        length = config.tokenizer_max_length
+        actual = input_ids.shape[1]
+        if actual > length:
+            msg = f"Prompt length {actual} exceeds tokenizer_max_length {length}; increase it or shorten the task."
+            raise ValueError(msg)
+
+        pad_len = length - actual
+        pads = torch.full((1, pad_len), _PAD_TOKEN_ID, dtype=input_ids.dtype, device=device)
+        padded_input_ids = torch.cat([pads, input_ids], dim=1)
+        attention_mask = torch.cat(
+            [
+                torch.zeros(1, pad_len, dtype=torch.long, device=device),
+                torch.ones(1, actual, dtype=torch.long, device=device),
+            ],
+            dim=1,
+        )
+
+        n_cog = config.n_cog_tokens
+        cog_ids = torch.full((1, n_cog), _PLACEHOLDER_TOKEN_ID, dtype=input_ids.dtype, device=device)
+        extended_input_ids = torch.cat([padded_input_ids, cog_ids], dim=1)
+        extended_mask = torch.cat([attention_mask, torch.ones(1, n_cog, dtype=torch.long, device=device)], dim=1)
+
+        inner = model.backbone.qwen_model.model
+        with torch.no_grad():
+            position_ids, _ = inner.get_rope_index(extended_input_ids, grid_thw, extended_mask)
+
+        padded = dict(input_sample)
+        padded[INPUT_IDS] = padded_input_ids
+        padded[POSITION_IDS] = position_ids
+        padded[ATTENTION_MASK] = extended_mask
+        return padded
 
     def restore(self) -> None:
         """Undo in-place submodule swaps so the trained model is left intact."""
@@ -131,6 +215,8 @@ class GraphSafeRldx1Model(nn.Module):
             key: value.to(dtype) if torch.is_tensor(value) and torch.is_floating_point(value) else value
             for key, value in batch.items()
         }
+        # Inject the baked embodiment_id (dropped from the graph inputs).
+        cast_batch[EMBODIMENT_ID] = self.embodiment_id
 
         # A mask-free backbone_output skips the eager get_action's
         # ``encoder_attention_mask.all()`` guard (None short-circuits); an

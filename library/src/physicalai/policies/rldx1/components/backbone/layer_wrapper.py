@@ -162,7 +162,7 @@ class LayerWrapper(nn.Module):
             begin_idx, end_idx = self.get_removing_indices(
                 hidden_states,
                 input_ids,
-                num_views=num_views,
+                num_views=[num_views],
             )
 
             compress_mask = (end_idx > begin_idx).reshape(-1)

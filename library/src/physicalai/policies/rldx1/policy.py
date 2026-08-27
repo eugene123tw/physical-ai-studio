@@ -943,10 +943,6 @@ class Rldx1(ExportablePolicyMixin, Policy):
                     ),
                 )
 
-        # RLWRLD release checkpoints never carry visual entries in dataset_stats
-        # (their statistics.json is pretrain-stage state/action stats only). Camera
-        # *names* are auto-discovered from processor_config.json in _from_hf, but the
-        # shape must come from an explicit input_features override (see __init__).
         if num_image_features == 0:
             msg = (
                 "dataset_stats carries no visual features. Pass input_features={'<view>': "
@@ -1066,6 +1062,9 @@ class Rldx1(ExportablePolicyMixin, Policy):
                 ),
             ]
 
+        # TODO(Eugene): make this a bit generic?
+        openvino_input_names = list(self.model.input_keys)
+
         extra_args: dict[str, ExportParameters] = {}
         output_names = [feature.name for feature in (self.outputs_schema or [])]
         extra_args["onnx"] = ONNXExportParameters(
@@ -1085,9 +1084,10 @@ class Rldx1(ExportablePolicyMixin, Policy):
             postprocessors_specs=postproc_specs,
         )
         extra_args["openvino"] = OpenVINOExportParameters(
+            inputs=openvino_input_names,
             outputs=output_names,
             compress_to_fp16=True,
-            via_onnx=True,
+            via_onnx=False,
             export_tokenizer=True,
             exporter_kwargs={},
             preprocessors_specs=[
@@ -1135,7 +1135,12 @@ class Rldx1(ExportablePolicyMixin, Policy):
         """
         from physicalai.policies.rldx1.components.backbone.graph_safe_rldx1 import GraphSafeRldx1Model
 
-        return GraphSafeRldx1Model(model, input_sample, self.config)
+        outputs_schema = self.outputs_schema or []
+        action_dim = self.config.max_action_dim
+        if outputs_schema and outputs_schema[0].shape:
+            action_dim = int(outputs_schema[0].shape[-1])
+
+        return GraphSafeRldx1Model(model, input_sample, self.config, output_action_dim=action_dim)
 
     @contextmanager
     def _graph_safe_export_model(self, input_sample: dict[str, torch.Tensor]) -> Generator[None, None, None]:
@@ -1186,6 +1191,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         if input_sample is None:
             input_sample = self._get_default_export_input_sample()
         with self._graph_safe_export_model(input_sample or {}):
+            # TODO(Eugene): find a tidier way
             traced_sample = self._trim_export_sample(input_sample)
             super().to_openvino(output_path, input_sample=traced_sample, **export_kwargs)
 

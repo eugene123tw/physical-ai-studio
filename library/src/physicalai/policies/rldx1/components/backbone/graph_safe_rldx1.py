@@ -84,6 +84,7 @@ class GraphSafeRldx1Model(nn.Module):
         model: Rldx1Model,
         input_sample: dict[str, torch.Tensor],
         config: Rldx1Config,
+        output_action_dim: int,
     ) -> None:
         """Build the graph-safe view.
 
@@ -94,6 +95,8 @@ class GraphSafeRldx1Model(nn.Module):
                 entries only). Used to precompute static buffers.
             config: The policy config. ``export_dynamic_prompt`` selects between
                 the single-prompt bake and the multi-prompt dynamic export.
+            output_action_dim: Real exported action width after trimming padded
+                ``max_action_dim`` down to the environment action dimension.
 
         Raises:
             KeyError: If ``input_sample`` lacks the tensors required to
@@ -102,6 +105,7 @@ class GraphSafeRldx1Model(nn.Module):
         super().__init__()
         self._config = config
         self._dynamic = bool(config.export_dynamic_prompt)
+        self._output_action_dim = output_action_dim
 
         for required in (IMAGE_GRID_THW, INPUT_IDS):
             if required not in input_sample:
@@ -224,4 +228,4 @@ class GraphSafeRldx1Model(nn.Module):
         backbone_output = BatchFeature(data={BACKBONE_FEATURES: backbone_features})
         action_input = self._action_model.prepare_input(cast_batch)
         result = self._action_model.get_action(backbone_output, action_input)
-        return result[ACTION_PRED]
+        return result[ACTION_PRED][..., : self._config.action_horizon, : self._output_action_dim]

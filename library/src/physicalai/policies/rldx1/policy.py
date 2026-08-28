@@ -1195,6 +1195,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
             traced_sample = self._trim_export_sample(input_sample)
             super().to_openvino(output_path, input_sample=traced_sample, **export_kwargs)
 
+    # TODO(Eugene): would there be a better way than trimming? Assuming the input data are succinct?
     def _trim_export_sample(
         self,
         input_sample: dict[str, torch.Tensor] | None,
@@ -1214,7 +1215,13 @@ class Rldx1(ExportablePolicyMixin, Policy):
         keys = getattr(self.model, "input_keys", None)
         if not keys or input_sample is None:
             return input_sample
-        # Dynamic-prompt export replaces the raw sample with a padded one that
-        # carries host-computed position_ids / attention_mask.
-        source = getattr(self.model, "export_sample", None) or input_sample
+        # Dynamic-prompt export may attach a padded prompt sample. Only copy the
+        # static prompt tensors from that sample; keep live observation tensors
+        # (pixel_values/state) from input_sample.
+        source = dict(input_sample)
+        export_sample = getattr(self.model, "export_sample", None)
+        if export_sample is not None:
+            for key in ("input_ids", "position_ids", "attention_mask"):
+                if key in export_sample:
+                    source[key] = export_sample[key]
         return {key: source[key] for key in keys if key in source}

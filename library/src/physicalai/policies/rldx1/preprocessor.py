@@ -206,7 +206,7 @@ class Rldx1Preprocessor(nn.Module):
         image_resize_m: int = 32,
         default_task: str = DEFAULT_TASK,
         embodiment_id: int = DEFAULT_EMBODIMENT_ID,
-        max_token_len: int = 512,
+        max_token_len: int = 1024,
         stats: dict[str, dict[str, list[float]]] | None = None,
     ) -> None:
         """Initialize the preprocessor and build the normalization blocks."""
@@ -677,7 +677,7 @@ def make_rldx1_transforms(
     image_min_area: int = 50176,
     image_resize_m: int = 32,
     embodiment_id: int = DEFAULT_EMBODIMENT_ID,
-    max_token_len: int = 512,
+    max_token_len: int = 1024,
 ) -> tuple[Rldx1Preprocessor, Rldx1Postprocessor]:
     """Build the matched RLDX-1 preprocessor / postprocessor pair.
 

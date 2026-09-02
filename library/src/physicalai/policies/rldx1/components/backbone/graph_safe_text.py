@@ -240,7 +240,6 @@ class GraphSafeQwen3VLTextModel(nn.Module):
         mask = torch.zeros(batch, 1, length, length, dtype=dtype, device=device)
         return mask.masked_fill(~keep, torch.finfo(dtype).min)
 
-
     def __getattr__(self, name: str) -> object:
         """Delegate unknown attributes to the wrapped text model."""
         try:

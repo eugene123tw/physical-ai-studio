@@ -283,7 +283,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         embodiment_tag: str = "general_embodiment",
         input_features: dict[str, Feature] | None = None,
         output_features: dict[str, Feature] | None = None,
-        tokenizer_max_length: int = 512,
+        tokenizer_max_length: int = 1024,
     ) -> None:
         """Initialize the RLDX-1 policy and save hyperparameters."""
         super().__init__(n_action_steps=n_action_steps)
@@ -396,11 +396,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         # required for RLWRLD checkpoints, which never record camera shapes anywhere.
         dataset_stats = _merge_explicit_features(dataset_stats, input_features, output_features)
 
-
-        # TODO(Eugene): hardcode this first
-        self.config.export_dynamic_prompt = True
-
-        # TODO(Eugene): Make this nicer        
+        # TODO(Eugene): Make this nicer
         if input_features is not None:
             num_views = 0
             for feature in input_features.values():
@@ -1024,17 +1020,11 @@ class Rldx1(ExportablePolicyMixin, Policy):
             )
             raise ValueError(msg)
 
-        base_preproc_specs = [
-            ComponentSpec(
-                type="normalize",
-                stats={STATE: _get_dataset_stats_entry(self._dataset_stats, f"observation.{STATE}", STATE)},
-                mode="quantiles",
-            ),
-            ComponentSpec(
-                type="rldx1",
-                image_resolution=image_resolution,
-            ),
-        ]
+        normalize_spec = ComponentSpec(
+            type="normalize",
+            stats={STATE: _get_dataset_stats_entry(self._dataset_stats, f"observation.{STATE}", STATE)},
+            mode="quantiles",
+        )
         postproc_specs = [
             ComponentSpec(
                 type="denormalize",
@@ -1042,12 +1032,12 @@ class Rldx1(ExportablePolicyMixin, Policy):
                 mode="quantiles",
             ),
         ]
+        token_composer_params = self._build_rldx1_token_composer_params(image_resolution)
 
-
-        # Dynamic-prompt export keeps input_ids dynamic, so the runtime rebuilds
+        # Dynamic-prompt export keeps input_ids dynamic, so runtime rebuilds
         # position_ids / attention_mask (numpy get_rope_index) after tokenization.
         rope_specs: list[ComponentSpec] = []
-        if self.config.export_dynamic_prompt and self.model is not None:
+        if self.model is not None:
             # During export self.model may be a GraphSafeRldx1Model (gs_backbone)
             # or the regular Rldx1Model (backbone).
             backbone = getattr(self.model, "backbone", None) or getattr(self.model, "gs_backbone", None)
@@ -1066,6 +1056,8 @@ class Rldx1(ExportablePolicyMixin, Policy):
         openvino_input_names = list(self.model.input_keys)
 
         extra_args: dict[str, ExportParameters] = {}
+        num_views = int(self.config.num_views or 1)
+        num_frames = int(self.config.video_length)
         output_names = [feature.name for feature in (self.outputs_schema or [])]
         extra_args["onnx"] = ONNXExportParameters(
             exporter_kwargs={
@@ -1073,11 +1065,21 @@ class Rldx1(ExportablePolicyMixin, Policy):
             },
             export_tokenizer=False,
             preprocessors_specs=[
-                *base_preproc_specs,
+                normalize_spec,
+                ComponentSpec(
+                    type="rldx1",
+                    image_resolution=image_resolution,
+                    num_views=num_views,
+                    num_frames=num_frames,
+                ),
                 ComponentSpec(
                     type="hf_tokenizer",
                     tokenizer_name="RLWRLD/RLDX-1-VLM",
                     max_token_len=self.config.tokenizer_max_length,
+                ),
+                ComponentSpec(
+                    type="rldx1_token_composer",
+                    **token_composer_params,
                 ),
                 *rope_specs,
             ],
@@ -1091,10 +1093,20 @@ class Rldx1(ExportablePolicyMixin, Policy):
             export_tokenizer=True,
             exporter_kwargs={},
             preprocessors_specs=[
-                *base_preproc_specs,
+                normalize_spec,
+                ComponentSpec(
+                    type="rldx1",
+                    image_resolution=image_resolution,
+                    num_views=num_views,
+                    num_frames=num_frames,
+                ),
                 ComponentSpec(
                     type="ov_tokenizer",
                     artifact="tokenizer.xml",
+                ),
+                ComponentSpec(
+                    type="rldx1_token_composer",
+                    **token_composer_params,
                 ),
                 *rope_specs,
             ],
@@ -1195,18 +1207,90 @@ class Rldx1(ExportablePolicyMixin, Policy):
             traced_sample = self._trim_export_sample(input_sample)
             super().to_openvino(output_path, input_sample=traced_sample, **export_kwargs)
 
+    @torch.no_grad()
+    def _get_default_export_input_sample(self) -> dict[str, torch.Tensor] | None:
+        """Build the default export sample using VTC-prepared model input.
+
+        RLDX-1 inference stacks rollout frames through ``VtcWindowBuffer`` before
+        preprocessing. Export tracing should mirror that ordering to produce model
+        inputs representative of inference. This override keeps export sampling
+        side-effect free by using an isolated buffer instead of the live rollout
+        history owned by ``self._vtc_buffer``.
+
+        Returns:
+            Preprocessed tensor-only input sample suitable for export tracing,
+            or ``None`` when a sample cannot be generated.
+        """
+        if self._preprocessor is None:
+            return None
+
+        sample = self.sample_input
+        if sample is None:
+            return None
+
+        sample = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in sample.items()}
+
+        export_vtc = VtcWindowBuffer(
+            video_length=int(self.config.video_length),
+            video_stride=int(self.config.video_stride),
+        )
+        model_input = export_vtc.prepare(sample)
+
+        processed_sample = self._preprocessor(model_input)
+        return {k: v for k, v in processed_sample.items() if isinstance(v, torch.Tensor)}
+
+    def _build_rldx1_token_composer_params(
+        self,
+        image_resolution: tuple[int, int],
+    ) -> dict[str, Any]:
+        """Build manifest params for runtime RLDX-1 token composition."""
+        if self._preprocessor is None:
+            msg = "Cannot build token composer params before transforms are initialized."
+            raise RuntimeError(msg)
+
+        image_height, image_width = int(image_resolution[0]), int(image_resolution[1])
+        patch_size = 16
+        merge_size = 2
+        grid_h = image_height // patch_size
+        grid_w = image_width // patch_size
+        tokens_per_image = (grid_h * grid_w) // (merge_size**2)
+
+        tokenizer = self._preprocessor.tokenizer
+        prefix_ids = tokenizer("<|im_start|>user\n", add_special_tokens=False)["input_ids"]
+        suffix_ids = tokenizer("<|im_end|>\n", add_special_tokens=False)["input_ids"]
+
+        special_tokens = {
+            "vision_start": "<|vision_start|>",
+            "vision_end": "<|vision_end|>",
+            "image_pad": "<|image_pad|>",
+        }
+        special_ids = {name: int(tokenizer.convert_tokens_to_ids(token)) for name, token in special_tokens.items()}
+
+        num_views = int(self.config.num_views or 1)
+        num_frames = int(self.config.video_length)
+
+        return {
+            "formalize_language": True,
+            "prefix_ids": [int(value) for value in prefix_ids],
+            "suffix_ids": [int(value) for value in suffix_ids],
+            "special_ids": special_ids,
+            "tokens_per_image": int(tokens_per_image),
+            "num_images": int(num_views * num_frames),
+            "max_token_len": int(self.config.tokenizer_max_length),
+            "padding_side": "left",
+        }
+
     # TODO(Eugene): would there be a better way than trimming? Assuming the input data are succinct?
     def _trim_export_sample(
         self,
         input_sample: dict[str, torch.Tensor] | None,
     ) -> dict[str, torch.Tensor] | None:
-        """Trim the export sample to the inputs the static graph consumes.
+        """Trim export sample to the graph-safe model's declared inputs.
 
-        The graph-safe model bakes ``input_ids`` / ``image_grid_thw`` / position
-        ids into static buffers, so they are not graph inputs. Passing them to
-        the tracer makes OpenVINO's ``input=`` shapes reference tensors absent
-        from the converted model. Restrict the sample to the model's declared
-        ``input_keys``.
+        Dynamic graph-safe export uses the model's ``input_keys`` and may attach
+        a padded prompt in ``export_sample`` for fixed-shape token tensors.
+        Keep live observation tensors (``pixel_values``/``state``) from
+        ``input_sample`` while sourcing prompt tensors from ``export_sample``.
 
         Returns:
             The sample filtered to the consumed inputs (unchanged when the model
@@ -1215,9 +1299,8 @@ class Rldx1(ExportablePolicyMixin, Policy):
         keys = getattr(self.model, "input_keys", None)
         if not keys or input_sample is None:
             return input_sample
-        # Dynamic-prompt export may attach a padded prompt sample. Only copy the
-        # static prompt tensors from that sample; keep live observation tensors
-        # (pixel_values/state) from input_sample.
+        # Only prompt tensors come from export_sample; keep live observation
+        # tensors (pixel_values/state) from input_sample.
         source = dict(input_sample)
         export_sample = getattr(self.model, "export_sample", None)
         if export_sample is not None:

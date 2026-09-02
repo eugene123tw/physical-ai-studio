@@ -78,14 +78,7 @@ class Rldx1Config(Config):
     # blocks into the prompt, so length >= num_views * num_frames *
     # tokens_per_image + vision start/end + text + template. Undersizing
     # truncates image-pad tokens and breaks the pixel_values alignment.
-    tokenizer_max_length: int = 512
-
-    # Export: when True, the OpenVINO/ONNX export keeps input_ids/position_ids/
-    # attention_mask as fixed-shape (padded to tokenizer_max_length) runtime
-    # inputs instead of baking one prompt into the graph, so a single exported
-    # model serves multiple task instructions. Requires the runtime preprocessor
-    # to emit position_ids (numpy get_rope_index) + the padded mask.
-    export_dynamic_prompt: bool = False
+    tokenizer_max_length: int = 1024
 
     # Video input configuration
     # ``use_video`` is an architectural invariant: every supported

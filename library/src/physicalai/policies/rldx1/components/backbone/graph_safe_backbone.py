@@ -9,10 +9,8 @@ from RLWRLD/RLDX-1 for the v1 export path (no motion / memory / RTC).
 
 Composes :class:`GraphSafeQwen3VLVisionModel` and
 :class:`GraphSafeQwen3VLTextModel` with the embedding / image-scatter /
-cog-token glue. The data-dependent glue ops -- ``get_rope_index`` (M-RoPE),
-the image-token placeholder mask, and the cog-token append -- are precomputed
-in ``__init__`` from the fixed export sample, so ``forward`` is a static graph
-that consumes only ``pixel_values`` and its own static buffers.
+cog-token glue. The tracer observes fixed-shape dynamic prompt tensors
+(``input_ids`` / ``position_ids`` / ``attention_mask``) and image features.
 """
 
 from __future__ import annotations
@@ -34,11 +32,6 @@ IMAGE_GRID_THW = "image_grid_thw"
 POSITION_IDS = "position_ids"
 ATTENTION_MASK = "attention_mask"
 
-# Placeholder token id appended for cog-token M-RoPE positions (matches the
-# eager VTCQwen3VLBackbone._forward_qwen_with_cog_tokens).
-_PLACEHOLDER_TOKEN_ID = 248068
-
-
 class GraphSafeQwen3VLBackbone(nn.Module):
     """Static, trace-safe unified VLM backbone (vision + glue + LLM)."""
 
@@ -47,8 +40,6 @@ class GraphSafeQwen3VLBackbone(nn.Module):
         backbone: nn.Module,
         vl_input: dict[str, torch.Tensor],
         config: Rldx1Config,
-        *,
-        dynamic_prompt: bool = False,
     ) -> None:
         """Build the graph-safe backbone.
 
@@ -56,19 +47,14 @@ class GraphSafeQwen3VLBackbone(nn.Module):
             backbone: The trained ``VTCQwen3VLBackbone`` (params reused by
                 reference).
             vl_input: The eager export sample; needs ``input_ids`` and
-                ``image_grid_thw`` to precompute static buffers. For dynamic
-                prompt this must already be padded to the fixed export length.
+                ``image_grid_thw`` to precompute static buffers. Input IDs must
+                already be padded to the fixed export length.
             config: Policy config (``attn_implementation`` / ``num_views``).
-            dynamic_prompt: When ``True`` the forward reads ``input_ids`` /
-                ``position_ids`` / ``attention_mask`` from the input dict (one
-                model, many prompts); when ``False`` the prompt is baked.
         """
         super().__init__()
-        self.dynamic_prompt = dynamic_prompt
         inner = backbone.qwen_model.model
         input_ids = vl_input[INPUT_IDS]
         grid_thw = vl_input[IMAGE_GRID_THW]
-        device = input_ids.device
         self.qwen_config = backbone.qwen_model.model.config
 
         self.n_cog_tokens = backbone.n_cog_tokens if getattr(backbone, "use_cog_tokens", False) else 0
@@ -88,28 +74,6 @@ class GraphSafeQwen3VLBackbone(nn.Module):
         self.qwen_linear = backbone.qwen_linear
         self.image_token_id = inner.config.image_token_id
 
-        batch, length_ids = input_ids.shape
-        dim = self.embed_tokens.embedding_dim
-
-        self.register_buffer("static_input_ids", input_ids.clone())
-        image_mask = input_ids == self.image_token_id
-        self.register_buffer("image_mask_3d", image_mask.unsqueeze(-1).expand(batch, length_ids, dim))
-
-        # 3D M-RoPE position ids over [image ids | cog placeholders].
-        if self.n_cog_tokens > 0:
-            meta_ids = torch.full(
-                (batch, self.n_cog_tokens),
-                _PLACEHOLDER_TOKEN_ID,
-                dtype=input_ids.dtype,
-                device=device,
-            )
-            extended_input_ids = torch.cat([input_ids, meta_ids], dim=1)
-        else:
-            extended_input_ids = input_ids
-        with torch.no_grad():
-            position_ids, _ = inner.get_rope_index(extended_input_ids, grid_thw, None)
-        self.register_buffer("static_position_ids", position_ids)
-
         if self.n_cog_tokens > 0 and hasattr(backbone, "cog_emb"):
             self.register_buffer("static_cog_emb", backbone.cog_emb.data.clone())
         else:
@@ -122,24 +86,17 @@ class GraphSafeQwen3VLBackbone(nn.Module):
     def forward(self, vl_input: dict[str, torch.Tensor]) -> torch.Tensor:
         """Encode the VLM inputs into backbone features.
 
-        In static mode only ``pixel_values`` is read (the prompt is baked). In
-        dynamic mode ``input_ids`` / ``position_ids`` / ``attention_mask`` are
-        read too, so one exported model serves many prompts.
+        Reads ``input_ids`` / ``position_ids`` / ``attention_mask`` from the
+        runtime input dict so one exported model serves many prompts.
 
         Returns:
             Backbone features ``(B, M_out, D)`` -- the cog tokens in
             ``cog_only`` mode.
         """
-        if self.dynamic_prompt:
-            input_ids = vl_input[INPUT_IDS]
-            position_ids = vl_input[POSITION_IDS]
-            attention_mask = vl_input[ATTENTION_MASK]
-            image_mask_2d = input_ids == self.image_token_id
-        else:
-            input_ids = self.static_input_ids
-            position_ids = self.static_position_ids
-            attention_mask = None
-            image_mask_2d = self.image_mask_3d[:, :, 0]
+        input_ids = vl_input[INPUT_IDS]
+        position_ids = vl_input[POSITION_IDS]
+        attention_mask = vl_input[ATTENTION_MASK]
+        image_mask_2d = input_ids == self.image_token_id
 
         pixel_values = vl_input[PIXEL_VALUES]
         if pixel_values.ndim == 3:

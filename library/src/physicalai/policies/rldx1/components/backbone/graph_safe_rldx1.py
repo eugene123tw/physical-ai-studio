@@ -26,7 +26,7 @@ Port status (v1 = OpenVINO / ONNX, CPU, no motion / memory / RTC):
     [x] LLM / VTC       -> GraphSafeQwen3VLTextModel     (static begin/end
         compression indices via _find_compress_info)
     [x] backbone glue   -> GraphSafeQwen3VLBackbone      (embed/scatter/cog
-        tokens, get_rope_index -> static position ids)
+        tokens + fixed-shape dynamic prompt tensors)
     [x] action head     -> reused eagerly. The MSAT denoising loop is a fixed
         ``range`` with static shapes and no data-dependent guards; the only
         eager guard (``encoder_attention_mask.all()``) is skipped by passing a
@@ -93,8 +93,7 @@ class GraphSafeRldx1Model(nn.Module):
                 reference (never copied).
             input_sample: The eagerly preprocessed export sample (tensor
                 entries only). Used to precompute static buffers.
-            config: The policy config. ``export_dynamic_prompt`` selects between
-                the single-prompt bake and the multi-prompt dynamic export.
+            config: The policy config.
             output_action_dim: Real exported action width after trimming padded
                 ``max_action_dim`` down to the environment action dimension.
 
@@ -104,7 +103,6 @@ class GraphSafeRldx1Model(nn.Module):
         """
         super().__init__()
         self._config = config
-        self._dynamic = bool(config.export_dynamic_prompt)
         self._output_action_dim = output_action_dim
 
         for required in (IMAGE_GRID_THW, INPUT_IDS):
@@ -112,24 +110,18 @@ class GraphSafeRldx1Model(nn.Module):
                 msg = f"input_sample is missing '{required}', required to build the graph-safe backbone."
                 raise KeyError(msg)
 
-        if self._dynamic:
-            # Pad to the fixed export length; the backbone bakes its compression
-            # / image-mask positions from this padded layout, and the tracer is
-            # fed the same padded input_ids/position_ids/attention_mask.
-            build_sample = self._build_padded_sample(model, input_sample, config)
-            self.export_sample: dict[str, torch.Tensor] | None = build_sample
-            self.input_keys: tuple[str, ...] = (PIXEL_VALUES, INPUT_IDS, POSITION_IDS, ATTENTION_MASK, STATE)
-        else:
-            build_sample = input_sample
-            self.export_sample = None
-            self.input_keys = (PIXEL_VALUES, STATE)
+        # Pad to the fixed export length; the backbone bakes its compression /
+        # image-mask positions from this padded layout, and the tracer is fed
+        # the same padded input_ids/position_ids/attention_mask.
+        build_sample = self._build_padded_sample(model, input_sample, config)
+        self.export_sample: dict[str, torch.Tensor] | None = build_sample
+        self.input_keys: tuple[str, ...] = (PIXEL_VALUES, INPUT_IDS, POSITION_IDS, ATTENTION_MASK, STATE)
 
         # Wrap-by-reference: reuse the trained submodules, precompute static buffers.
         self.gs_backbone = GraphSafeQwen3VLBackbone(
             model.backbone,
             build_sample,
             config,
-            dynamic_prompt=self._dynamic,
         )
         self._action_model = model.action_model
 
@@ -139,7 +131,6 @@ class GraphSafeRldx1Model(nn.Module):
         if embodiment_id is None:
             embodiment_id = torch.tensor([int(config.embodiment_id)], dtype=torch.long)
         self.register_buffer("embodiment_id", embodiment_id.clone())
-
 
     @staticmethod
     def _build_padded_sample(

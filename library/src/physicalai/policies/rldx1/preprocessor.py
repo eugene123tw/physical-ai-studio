@@ -52,6 +52,7 @@ from physicalai.data.observation import ACTION, IMAGES, STATE, TASK, Observation
 from physicalai.policies.utils.normalization import FeatureNormalizeTransform
 
 from .augmentations import AspectAreaResizeAndCrop
+from .constants import ATTENTION_MASK, EMBODIMENT_ID, IMAGE_GRID_THW, INPUT_IDS, PIXEL_VALUES
 from .preprocessing import (
     build_qwen_conversation,
     build_state_action_degenerate_masks,
@@ -97,14 +98,7 @@ OBSERVATION_IMAGES_PREFIX = "observation.images."
 OBSERVATION_IMAGE = "observation.image"
 
 # Transform output keys (RLDX inputs dict).
-INPUT_IDS = "input_ids"
-ATTENTION_MASK = "attention_mask"
-PIXEL_VALUES = "pixel_values"
-IMAGE_GRID_THW = "image_grid_thw"
-MM_TOKEN_TYPE_IDS = "mm_token_type_ids"  # noqa: S105 # nosec B105 -- dict key name, not a secret
-IMAGE_WISE_ENCODING = "image_wise_encoding"
 NUM_VIEWS = "num_views"
-NUM_FRAMES = "num_frames"
 ACTION_MASK = "action_mask"
 
 # Default padded dimensions (match RLDX PT config.json).
@@ -458,7 +452,7 @@ class Rldx1Preprocessor(nn.Module):
             IMAGE_GRID_THW: vlm[IMAGE_GRID_THW],
             NUM_VIEWS: torch.tensor(len(view_keys)),
             STATE: sa_inputs[STATE],
-            "embodiment_id": torch.tensor([self.embodiment_id] * batch_size),
+            EMBODIMENT_ID: torch.tensor([self.embodiment_id] * batch_size),
         }
         if has_action:
             inputs[ACTION] = sa_inputs[ACTION]

@@ -23,14 +23,11 @@ from torch import nn
 from physicalai.policies.rldx1.components.backbone.graph_safe_text import GraphSafeQwen3VLTextModel
 from physicalai.policies.rldx1.components.backbone.graph_safe_vision import GraphSafeQwen3VLVisionModel
 
+from ...constants import ATTENTION_MASK, INPUT_IDS, PIXEL_VALUES, POSITION_IDS
+
 if TYPE_CHECKING:
     from physicalai.policies.rldx1.config import Rldx1Config
 
-INPUT_IDS = "input_ids"
-PIXEL_VALUES = "pixel_values"
-IMAGE_GRID_THW = "image_grid_thw"
-POSITION_IDS = "position_ids"
-ATTENTION_MASK = "attention_mask"
 
 class GraphSafeQwen3VLBackbone(nn.Module):
     """Static, trace-safe unified VLM backbone (vision + glue + LLM)."""

@@ -66,10 +66,18 @@ from physicalai.export.backends import (
 )
 from physicalai.policies.base import Policy
 from physicalai.policies.rldx1.config import Rldx1Config
+from physicalai.policies.rldx1.export_helpers import (
+    build_compress_reference_ids,
+    build_rldx1_token_composer_params,
+    export_image_resolution_from_stats,
+)
 from physicalai.policies.rldx1.model import Rldx1Model
 from physicalai.policies.rldx1.pretrained_utils import (
     extract_camera_names,
     extract_dataset_stats,
+    get_dataset_stats_entry,
+    merge_explicit_features,
+    resolve_feature_shape,
     retrieve_safetensors_shards,
 )
 from physicalai.policies.utils.features import infer_shape_from_stats
@@ -81,6 +89,8 @@ try:
 except ImportError:
     OptimizerLRScheduler = Any  # type: ignore[assignment, misc]
 
+from .constants import ATTENTION_MASK, INPUT_IDS, PIXEL_VALUES, POSITION_IDS, STATE
+from .export_helpers import build_padded_sample, cast_sample_fp32, fp32_weights_for_export, trim_export_sample
 from .preprocessor import make_rldx1_transforms
 from .vtc_buffer import VtcWindowBuffer
 
@@ -91,80 +101,6 @@ if TYPE_CHECKING:
     from .preprocessor import Rldx1Postprocessor, Rldx1Preprocessor
 
 logger = logging.getLogger(__name__)
-
-
-def _merge_explicit_features(
-    dataset_stats: dict[str, dict[str, Any]] | None,
-    input_features: dict[str, Feature] | None,
-    output_features: dict[str, Feature] | None,
-) -> dict[str, dict[str, Any]] | None:
-    """Merge explicit ``Feature`` overrides into a ``dataset_stats``-shaped dict.
-
-    User-supplied features take precedence over anything already in
-    ``dataset_stats`` (e.g. auto-fetched state/action stats) -- required for
-    RLWRLD checkpoints, whose ``statistics.json`` never records camera shapes.
-
-    Returns:
-        The merged dict, or ``None`` if there is nothing to merge.
-    """
-    merged = dict(dataset_stats or {})
-    for name, feature in {**(input_features or {}), **(output_features or {})}.items():
-        if feature.shape is None:
-            continue
-        if feature.ftype == FeatureType.VISUAL:
-            key = f"observation.{IMAGES}.{name}"
-        elif feature.ftype == FeatureType.STATE:
-            key = f"observation.{STATE}"
-        elif feature.ftype == FeatureType.ACTION:
-            key = ACTION
-        else:
-            key = name
-        merged[key] = {"name": feature.name or name, "shape": feature.shape, "type": str(feature.ftype)}
-    return merged or None
-
-
-def _resolve_feature_shape(feature: dict[str, Any]) -> tuple[int, ...]:
-    """Return a feature's shape, raising if it can't be inferred from stats.
-
-    RLDX1's own ``extract_dataset_stats`` (used when loading a raw HF release
-    checkpoint via ``_from_hf``) returns bare ``min``/``max``/``mean``/``std``/
-    ``q01``/``q99`` vectors with no ``"shape"`` key at all -- unlike the
-    LeRobot-style enriched stats (e.g. a Studio-trained checkpoint's full
-    ``train_dataset.stats``, or an explicit ``input_features``/``output_features``
-    override) which carry an explicit ``"shape"``. Both are valid dataset_stats
-    entries for this policy; :func:`infer_shape_from_stats` handles both.
-
-    Returns:
-        The feature's shape as a tuple.
-
-    Raises:
-        ValueError: If neither ``"shape"`` nor a stat vector is present.
-    """
-    shape = infer_shape_from_stats(feature)
-    if shape is None:
-        msg = f"Cannot resolve a shape for feature {feature!r}: no 'shape' key and no stat vector to infer it from."
-        raise ValueError(msg)
-    return shape
-
-
-def _get_dataset_stats_entry(dataset_stats: dict[str, dict[str, Any]], *keys: str) -> dict[str, Any]:
-    """Return the first present entry among candidate ``dataset_stats`` keys.
-
-    ``extract_dataset_stats`` (raw HF release checkpoints) uses bare keys like
-    ``"state"``; a Studio-trained checkpoint's full LeRobot-style stats use
-    ``"observation.state"``. Callers pass both spellings as candidates.
-
-    Returns:
-        The matching stats dict.
-
-    Raises:
-        KeyError: If none of ``keys`` is present in ``dataset_stats``.
-    """
-    for key in keys:
-        if key in dataset_stats:
-            return dataset_stats[key]
-    msg = f"None of {keys!r} found in dataset_stats (keys present: {sorted(dataset_stats)!r})"
-    raise KeyError(msg)
 
 
 class Rldx1(ExportablePolicyMixin, Policy):
@@ -394,7 +330,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         )
         # Explicit Feature overrides win over anything auto-fetched/user-supplied above --
         # required for RLWRLD checkpoints, which never record camera shapes anywhere.
-        dataset_stats = _merge_explicit_features(dataset_stats, input_features, output_features)
+        dataset_stats = merge_explicit_features(dataset_stats, input_features, output_features)
 
         # TODO(Eugene): Make this nicer
         if input_features is not None:
@@ -972,7 +908,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         if self.model is None or self._dataset_stats is None:
             return None
 
-        action_shape = _resolve_feature_shape(_get_dataset_stats_entry(self._dataset_stats, ACTION))
+        action_shape = resolve_feature_shape(get_dataset_stats_entry(self._dataset_stats, ACTION))
 
         return [
             InferenceFeature(
@@ -1004,18 +940,19 @@ class Rldx1(ExportablePolicyMixin, Policy):
         # visual entry, whatever its key (single observation.images or per-camera
         # observation.images.<name>); the Runtime rldx1 preprocessor assumes one
         # shared resolution across views.
-        image_resolution = self._export_image_resolution()
-        if image_resolution is None:
+        try:
+            image_resolution = export_image_resolution_from_stats(self._dataset_stats)
+        except RuntimeError as exc:
             msg = (
                 "dataset_stats carries no visual features. Pass input_features={'<view>': "
                 "Feature(ftype=FeatureType.VISUAL, shape=(3, height, width)), ...} to "
                 "Rldx1(...) to export this policy."
             )
-            raise ValueError(msg)
+            raise ValueError(msg) from exc
 
         normalize_spec = ComponentSpec(
             type="normalize",
-            stats={STATE: _get_dataset_stats_entry(self._dataset_stats, f"observation.{STATE}", STATE)},
+            stats={STATE: get_dataset_stats_entry(self._dataset_stats, f"observation.{STATE}", STATE)},
             mode="quantiles",
         )
         postproc_specs = [
@@ -1025,7 +962,16 @@ class Rldx1(ExportablePolicyMixin, Policy):
                 mode="quantiles",
             ),
         ]
-        token_composer_params = self._build_rldx1_token_composer_params(image_resolution)
+        if self._preprocessor is None:
+            msg = "Cannot build token composer params before transforms are initialized."
+            raise RuntimeError(msg)
+        token_composer_params = build_rldx1_token_composer_params(
+            tokenizer=self._preprocessor.tokenizer,
+            image_resolution=image_resolution,
+            num_views=int(self.config.num_views or 1),
+            num_frames=int(self.config.video_length),
+            max_token_len=int(self.config.tokenizer_max_length),
+        )
 
         # Dynamic-prompt export keeps input_ids dynamic, so runtime rebuilds
         # position_ids / attention_mask (numpy get_rope_index) after tokenization.
@@ -1044,9 +990,6 @@ class Rldx1(ExportablePolicyMixin, Policy):
                     n_cog_tokens=self.config.n_cog_tokens,
                 ),
             ]
-
-        # TODO(Eugene): make this a bit generic?
-        openvino_input_names = list(self.model.input_keys)
 
         extra_args: dict[str, ExportParameters] = {}
         num_views = int(self.config.num_views or 1)
@@ -1079,7 +1022,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
             postprocessors_specs=postproc_specs,
         )
         extra_args["openvino"] = OpenVINOExportParameters(
-            inputs=openvino_input_names,
+            inputs=[PIXEL_VALUES, INPUT_IDS, POSITION_IDS, ATTENTION_MASK, STATE],
             outputs=output_names,
             compress_to_fp16=True,
             via_onnx=False,
@@ -1150,7 +1093,18 @@ class Rldx1(ExportablePolicyMixin, Policy):
         if outputs_schema and outputs_schema[0].shape:
             action_dim = int(outputs_schema[0].shape[-1])
 
-        compress_input_ids = self._build_compress_reference_ids()
+        if self._preprocessor is None:
+            msg = "No preprocessor available to build compress reference ids."
+            raise RuntimeError(msg)
+        image_resolution = export_image_resolution_from_stats(self._dataset_stats)
+        token_composer_params = build_rldx1_token_composer_params(
+            tokenizer=self._preprocessor.tokenizer,
+            image_resolution=image_resolution,
+            num_views=int(self.config.num_views or 1),
+            num_frames=int(self.config.video_length),
+            max_token_len=int(self.config.tokenizer_max_length),
+        )
+        compress_input_ids = build_compress_reference_ids(token_composer_params)
         return GraphSafeRldx1Model(
             model,
             input_ids=input_ids,
@@ -1163,7 +1117,14 @@ class Rldx1(ExportablePolicyMixin, Policy):
         )
 
     @contextmanager
-    def _graph_safe_export_model(self, input_sample: dict[str, torch.Tensor]) -> Generator[None, None, None]:
+    def _graph_safe_export_model(
+        self,
+        *,
+        input_ids: torch.Tensor,
+        image_grid_thw: torch.Tensor,
+        embodiment_id: torch.Tensor,
+        num_views: torch.Tensor,
+    ) -> Generator[None, None, None]:
         """Temporarily swap ``self.model`` for its graph-safe export view.
 
         Restores the trained model on exit (including on error) so exporting
@@ -1175,13 +1136,15 @@ class Rldx1(ExportablePolicyMixin, Policy):
         if self.model is None:
             msg = "Cannot export before the model is initialized (call setup / load a checkpoint first)."
             raise RuntimeError(msg)
+
         original = self.model
+
         graph_safe = self._build_graph_safe_model(
             original,
-            input_ids=input_sample["input_ids"],
-            image_grid_thw=input_sample["image_grid_thw"],
-            num_views=input_sample["num_views"],
-            embodiment_id=input_sample["embodiment_id"],
+            input_ids=input_ids,
+            image_grid_thw=image_grid_thw,
+            num_views=num_views,
+            embodiment_id=embodiment_id,
         )
         try:
             self.model = graph_safe  # type: ignore[assignment]
@@ -1191,42 +1154,6 @@ class Rldx1(ExportablePolicyMixin, Policy):
             if hasattr(graph_safe, "restore"):
                 graph_safe.restore()
             self.model = original
-
-    @contextmanager
-    def _fp32_weights_for_export(self) -> Generator[None, None, None]:
-        """Cast model floats to fp32 for tracing, then restore per-tensor dtypes.
-
-        OpenVINO/ONNX do not lower a bf16-traced graph faithfully (the vision
-        patch-embed and downstream ops produce garbage), so tracing must run in
-        fp32. ``bf16 -> fp32 -> bf16`` round-trips losslessly, and per-tensor
-        restore preserves mixed-dtype modules (e.g. an fp32 ``cog_emb``).
-        """
-        model = self.model
-        if model is None:
-            yield
-            return
-        tensors = [*model.named_parameters(), *model.named_buffers()]
-        saved = {name: t.dtype for name, t in tensors if t.is_floating_point() and t.dtype != torch.float32}
-        if not saved:
-            yield
-            return
-        model.float()
-        try:
-            yield
-        finally:
-            by_name = {name: t for name, t in [*model.named_parameters(), *model.named_buffers()]}
-            for name, dtype in saved.items():
-                tensor = by_name.get(name)
-                if tensor is not None:
-                    tensor.data = tensor.data.to(dtype)
-
-    @staticmethod
-    def _cast_sample_fp32(sample: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """Cast floating tensors in an export sample to fp32 (ints untouched)."""
-        return {
-            key: value.float() if isinstance(value, torch.Tensor) and value.is_floating_point() else value
-            for key, value in sample.items()
-        }
 
     @torch.no_grad()
     def to_onnx(
@@ -1239,9 +1166,18 @@ class Rldx1(ExportablePolicyMixin, Policy):
         if input_sample is None:
             input_sample = self._get_default_export_input_sample()
         # OV/ONNX mislower a bf16-traced graph; trace in fp32 (lossless round-trip).
-        with self._fp32_weights_for_export(), self._graph_safe_export_model(input_sample or {}):
-            traced_sample = self._cast_sample_fp32(self._trim_export_sample(input_sample))
-            super().to_onnx(output_path, input_sample=traced_sample, **export_kwargs)
+        with (
+            fp32_weights_for_export(self.model),
+            self._graph_safe_export_model(
+                input_ids=input_sample["input_ids"],
+                image_grid_thw=input_sample["image_grid_thw"],
+                embodiment_id=input_sample["embodiment_id"],
+                num_views=input_sample["num_views"],
+            ),
+        ):
+            traced_sample = cast_sample_fp32(input_sample)
+            trimmed_sample = trim_export_sample(traced_sample)
+            super().to_onnx(output_path, input_sample=trimmed_sample, **export_kwargs)
 
     @torch.no_grad()
     def to_openvino(
@@ -1255,13 +1191,21 @@ class Rldx1(ExportablePolicyMixin, Policy):
             input_sample = self._get_default_export_input_sample()
         # OV mislowers a bf16-traced graph (garbage vision features); trace in
         # fp32, which is lossless (bf16 -> fp32 -> bf16) and OV-faithful.
-        with self._fp32_weights_for_export(), self._graph_safe_export_model(input_sample or {}):
-            # TODO(Eugene): find a tidier way
-            traced_sample = self._cast_sample_fp32(self._trim_export_sample(input_sample))
-            super().to_openvino(output_path, input_sample=traced_sample, **export_kwargs)
+        with (
+            fp32_weights_for_export(self.model),
+            self._graph_safe_export_model(
+                input_ids=input_sample["input_ids"],
+                image_grid_thw=input_sample["image_grid_thw"],
+                embodiment_id=input_sample["embodiment_id"],
+                num_views=input_sample["num_views"],
+            ),
+        ):
+            traced_sample = cast_sample_fp32(input_sample)
+            trimmed_sample = trim_export_sample(traced_sample)
+            super().to_openvino(output_path, input_sample=trimmed_sample, **export_kwargs)
 
     @torch.no_grad()
-    def _get_default_export_input_sample(self) -> dict[str, torch.Tensor] | None:
+    def _get_default_export_input_sample(self) -> dict[str, torch.Tensor]:
         """Build the default export sample using VTC-prepared model input.
 
         RLDX-1 inference stacks rollout frames through ``VtcWindowBuffer`` before
@@ -1271,16 +1215,9 @@ class Rldx1(ExportablePolicyMixin, Policy):
         history owned by ``self._vtc_buffer``.
 
         Returns:
-            Preprocessed tensor-only input sample suitable for export tracing,
-            or ``None`` when a sample cannot be generated.
+            Preprocessed tensor-only input sample suitable for export tracing.
         """
-        if self._preprocessor is None:
-            return None
-
         sample = self.sample_input
-        if sample is None:
-            return None
-
         sample = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in sample.items()}
 
         export_vtc = VtcWindowBuffer(
@@ -1290,137 +1227,19 @@ class Rldx1(ExportablePolicyMixin, Policy):
         model_input = export_vtc.prepare(sample)
 
         processed_sample = self._preprocessor(model_input)
-        return {k: v for k, v in processed_sample.items() if isinstance(v, torch.Tensor)}
+        tensor_sample = {k: v for k, v in processed_sample.items() if isinstance(v, torch.Tensor)}
 
-    def _build_rldx1_token_composer_params(
-        self,
-        image_resolution: tuple[int, int],
-    ) -> dict[str, Any]:
-        """Build manifest params for runtime RLDX-1 token composition."""
-        if self._preprocessor is None:
-            msg = "Cannot build token composer params before transforms are initialized."
-            raise RuntimeError(msg)
+        if self.model is None:
+            return tensor_sample
 
-        image_height, image_width = int(image_resolution[0]), int(image_resolution[1])
-        patch_size = 16
-        merge_size = 2
-        grid_h = image_height // patch_size
-        grid_w = image_width // patch_size
-        tokens_per_image = (grid_h * grid_w) // (merge_size**2)
-
-        tokenizer = self._preprocessor.tokenizer
-        prefix_ids = tokenizer("<|im_start|>user\n", add_special_tokens=False)["input_ids"]
-        suffix_ids = tokenizer("<|im_end|>\n", add_special_tokens=False)["input_ids"]
-
-        special_tokens = {
-            "vision_start": "<|vision_start|>",
-            "vision_end": "<|vision_end|>",
-            "image_pad": "<|image_pad|>",
-        }
-        special_ids = {name: int(tokenizer.convert_tokens_to_ids(token)) for name, token in special_tokens.items()}
-
-        num_views = int(self.config.num_views or 1)
-        num_frames = int(self.config.video_length)
-
-        return {
-            "formalize_language": True,
-            "prefix_ids": [int(value) for value in prefix_ids],
-            "suffix_ids": [int(value) for value in suffix_ids],
-            "special_ids": special_ids,
-            "tokens_per_image": int(tokens_per_image),
-            "num_images": int(num_views * num_frames),
-            "max_token_len": int(self.config.tokenizer_max_length),
-            "padding_side": "left",
-        }
-
-    def _export_image_resolution(self) -> tuple[int, int]:
-        """Return the ``(height, width)`` of the first visual dataset-stats entry.
-
-        The Runtime RLDX-1 preprocessor assumes one shared resolution across
-        views, so the first visual entry (whatever its key) is authoritative.
-
-        Returns:
-            The ``(height, width)`` tuple, or ``None`` when no visual entry or
-            dataset stats are available.
-        
-        Raises:
-            RuntimeError: If the image resolution cannot be determined from dataset stats.
-        """
-        resolution = next(
-            (
-                tuple(feature["shape"])[-2:]
-                for feature in self._dataset_stats.values()
-                if str(FeatureType.VISUAL) in str(feature.get("type", ""))
-            ),
-            None,
+        padded_sample = build_padded_sample(
+            self.model,
+            input_ids=tensor_sample["input_ids"],
+            image_grid_thw=tensor_sample["image_grid_thw"],
+            embodiment_id=tensor_sample["embodiment_id"],
+            config=self.config,
         )
-        if resolution is None:
-            msg = "Failed to determine image resolution from dataset stats."
-            raise RuntimeError(msg)
-        return resolution
-
-    def _build_compress_reference_ids(self) -> torch.Tensor:
-        """Build canonical ``input_ids`` whose image-token span matches runtime.
-
-        The runtime ``Rldx1TokenComposer`` left-pads and right-aligns
-        ``[prefix][task][vision_block x num_images][suffix]``, so the ``151652``
-        image-pad span sits at fixed absolute indices independent of the task
-        text. Trace samples may carry random/dummy tokens, which would resolve
-        the VTC compression span to the wrong positions. Rebuilding only the
-        right-aligned tail here yields a token layout that resolves to the exact
-        runtime span, left-padded to ``tokenizer_max_length``.
-
-        Returns:
-            A ``(1, tokenizer_max_length)`` int64 tensor.
-        
-        Raises:
-            RuntimeError: If the preprocessor is not available or the image resolution cannot be determined from dataset stats.
-        """
-        if self._preprocessor is None:
-            msg = "No preprocessor available to build compress reference ids."
-            raise RuntimeError(msg)
-        image_resolution = self._export_image_resolution()
-
-        params = self._build_rldx1_token_composer_params(image_resolution)
-        special = params["special_ids"]
-        vision_block = [
-            special["vision_start"],
-            *([special["image_pad"]] * params["tokens_per_image"]),
-            special["vision_end"],
-        ]
-        tail = [*(vision_block * params["num_images"]), *params["suffix_ids"]]
-        length = params["max_token_len"]
-        # Runtime keeps the rightmost max_token_len tokens (full[-max_token_len:]);
-        # the image span stays right-aligned under both padding and truncation.
-        tail = tail[-length:]
-        ids = [0] * (length - len(tail)) + tail
-        return torch.tensor([ids], dtype=torch.long)
-
-    # TODO(Eugene): would there be a better way than trimming? Assuming the input data are succinct?
-    def _trim_export_sample(
-        self,
-        input_sample: dict[str, torch.Tensor] | None,
-    ) -> dict[str, torch.Tensor] | None:
-        """Trim export sample to the graph-safe model's declared inputs.
-
-        Dynamic graph-safe export uses the model's ``input_keys`` and may attach
-        a padded prompt in ``export_sample`` for fixed-shape token tensors.
-        Keep live observation tensors (``pixel_values``/``state``) from
-        ``input_sample`` while sourcing prompt tensors from ``export_sample``.
-
-        Returns:
-            The sample filtered to the consumed inputs (unchanged when the model
-            declares no ``input_keys``).
-        """
-        keys = getattr(self.model, "input_keys", None)
-        if not keys or input_sample is None:
-            return input_sample
-        # Only prompt tensors come from export_sample; keep live observation
-        # tensors (pixel_values/state) from input_sample.
-        source = dict(input_sample)
-        export_sample = getattr(self.model, "export_sample", None)
-        if export_sample is not None:
-            for key in ("input_ids", "position_ids", "attention_mask"):
-                if key in export_sample:
-                    source[key] = export_sample[key]
-        return {key: source[key] for key in keys if key in source}
+        # Keep live observation tensors and replace prompt tensors with the
+        # fixed-layout export contract.
+        tensor_sample.update(padded_sample)
+        return tensor_sample

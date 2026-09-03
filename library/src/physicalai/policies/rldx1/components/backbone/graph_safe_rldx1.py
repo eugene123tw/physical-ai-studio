@@ -46,28 +46,22 @@ import torch
 from torch import nn
 from transformers import BatchFeature
 
+from physicalai.policies.rldx1 import constants as rldx1_constants
 from physicalai.policies.rldx1.components.backbone.graph_safe_backbone import GraphSafeQwen3VLBackbone
 
 if TYPE_CHECKING:
     from physicalai.policies.rldx1.config import Rldx1Config
     from physicalai.policies.rldx1.model import Rldx1Model
 
-INPUT_IDS = "input_ids"
-IMAGE_GRID_THW = "image_grid_thw"
-BACKBONE_FEATURES = "backbone_features"
-ACTION_PRED = "action_pred"
-PIXEL_VALUES = "pixel_values"
-STATE = "state"
-EMBODIMENT_ID = "embodiment_id"
-POSITION_IDS = "position_ids"
-ATTENTION_MASK = "attention_mask"
-
-# Placeholder token appended for the cog-token M-RoPE positions (matches the
-# eager VTCQwen3VLBackbone._forward_qwen_with_cog_tokens).
-_PLACEHOLDER_TOKEN_ID = 248068
-# Pad token value is irrelevant numerically: pads are masked as attention keys
-# and their own outputs are discarded (only cog tokens are read), so 0 is fine.
-_PAD_TOKEN_ID = 0
+ACTION_PRED = rldx1_constants.ACTION_PRED
+ATTENTION_MASK = rldx1_constants.ATTENTION_MASK
+BACKBONE_FEATURES = rldx1_constants.BACKBONE_FEATURES
+EMBODIMENT_ID = rldx1_constants.EMBODIMENT_ID
+IMAGE_GRID_THW = rldx1_constants.IMAGE_GRID_THW
+INPUT_IDS = rldx1_constants.INPUT_IDS
+PIXEL_VALUES = rldx1_constants.PIXEL_VALUES
+POSITION_IDS = rldx1_constants.POSITION_IDS
+STATE = rldx1_constants.STATE
 
 
 class GraphSafeRldx1Model(nn.Module):
@@ -115,24 +109,11 @@ class GraphSafeRldx1Model(nn.Module):
         self._config = config
         self._output_action_dim = output_action_dim
 
-        # Pad to the fixed export length; the backbone bakes its compression /
-        # image-mask positions from this padded layout, and the tracer is fed
-        # the same padded input_ids/position_ids/attention_mask.
-        build_sample = self._build_padded_sample(
-            model,
-            input_ids=input_ids,
-            image_grid_thw=image_grid_thw,
-            embodiment_id=embodiment_id,
-            config=config,
-        )
-        self.export_sample: dict[str, torch.Tensor] | None = build_sample
-        self.input_keys: tuple[str, ...] = (PIXEL_VALUES, INPUT_IDS, POSITION_IDS, ATTENTION_MASK, STATE)
-
         # Wrap-by-reference: reuse the trained submodules, precompute static buffers.
         self.gs_backbone = GraphSafeQwen3VLBackbone(
             model.backbone,
-            input_ids=build_sample[INPUT_IDS],
-            image_grid_thw=build_sample[IMAGE_GRID_THW],
+            input_ids=input_ids,
+            image_grid_thw=image_grid_thw,
             num_views=num_views,
             config=config,
             compress_input_ids=compress_input_ids,
@@ -140,68 +121,6 @@ class GraphSafeRldx1Model(nn.Module):
         self._action_model = model.action_model
 
         self.register_buffer("embodiment_id", embodiment_id.clone())
-
-    @staticmethod
-    def _build_padded_sample(
-        model: Rldx1Model,
-        *,
-        input_ids: torch.Tensor,
-        image_grid_thw: torch.Tensor,
-        embodiment_id: torch.Tensor,
-        config: Rldx1Config,
-    ) -> dict[str, torch.Tensor]:
-        """Left-pad ``input_ids`` to the fixed length and add host layout tensors.
-
-        Produces the fixed-shape ``input_ids`` / ``position_ids`` /
-        ``attention_mask`` (over ``[padded ids | cog placeholders]``) the dynamic
-        graph consumes. Left-padding keeps the image block right-aligned so the
-        backbone's compression / image-mask positions stay constant.
-
-        Returns:
-            A sample dict containing at least ``input_ids`` and
-            ``image_grid_thw`` plus padded ``input_ids``, ``position_ids``,
-            and ``attention_mask``.
-
-        Raises:
-            ValueError: If the prompt is longer than ``tokenizer_max_length``.
-        """
-        grid_thw = image_grid_thw
-        device = input_ids.device
-        length = config.tokenizer_max_length
-        actual = input_ids.shape[1]
-        if actual > length:
-            msg = f"Prompt length {actual} exceeds tokenizer_max_length {length}; increase it or shorten the task."
-            raise ValueError(msg)
-
-        pad_len = length - actual
-        pads = torch.full((1, pad_len), _PAD_TOKEN_ID, dtype=input_ids.dtype, device=device)
-        padded_input_ids = torch.cat([pads, input_ids], dim=1)
-        attention_mask = torch.cat(
-            [
-                torch.zeros(1, pad_len, dtype=torch.long, device=device),
-                torch.ones(1, actual, dtype=torch.long, device=device),
-            ],
-            dim=1,
-        )
-
-        n_cog = config.n_cog_tokens
-        cog_ids = torch.full((1, n_cog), _PLACEHOLDER_TOKEN_ID, dtype=input_ids.dtype, device=device)
-        extended_input_ids = torch.cat([padded_input_ids, cog_ids], dim=1)
-        extended_mask = torch.cat([attention_mask, torch.ones(1, n_cog, dtype=torch.long, device=device)], dim=1)
-
-        inner = model.backbone.qwen_model.model
-        with torch.no_grad():
-            position_ids, _ = inner.get_rope_index(extended_input_ids, grid_thw, extended_mask)
-
-        padded: dict[str, torch.Tensor] = {
-            INPUT_IDS: input_ids,
-            IMAGE_GRID_THW: image_grid_thw,
-            EMBODIMENT_ID: embodiment_id,
-        }
-        padded[INPUT_IDS] = padded_input_ids
-        padded[POSITION_IDS] = position_ids
-        padded[ATTENTION_MASK] = extended_mask
-        return padded
 
     def restore(self) -> None:
         """Undo in-place submodule swaps so the trained model is left intact."""

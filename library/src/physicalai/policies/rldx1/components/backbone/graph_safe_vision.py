@@ -92,45 +92,28 @@ class GraphSafeQwen3VLVisionAttention(nn.Module):
         k = k.transpose(0, 1).unsqueeze(0)
         v = v.transpose(0, 1).unsqueeze(0)
 
-        if self._use_fa2:
-            attn_output, _ = self._attn_fn(
-                self,
-                q,
-                k,
-                v,
-                attention_mask=None,
-                scaling=self.scaling,
-                dropout=0.0,
-                cu_seq_lens_q=cu_seqlens,
-                cu_seq_lens_k=cu_seqlens,
-                max_length_q=self.static_max_seqlen,
-                max_length_k=self.static_max_seqlen,
-                is_causal=False,
-                **kwargs,
-            )
-        else:
-            # Call SDPA directly instead of transformers' sdpa_attention_forward:
-            # on CPU with attention_mask=None that wrapper sets enable_gqa=True even
-            # though vision is not GQA (num_key_value_groups=1, q_heads==kv_heads),
-            # and onnxscript's GQA lowering asserts q_heads > kv_heads. Direct SDPA
-            # is numerically identical here. transpose(1, 2) matches the wrapper's
-            # (B, N, H, Dh) output layout expected by the reshape below.
-            splits = [torch.split(t, self.static_lengths, dim=2) for t in (q, k, v)]
-            attn_output = torch.cat(
-                [
-                    F.scaled_dot_product_attention(
-                        qi,
-                        ki,
-                        vi,
-                        attn_mask=None,
-                        dropout_p=0.0,
-                        scale=self.scaling,
-                        is_causal=False,
-                    ).transpose(1, 2)
-                    for qi, ki, vi in zip(*splits, strict=True)
-                ],
-                dim=1,
-            )
+        # Call SDPA directly instead of transformers' sdpa_attention_forward:
+        # on CPU with attention_mask=None that wrapper sets enable_gqa=True even
+        # though vision is not GQA (num_key_value_groups=1, q_heads==kv_heads),
+        # and onnxscript's GQA lowering asserts q_heads > kv_heads. Direct SDPA
+        # is numerically identical here. transpose(1, 2) matches the wrapper's
+        # (B, N, H, Dh) output layout expected by the reshape below.
+        splits = [torch.split(t, self.static_lengths, dim=2) for t in (q, k, v)]
+        attn_output = torch.cat(
+            [
+                F.scaled_dot_product_attention(
+                    qi,
+                    ki,
+                    vi,
+                    attn_mask=None,
+                    dropout_p=0.0,
+                    scale=self.scaling,
+                    is_causal=False,
+                ).transpose(1, 2)
+                for qi, ki, vi in zip(*splits, strict=True)
+            ],
+            dim=1,
+        )
 
         attn_output = attn_output.reshape(seq_length, -1).contiguous()
         return self.proj(attn_output)

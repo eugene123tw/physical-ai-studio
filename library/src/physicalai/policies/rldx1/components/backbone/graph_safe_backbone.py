@@ -38,35 +38,43 @@ class GraphSafeQwen3VLBackbone(nn.Module):
     def __init__(
         self,
         backbone: nn.Module,
-        vl_input: dict[str, torch.Tensor],
+        *,
+        input_ids: torch.Tensor,
+        image_grid_thw: torch.Tensor,
+        num_views: torch.Tensor,
         config: Rldx1Config,
+        compress_input_ids: torch.Tensor | None = None,
     ) -> None:
         """Build the graph-safe backbone.
 
         Args:
             backbone: The trained ``VTCQwen3VLBackbone`` (params reused by
                 reference).
-            vl_input: The eager export sample; needs ``input_ids`` and
-                ``image_grid_thw`` to precompute static buffers. Input IDs must
-                already be padded to the fixed export length.
+            input_ids: The padded export token ids.
+            image_grid_thw: Export image grid tensor used to precompute vision
+                buffers.
+            num_views: Camera-view count used by VTC compression.
             config: Policy config (``attn_implementation`` / ``num_views``).
+            compress_input_ids: Optional canonical, contract-derived ``input_ids``
+                (same length as ``input_ids``) used only to resolve
+                the static VTC compression span. Guards against random trace
+                tokens shifting the baked span away from the runtime layout.
         """
         super().__init__()
         inner = backbone.qwen_model.model
-        input_ids = vl_input[INPUT_IDS]
-        grid_thw = vl_input[IMAGE_GRID_THW]
         self.qwen_config = backbone.qwen_model.model.config
 
         self.n_cog_tokens = backbone.n_cog_tokens if getattr(backbone, "use_cog_tokens", False) else 0
         self.cog_mode = backbone.cog_mode
 
-        self.gs_visual = GraphSafeQwen3VLVisionModel(inner.visual, grid_thw)
+        self.gs_visual = GraphSafeQwen3VLVisionModel(inner.visual, image_grid_thw)
         self.gs_text = GraphSafeQwen3VLTextModel(
             inner.language_model,
             input_ids,
             n_cog_tokens=self.n_cog_tokens,
             attn_impl=config.attn_implementation,
-            num_views=vl_input["num_views"],
+            num_views=num_views,
+            compress_input_ids=compress_input_ids,
         )
 
         # Shared modules (references, not owned).

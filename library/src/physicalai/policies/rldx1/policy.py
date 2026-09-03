@@ -1004,14 +1004,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         # visual entry, whatever its key (single observation.images or per-camera
         # observation.images.<name>); the Runtime rldx1 preprocessor assumes one
         # shared resolution across views.
-        image_resolution = next(
-            (
-                tuple(feature["shape"])[-2:]
-                for feature in self._dataset_stats.values()
-                if str(FeatureType.VISUAL) in str(feature.get("type", ""))
-            ),
-            None,
-        )
+        image_resolution = self._export_image_resolution()
         if image_resolution is None:
             msg = (
                 "dataset_stats carries no visual features. Pass input_features={'<view>': "
@@ -1127,11 +1120,16 @@ class Rldx1(ExportablePolicyMixin, Policy):
     # torch.export / torch.onnx.export cannot trace. For tracing backends we swap
     # ``self.model`` for a graph-safe view that shares the trained parameters by
     # reference and precomputes every data-dependent tensor from the eager sample.
+    # Export always uses the graph-safe model swap.
 
     def _build_graph_safe_model(
         self,
         model: Rldx1Model,
-        input_sample: dict[str, torch.Tensor],
+        *,
+        input_ids: torch.Tensor,
+        image_grid_thw: torch.Tensor,
+        num_views: torch.Tensor,
+        embodiment_id: torch.Tensor,
     ) -> torch.nn.Module:
         """Build the export-only graph-safe view over a trained model.
 
@@ -1152,7 +1150,17 @@ class Rldx1(ExportablePolicyMixin, Policy):
         if outputs_schema and outputs_schema[0].shape:
             action_dim = int(outputs_schema[0].shape[-1])
 
-        return GraphSafeRldx1Model(model, input_sample, self.config, output_action_dim=action_dim)
+        compress_input_ids = self._build_compress_reference_ids()
+        return GraphSafeRldx1Model(
+            model,
+            input_ids=input_ids,
+            image_grid_thw=image_grid_thw,
+            num_views=num_views,
+            config=self.config,
+            output_action_dim=action_dim,
+            embodiment_id=embodiment_id,
+            compress_input_ids=compress_input_ids,
+        )
 
     @contextmanager
     def _graph_safe_export_model(self, input_sample: dict[str, torch.Tensor]) -> Generator[None, None, None]:
@@ -1168,7 +1176,13 @@ class Rldx1(ExportablePolicyMixin, Policy):
             msg = "Cannot export before the model is initialized (call setup / load a checkpoint first)."
             raise RuntimeError(msg)
         original = self.model
-        graph_safe = self._build_graph_safe_model(original, input_sample)
+        graph_safe = self._build_graph_safe_model(
+            original,
+            input_ids=input_sample["input_ids"],
+            image_grid_thw=input_sample["image_grid_thw"],
+            num_views=input_sample["num_views"],
+            embodiment_id=input_sample["embodiment_id"],
+        )
         try:
             self.model = graph_safe  # type: ignore[assignment]
             yield
@@ -1178,6 +1192,42 @@ class Rldx1(ExportablePolicyMixin, Policy):
                 graph_safe.restore()
             self.model = original
 
+    @contextmanager
+    def _fp32_weights_for_export(self) -> Generator[None, None, None]:
+        """Cast model floats to fp32 for tracing, then restore per-tensor dtypes.
+
+        OpenVINO/ONNX do not lower a bf16-traced graph faithfully (the vision
+        patch-embed and downstream ops produce garbage), so tracing must run in
+        fp32. ``bf16 -> fp32 -> bf16`` round-trips losslessly, and per-tensor
+        restore preserves mixed-dtype modules (e.g. an fp32 ``cog_emb``).
+        """
+        model = self.model
+        if model is None:
+            yield
+            return
+        tensors = [*model.named_parameters(), *model.named_buffers()]
+        saved = {name: t.dtype for name, t in tensors if t.is_floating_point() and t.dtype != torch.float32}
+        if not saved:
+            yield
+            return
+        model.float()
+        try:
+            yield
+        finally:
+            by_name = {name: t for name, t in [*model.named_parameters(), *model.named_buffers()]}
+            for name, dtype in saved.items():
+                tensor = by_name.get(name)
+                if tensor is not None:
+                    tensor.data = tensor.data.to(dtype)
+
+    @staticmethod
+    def _cast_sample_fp32(sample: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Cast floating tensors in an export sample to fp32 (ints untouched)."""
+        return {
+            key: value.float() if isinstance(value, torch.Tensor) and value.is_floating_point() else value
+            for key, value in sample.items()
+        }
+
     @torch.no_grad()
     def to_onnx(
         self,
@@ -1185,11 +1235,12 @@ class Rldx1(ExportablePolicyMixin, Policy):
         input_sample: dict[str, torch.Tensor] | None = None,
         **export_kwargs: Any,
     ) -> None:
-        """Export to ONNX, tracing the graph-safe view of the model."""
+        """Export to ONNX using graph-safe tracing."""
         if input_sample is None:
             input_sample = self._get_default_export_input_sample()
-        with self._graph_safe_export_model(input_sample or {}):
-            traced_sample = self._trim_export_sample(input_sample)
+        # OV/ONNX mislower a bf16-traced graph; trace in fp32 (lossless round-trip).
+        with self._fp32_weights_for_export(), self._graph_safe_export_model(input_sample or {}):
+            traced_sample = self._cast_sample_fp32(self._trim_export_sample(input_sample))
             super().to_onnx(output_path, input_sample=traced_sample, **export_kwargs)
 
     @torch.no_grad()
@@ -1199,12 +1250,14 @@ class Rldx1(ExportablePolicyMixin, Policy):
         input_sample: dict[str, torch.Tensor] | None = None,
         **export_kwargs: Any,
     ) -> None:
-        """Export to OpenVINO, tracing the graph-safe view of the model."""
+        """Export to OpenVINO using graph-safe tracing."""
         if input_sample is None:
             input_sample = self._get_default_export_input_sample()
-        with self._graph_safe_export_model(input_sample or {}):
+        # OV mislowers a bf16-traced graph (garbage vision features); trace in
+        # fp32, which is lossless (bf16 -> fp32 -> bf16) and OV-faithful.
+        with self._fp32_weights_for_export(), self._graph_safe_export_model(input_sample or {}):
             # TODO(Eugene): find a tidier way
-            traced_sample = self._trim_export_sample(input_sample)
+            traced_sample = self._cast_sample_fp32(self._trim_export_sample(input_sample))
             super().to_openvino(output_path, input_sample=traced_sample, **export_kwargs)
 
     @torch.no_grad()
@@ -1279,6 +1332,69 @@ class Rldx1(ExportablePolicyMixin, Policy):
             "max_token_len": int(self.config.tokenizer_max_length),
             "padding_side": "left",
         }
+
+    def _export_image_resolution(self) -> tuple[int, int]:
+        """Return the ``(height, width)`` of the first visual dataset-stats entry.
+
+        The Runtime RLDX-1 preprocessor assumes one shared resolution across
+        views, so the first visual entry (whatever its key) is authoritative.
+
+        Returns:
+            The ``(height, width)`` tuple, or ``None`` when no visual entry or
+            dataset stats are available.
+        
+        Raises:
+            RuntimeError: If the image resolution cannot be determined from dataset stats.
+        """
+        resolution = next(
+            (
+                tuple(feature["shape"])[-2:]
+                for feature in self._dataset_stats.values()
+                if str(FeatureType.VISUAL) in str(feature.get("type", ""))
+            ),
+            None,
+        )
+        if resolution is None:
+            msg = "Failed to determine image resolution from dataset stats."
+            raise RuntimeError(msg)
+        return resolution
+
+    def _build_compress_reference_ids(self) -> torch.Tensor:
+        """Build canonical ``input_ids`` whose image-token span matches runtime.
+
+        The runtime ``Rldx1TokenComposer`` left-pads and right-aligns
+        ``[prefix][task][vision_block x num_images][suffix]``, so the ``151652``
+        image-pad span sits at fixed absolute indices independent of the task
+        text. Trace samples may carry random/dummy tokens, which would resolve
+        the VTC compression span to the wrong positions. Rebuilding only the
+        right-aligned tail here yields a token layout that resolves to the exact
+        runtime span, left-padded to ``tokenizer_max_length``.
+
+        Returns:
+            A ``(1, tokenizer_max_length)`` int64 tensor.
+        
+        Raises:
+            RuntimeError: If the preprocessor is not available or the image resolution cannot be determined from dataset stats.
+        """
+        if self._preprocessor is None:
+            msg = "No preprocessor available to build compress reference ids."
+            raise RuntimeError(msg)
+        image_resolution = self._export_image_resolution()
+
+        params = self._build_rldx1_token_composer_params(image_resolution)
+        special = params["special_ids"]
+        vision_block = [
+            special["vision_start"],
+            *([special["image_pad"]] * params["tokens_per_image"]),
+            special["vision_end"],
+        ]
+        tail = [*(vision_block * params["num_images"]), *params["suffix_ids"]]
+        length = params["max_token_len"]
+        # Runtime keeps the rightmost max_token_len tokens (full[-max_token_len:]);
+        # the image span stays right-aligned under both padding and truncation.
+        tail = tail[-length:]
+        ids = [0] * (length - len(tail)) + tail
+        return torch.tensor([ids], dtype=torch.long)
 
     # TODO(Eugene): would there be a better way than trimming? Assuming the input data are succinct?
     def _trim_export_sample(

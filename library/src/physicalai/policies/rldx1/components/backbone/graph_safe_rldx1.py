@@ -82,60 +82,72 @@ class GraphSafeRldx1Model(nn.Module):
     def __init__(
         self,
         model: Rldx1Model,
-        input_sample: dict[str, torch.Tensor],
+        *,
+        input_ids: torch.Tensor,
+        image_grid_thw: torch.Tensor,
+        num_views: torch.Tensor,
         config: Rldx1Config,
         output_action_dim: int,
+        embodiment_id: torch.Tensor,
+        compress_input_ids: torch.Tensor | None = None,
     ) -> None:
         """Build the graph-safe view.
 
         Args:
             model: The trained ``Rldx1Model`` whose parameters are reused by
                 reference (never copied).
-            input_sample: The eagerly preprocessed export sample (tensor
-                entries only). Used to precompute static buffers.
+            input_ids: Export sample token ids used to precompute static
+                buffers.
+            image_grid_thw: Export sample image grid tensor used for vision
+                positional indexing precompute.
+            num_views: Camera-view count used for static VTC compression setup.
             config: The policy config.
             output_action_dim: Real exported action width after trimming padded
                 ``max_action_dim`` down to the environment action dimension.
-
-        Raises:
-            KeyError: If ``input_sample`` lacks the tensors required to
-                precompute the vision / compression buffers.
+            embodiment_id: Optional fixed embodiment id to bake as a buffer.
+            compress_input_ids: Optional canonical, contract-derived ``input_ids``
+                used only to resolve the static VTC compression span, so random
+                trace tokens cannot shift the baked span from the runtime layout.
+                Left-padded to ``config.tokenizer_max_length`` to match the
+                padded export ``input_ids``.
         """
         super().__init__()
         self._config = config
         self._output_action_dim = output_action_dim
 
-        for required in (IMAGE_GRID_THW, INPUT_IDS):
-            if required not in input_sample:
-                msg = f"input_sample is missing '{required}', required to build the graph-safe backbone."
-                raise KeyError(msg)
-
         # Pad to the fixed export length; the backbone bakes its compression /
         # image-mask positions from this padded layout, and the tracer is fed
         # the same padded input_ids/position_ids/attention_mask.
-        build_sample = self._build_padded_sample(model, input_sample, config)
+        build_sample = self._build_padded_sample(
+            model,
+            input_ids=input_ids,
+            image_grid_thw=image_grid_thw,
+            embodiment_id=embodiment_id,
+            config=config,
+        )
         self.export_sample: dict[str, torch.Tensor] | None = build_sample
         self.input_keys: tuple[str, ...] = (PIXEL_VALUES, INPUT_IDS, POSITION_IDS, ATTENTION_MASK, STATE)
 
         # Wrap-by-reference: reuse the trained submodules, precompute static buffers.
         self.gs_backbone = GraphSafeQwen3VLBackbone(
             model.backbone,
-            build_sample,
-            config,
+            input_ids=build_sample[INPUT_IDS],
+            image_grid_thw=build_sample[IMAGE_GRID_THW],
+            num_views=num_views,
+            config=config,
+            compress_input_ids=compress_input_ids,
         )
         self._action_model = model.action_model
 
-        # embodiment_id is fixed by config, so bake it as a buffer instead of a graph
-        # input; the category-specific MLP gathers then constant-fold to one slot.
-        embodiment_id = input_sample.get(EMBODIMENT_ID)
-        if embodiment_id is None:
-            embodiment_id = torch.tensor([int(config.embodiment_id)], dtype=torch.long)
         self.register_buffer("embodiment_id", embodiment_id.clone())
 
     @staticmethod
     def _build_padded_sample(
         model: Rldx1Model,
-        input_sample: dict[str, torch.Tensor],
+        *,
+        input_ids: torch.Tensor,
+        image_grid_thw: torch.Tensor,
+        embodiment_id: torch.Tensor,
         config: Rldx1Config,
     ) -> dict[str, torch.Tensor]:
         """Left-pad ``input_ids`` to the fixed length and add host layout tensors.
@@ -146,14 +158,14 @@ class GraphSafeRldx1Model(nn.Module):
         backbone's compression / image-mask positions stay constant.
 
         Returns:
-            A copy of ``input_sample`` with padded ``input_ids`` plus
-            ``position_ids`` and ``attention_mask``.
+            A sample dict containing at least ``input_ids`` and
+            ``image_grid_thw`` plus padded ``input_ids``, ``position_ids``,
+            and ``attention_mask``.
 
         Raises:
             ValueError: If the prompt is longer than ``tokenizer_max_length``.
         """
-        input_ids = input_sample[INPUT_IDS]
-        grid_thw = input_sample[IMAGE_GRID_THW]
+        grid_thw = image_grid_thw
         device = input_ids.device
         length = config.tokenizer_max_length
         actual = input_ids.shape[1]
@@ -181,7 +193,11 @@ class GraphSafeRldx1Model(nn.Module):
         with torch.no_grad():
             position_ids, _ = inner.get_rope_index(extended_input_ids, grid_thw, extended_mask)
 
-        padded = dict(input_sample)
+        padded: dict[str, torch.Tensor] = {
+            INPUT_IDS: input_ids,
+            IMAGE_GRID_THW: image_grid_thw,
+            EMBODIMENT_ID: embodiment_id,
+        }
         padded[INPUT_IDS] = padded_input_ids
         padded[POSITION_IDS] = position_ids
         padded[ATTENTION_MASK] = extended_mask

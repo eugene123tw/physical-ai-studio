@@ -13,9 +13,13 @@ The eager decoder wraps each layer in a ``LayerWrapper`` that, at the
 ``input_ids`` (and thus the image span) is fixed for a given export,
 :func:`_find_compress_info` resolves the begin/end indices **once, eagerly**,
 into Python ints, and :class:`GraphSafeQwen3VLTextModel.forward` performs the
-same compression with static slices. SDPA attention with ``attention_mask=None``
-is causal (the attention sets ``is_causal=True``), so no data-dependent mask is
-built.
+same compression with static slices. The trace ``input_ids`` may carry random
+or dummy task tokens, so a caller can pass a canonical, contract-derived
+``compress_input_ids`` (the left-padded, right-aligned ``[vision][suffix]``
+layout the runtime token composer produces) to resolve the span against the
+true runtime positions instead of the traced tokens. SDPA attention with
+``attention_mask=None`` is causal (the attention sets ``is_causal=True``), so
+no data-dependent mask is built.
 """
 
 from __future__ import annotations
@@ -94,6 +98,7 @@ class GraphSafeQwen3VLTextModel(nn.Module):
         n_cog_tokens: int = 0,
         attn_impl: str = "sdpa",
         num_views: int | None = None,
+        compress_input_ids: torch.Tensor | None = None,
     ) -> None:
         super().__init__()
         self._text_model = text_model
@@ -103,7 +108,19 @@ class GraphSafeQwen3VLTextModel(nn.Module):
         device = input_ids.device
         length_pre = length_ids + n_cog_tokens
 
-        self.compress_info = _find_compress_info(text_model, input_ids, n_cog_tokens, num_views=num_views)
+        # The VTC span is resolved by locating the 151652 image-pad markers in the
+        # ids. Trace ids may carry random/dummy tokens, so resolve against a
+        # canonical, contract-derived layout when provided: the runtime prompt is
+        # left-padded and right-aligns [vision x num_images][suffix], so the span
+        # is fixed regardless of the (possibly random) traced tokens.
+        compress_ids = input_ids if compress_input_ids is None else compress_input_ids.to(device)
+        if compress_ids.shape[1] != length_ids:
+            msg = (
+                f"compress_input_ids length {compress_ids.shape[1]} must match input_ids "
+                f"length {length_ids} so static VTC indices stay aligned."
+            )
+            raise ValueError(msg)
+        self.compress_info = _find_compress_info(text_model, compress_ids, n_cog_tokens, num_views=num_views)
         length_post = self.compress_info["static_out_len"] if self.compress_info is not None else length_pre
 
         # Static FA varlen params (Python int + constant tensor; no runtime .item()).

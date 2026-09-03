@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,43 @@ def merge_explicit_features(
             key = name
         merged[key] = {"name": feature.name or name, "shape": feature.shape, "type": str(feature.ftype)}
     return merged or None
+
+
+def infer_num_views_from_stats(dataset_stats: dict[str, dict[str, Any]] | None) -> int | None:
+    """Infer the number of visual views present in dataset stats.
+
+    Counts visual entries under ``observation.images``. Returns ``None`` when
+    no visual feature can be identified.
+
+    Returns:
+        Number of visual views, or ``None`` if no visual feature is present.
+    """
+    if not dataset_stats:
+        return None
+
+    visual_keys: set[str] = set()
+    prefix = f"observation.{IMAGES}."
+    root_key = f"observation.{IMAGES}"
+
+    for key, feature in dataset_stats.items():
+        feature_type = str(feature.get("type", "")).lower()
+        if key.startswith(prefix):
+            visual_keys.add(key)
+            continue
+        if key == root_key:
+            visual_keys.add(key)
+            continue
+        if "visual" in feature_type:
+            visual_keys.add(key)
+
+    if not visual_keys:
+        return None
+
+    if root_key in visual_keys:
+        named_view_count = sum(1 for key in visual_keys if key.startswith(prefix))
+        return named_view_count or 1
+
+    return len(visual_keys)
 
 
 def resolve_feature_shape(feature: dict[str, Any]) -> tuple[int, ...]:

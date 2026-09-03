@@ -79,6 +79,7 @@ from physicalai.policies.rldx1.pretrained_utils import (
 from physicalai.policies.rldx1.stats_helpers import (
     extract_dataset_stats,
     get_dataset_stats_entry,
+    infer_num_views_from_stats,
     merge_explicit_features,
     resolve_feature_shape,
 )
@@ -333,18 +334,25 @@ class Rldx1(ExportablePolicyMixin, Policy):
         # Explicit Feature overrides win over anything auto-fetched/user-supplied above --
         # required for RLWRLD checkpoints, which never record camera shapes anywhere.
         dataset_stats = merge_explicit_features(dataset_stats, input_features, output_features)
-
-        # TODO(Eugene): Make this nicer
-        if input_features is not None:
-            num_views = 0
-            for feature in input_features.values():
-                if feature.ftype == FeatureType.VISUAL:
-                    num_views += 1
-                self.config.num_views = num_views
+        self._sync_num_views_from_dataset_stats(dataset_stats)
 
         self._dataset_stats = dataset_stats
         if dataset_stats is not None:
             self._initialize_model(dataset_stats, shard_files)
+
+    def _sync_num_views_from_dataset_stats(
+        self,
+        dataset_stats: dict[str, dict[str, list[float] | str | tuple]] | None,
+    ) -> None:
+        """Update ``config.num_views`` from available visual dataset stats.
+
+        Keeps ``num_views`` derived from the same merged stats source used for
+        preprocessing/export so init, training setup, and fine-tune refresh all
+        agree on view count.
+        """
+        inferred_num_views = infer_num_views_from_stats(dataset_stats)
+        if inferred_num_views is not None:
+            self.config.num_views = inferred_num_views
 
     def _from_hf(  # noqa: PLR6301, PLR0913, PLR0917
         self,
@@ -539,6 +547,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
             raise TypeError(msg)
 
         stats_dict = train_dataset.stats
+        self._sync_num_views_from_dataset_stats(stats_dict)
 
         if self.model is not None:
             # Fine-tuning path: model exists from pretrained, but the
@@ -580,6 +589,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
             max_token_len=config.tokenizer_max_length,
         )
         self._dataset_stats = dataset_stats
+        self._sync_num_views_from_dataset_stats(dataset_stats)
         self.hparams["dataset_stats"] = dataset_stats
 
     def forward(self, batch: Observation) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor | float]]:
@@ -1009,6 +1019,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
                     image_resolution=image_resolution,
                     num_views=num_views,
                     num_frames=num_frames,
+                    max_state_dim=self.config.max_state_dim,
                 ),
                 ComponentSpec(
                     type="hf_tokenizer",
@@ -1037,6 +1048,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
                     image_resolution=image_resolution,
                     num_views=num_views,
                     num_frames=num_frames,
+                    max_state_dim=self.config.max_state_dim,
                 ),
                 ComponentSpec(
                     type="ov_tokenizer",

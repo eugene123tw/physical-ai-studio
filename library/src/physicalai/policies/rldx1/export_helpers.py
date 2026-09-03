@@ -7,15 +7,14 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 
 from physicalai.data import FeatureType
 from physicalai.data.observation import STATE
-from typing import TYPE_CHECKING
-from .constants import ATTENTION_MASK, INPUT_IDS, PIXEL_VALUES, POSITION_IDS, IMAGE_GRID_THW, EMBODIMENT_ID
 
+from .constants import ATTENTION_MASK, EMBODIMENT_ID, IMAGE_GRID_THW, INPUT_IDS, PIXEL_VALUES, POSITION_IDS
 
 if TYPE_CHECKING:
     from physicalai.policies.rldx1.config import Rldx1Config
@@ -204,4 +203,3 @@ def build_padded_sample(
         POSITION_IDS: position_ids,
         ATTENTION_MASK: extended_mask,
     }
-

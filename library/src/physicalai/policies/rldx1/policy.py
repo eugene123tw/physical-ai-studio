@@ -74,11 +74,13 @@ from physicalai.policies.rldx1.export_helpers import (
 from physicalai.policies.rldx1.model import Rldx1Model
 from physicalai.policies.rldx1.pretrained_utils import (
     extract_camera_names,
+    retrieve_safetensors_shards,
+)
+from physicalai.policies.rldx1.stats_helpers import (
     extract_dataset_stats,
     get_dataset_stats_entry,
     merge_explicit_features,
     resolve_feature_shape,
-    retrieve_safetensors_shards,
 )
 from physicalai.policies.utils.features import infer_shape_from_stats
 from physicalai.train.schedulers import cosine_decay_with_warmup_scheduler

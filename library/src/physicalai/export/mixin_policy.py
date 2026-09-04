@@ -810,8 +810,8 @@ class ExportablePolicyMixin:
             ExportParameters: Extra export arguments for the specified backend.
                 Returns an empty ExportParameters instance if no extra arguments are found.
         """
-        if export_args := self.extra_export_args.get(backend):
-            return export_args
+        if backend in self.extra_export_args:
+            return self.extra_export_args[backend]
         return ExportBackend(backend).parameter_class()
 
     def _get_forward_arg_name(self) -> str:

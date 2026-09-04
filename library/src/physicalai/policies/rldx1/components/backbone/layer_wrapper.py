@@ -149,7 +149,10 @@ class LayerWrapper(nn.Module):
 
         num_views: list[int] | None = None
         if kwargs.get("image_wise_encoding") and kwargs.get("num_views") is not None:
-            num_views = [int(kwargs["num_views"])]
+            raw_num_views = kwargs["num_views"]
+            if isinstance(raw_num_views, torch.Tensor):
+                raw_num_views = raw_num_views.flatten()[0].item()
+            num_views = [int(raw_num_views)]
 
         bsz, seq_len, _dim = hidden_states.shape
 

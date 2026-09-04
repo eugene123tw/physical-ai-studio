@@ -219,7 +219,7 @@ def build_padded_sample(  # noqa: PLR0914
 
     inner = model.backbone.qwen_model.model
     with torch.no_grad():
-        position_ids, _ = inner.get_rope_index(extended_input_ids, grid_thw, extended_mask)
+        position_ids, _ = inner.get_rope_index(extended_input_ids, grid_thw, attention_mask=extended_mask)
 
     return {
         INPUT_IDS: padded_input_ids,

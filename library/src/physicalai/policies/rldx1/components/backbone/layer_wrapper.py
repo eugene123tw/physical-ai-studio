@@ -29,7 +29,7 @@ class LayerWrapper(nn.Module):
         layer_idx: int,
         internal_projection: int = 4,
         img_pattern: Sequence[int] = (151652,),
-        motion_token: int = 0,
+        motion_token: int = 1,
     ) -> None:
         """Initialize the wrapper.
 

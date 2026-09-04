@@ -40,7 +40,7 @@ streams.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import numpy as np
 import torch
@@ -71,6 +71,10 @@ if TYPE_CHECKING:
     from physicalai.data import Feature
 
 logger = logging.getLogger(__name__)
+
+
+class _ProcessorWithTokenizer(Protocol):
+    tokenizer: Any
 
 
 def _module_device(module: nn.Module) -> torch.device:
@@ -281,7 +285,8 @@ class Rldx1Preprocessor(nn.Module):
             The Qwen3-VL processor's ``tokenizer`` (left padding), used by
             ``openvino_tokenizers.convert_tokenizer`` with ``max_token_len``.
         """
-        return self._vlm_processor.tokenizer
+        processor = cast("_ProcessorWithTokenizer", self._vlm_processor)
+        return processor.tokenizer
 
     # -- image geometry ------------------------------------------------------ #
     def _transform_frames(self, frames: list[np.ndarray]) -> list[Image.Image]:

@@ -15,7 +15,7 @@ cog-token glue. The tracer observes fixed-shape dynamic prompt tensors
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 from torch import nn
@@ -58,11 +58,15 @@ class GraphSafeQwen3VLBackbone(nn.Module):
                 tokens shifting the baked span away from the runtime layout.
         """
         super().__init__()
-        inner = backbone.qwen_model.model
-        self.qwen_config = backbone.qwen_model.model.config
+        backbone_any = cast("Any", backbone)
+        inner = backbone_any.qwen_model.model
+        self.qwen_config = inner.config
 
-        self.n_cog_tokens = backbone.n_cog_tokens if getattr(backbone, "use_cog_tokens", False) else 0
-        self.cog_mode = backbone.cog_mode
+        self.n_cog_tokens = (
+            int(backbone_any.n_cog_tokens) if bool(getattr(backbone_any, "use_cog_tokens", False)) else 0
+        )
+        self.cog_mode = str(backbone_any.cog_mode)
+        static_num_views = int(num_views.item()) if isinstance(num_views, torch.Tensor) else int(num_views)
 
         self.gs_visual = GraphSafeQwen3VLVisionModel(inner.visual, image_grid_thw)
         self.gs_text = GraphSafeQwen3VLTextModel(
@@ -70,17 +74,18 @@ class GraphSafeQwen3VLBackbone(nn.Module):
             input_ids,
             n_cog_tokens=self.n_cog_tokens,
             attn_impl=config.attn_implementation,
-            num_views=num_views,
+            num_views=static_num_views,
             compress_input_ids=compress_input_ids,
         )
 
         # Shared modules (references, not owned).
-        self.embed_tokens = self.gs_text._text_model.embed_tokens  # noqa: SLF001
-        self.qwen_linear = backbone.qwen_linear
+        self.embed_tokens = cast("nn.Module", self.gs_text._text_model.embed_tokens)  # noqa: SLF001
+        self.qwen_linear = cast("nn.Module", backbone_any.qwen_linear)
         self.image_token_id = inner.config.image_token_id
 
-        if self.n_cog_tokens > 0 and hasattr(backbone, "cog_emb"):
-            self.register_buffer("static_cog_emb", backbone.cog_emb.data.clone())
+        if self.n_cog_tokens > 0 and hasattr(backbone_any, "cog_emb"):
+            cog_emb = cast("torch.Tensor", backbone_any.cog_emb)
+            self.register_buffer("static_cog_emb", cog_emb.data.clone())
         else:
             self.static_cog_emb = None
 
@@ -114,10 +119,11 @@ class GraphSafeQwen3VLBackbone(nn.Module):
 
         image_emb, deepstack_features = self.gs_visual(pixel_values)
 
-        dtype = self.embed_tokens.weight.dtype
+        embed_tokens = cast("Any", self.embed_tokens)
+        dtype = embed_tokens.weight.dtype
         image_emb = image_emb.to(dtype=dtype)
 
-        token_emb = self.embed_tokens(input_ids)
+        token_emb = cast("torch.Tensor", embed_tokens(input_ids))
         image_mask_3d = image_mask_2d.unsqueeze(-1).expand_as(token_emb)
         token_emb = token_emb.masked_scatter(image_mask_3d, image_emb)
 
@@ -155,4 +161,4 @@ class GraphSafeQwen3VLBackbone(nn.Module):
         if self.n_cog_tokens > 0 and self.cog_mode == "cog_only":
             hidden_states = hidden_states[:, -self.n_cog_tokens :, :]
 
-        return self.qwen_linear(hidden_states)
+        return cast("torch.Tensor", self.qwen_linear(hidden_states))

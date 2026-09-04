@@ -25,7 +25,7 @@ originals back so the trained model is left untouched after export.
 from __future__ import annotations
 
 import sys
-from typing import cast
+from typing import Any, cast
 
 import torch
 from torch import nn
@@ -50,15 +50,16 @@ class GraphSafeQwen3VLVisionAttention(nn.Module):
             static_max_seqlen: Precomputed maximum window length.
         """
         super().__init__()
-        self.qkv = attn.qkv
-        self.proj = attn.proj
-        self.num_heads = attn.num_heads
-        self.head_dim = attn.head_dim
-        self.scaling = attn.scaling
-        self.config = attn.config
-        self.attention_dropout = attn.attention_dropout
-        self.is_causal = attn.is_causal
-        self.num_key_value_groups = attn.num_key_value_groups
+        attn_any = cast("Any", attn)
+        self.qkv = cast("nn.Module", attn_any.qkv)
+        self.proj = cast("nn.Module", attn_any.proj)
+        self.num_heads = int(attn_any.num_heads)
+        self.head_dim = int(attn_any.head_dim)
+        self.scaling = float(attn_any.scaling)
+        self.config = attn_any.config
+        self.attention_dropout = float(attn_any.attention_dropout)
+        self.is_causal = bool(attn_any.is_causal)
+        self.num_key_value_groups = int(attn_any.num_key_value_groups)
         self.static_lengths = static_lengths
         self.static_max_seqlen = static_max_seqlen
 
@@ -73,11 +74,11 @@ class GraphSafeQwen3VLVisionAttention(nn.Module):
 
     @property
     def _use_fa2(self) -> bool:
-        return self.config._attn_implementation == "flash_attention_2"  # noqa: SLF001
+        return bool(self.config._attn_implementation == "flash_attention_2")  # noqa: SLF001
 
     @property
     def _attn_fn(self):  # noqa: ANN202
-        impl = self.config._attn_implementation  # noqa: SLF001
+        impl = str(self.config._attn_implementation)  # noqa: SLF001
         if impl == "flash_attention_2":
             return self._fa2_fn
         if impl == "sdpa":
@@ -152,13 +153,14 @@ class GraphSafeQwen3VLVisionModel(nn.Module):
             grid_thw: Static image-grid descriptor used for precomputation.
         """
         super().__init__()
-        self._visual = visual
+        visual_any = cast("Any", visual)
+        self._visual: Any = visual_any
         grid_thw = grid_thw.reshape(-1, 3) if grid_thw.ndim == _GRID_THW_NDIM_3D else grid_thw
 
         with torch.no_grad():
-            pos_embeds = visual.fast_pos_embed_interpolate(grid_thw)
+            pos_embeds = visual_any.fast_pos_embed_interpolate(grid_thw)
 
-            rotary = visual.rot_pos_emb(grid_thw)
+            rotary = visual_any.rot_pos_emb(grid_thw)
             emb = torch.cat((rotary, rotary), dim=-1)
 
             cu = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
@@ -172,21 +174,23 @@ class GraphSafeQwen3VLVisionModel(nn.Module):
         # Register precomputed tensors as buffers so torch.export treats them as
         # buffers, not lifted constants (non-persistent buffers are lifted as
         # constants, which trips a fake-tensor check).
-        self.register_buffer("pos_embeds", pos_embeds)  # type: ignore[misc, operator]
-        self.register_buffer("pos_cos", emb.cos())  # type: ignore[misc, operator]
-        self.register_buffer("pos_sin", emb.sin())  # type: ignore[misc, operator]
-        self.register_buffer("cu_seqlens", cu_seqlens)  # type: ignore[misc, operator]
+        nn.Module.register_buffer(self, "pos_embeds", pos_embeds)
+        nn.Module.register_buffer(self, "pos_cos", emb.cos())
+        nn.Module.register_buffer(self, "pos_sin", emb.sin())
+        nn.Module.register_buffer(self, "cu_seqlens", cu_seqlens)
         self.max_seqlen = max(lengths)
-        self.split_sizes = (grid_thw.prod(-1) // visual.spatial_merge_size**2).tolist()
+        spatial_merge_size = int(visual_any.spatial_merge_size)
+        self.split_sizes = (grid_thw.prod(-1) // spatial_merge_size**2).tolist()
 
         # Swap each block's attention in place; keep originals for restore().
-        self._orig_attns = [blk.attn for blk in visual.blocks]
-        for blk in visual.blocks:
+        blocks = list(visual_any.blocks)
+        self._orig_attns: list[nn.Module] = [cast("nn.Module", blk.attn) for blk in blocks]
+        for blk in blocks:
             blk.attn = GraphSafeQwen3VLVisionAttention(blk.attn, lengths, self.max_seqlen)
 
     def restore(self) -> None:
         """Reinstate the original attention modules (undo the in-place swap)."""
-        for blk, attn in zip(self._visual.blocks, self._orig_attns, strict=True):
+        for blk, attn in zip(list(self._visual.blocks), self._orig_attns, strict=True):
             blk.attn = attn
 
     @property
@@ -206,28 +210,33 @@ class GraphSafeQwen3VLVisionModel(nn.Module):
             ``(image_features, deepstack_feature_lists)`` matching the eager
             :meth:`Qwen3VLVisionModel.forward` output.
         """
-        hidden_states = self._visual.patch_embed(hidden_states)
-        hidden_states += self.pos_embeds
+        hidden_states = cast("torch.Tensor", self._visual.patch_embed(hidden_states))
+        hidden_states += cast(torch.Tensor, self.pos_embeds)
 
         seq_len, _ = hidden_states.size()
         hidden_states = hidden_states.reshape(seq_len, -1)
 
         deepstack_feature_lists: list[torch.Tensor] = []
-        for layer_num, blk in enumerate(self._visual.blocks):
-            hidden_states = blk(
-                hidden_states,
-                cu_seqlens=self.cu_seqlens,
-                position_embeddings=(self.pos_cos, self.pos_sin),
-                **kwargs,
+        deepstack_indexes = list(self._visual.deepstack_visual_indexes)
+        deepstack_mergers = list(self._visual.deepstack_merger_list)
+        for layer_num, blk in enumerate(list(self._visual.blocks)):
+            hidden_states = cast(
+                "torch.Tensor",
+                blk(
+                    hidden_states,
+                    cu_seqlens=self.cu_seqlens,
+                    position_embeddings=(self.pos_cos, self.pos_sin),
+                    **kwargs,
+                ),
             )
-            if layer_num in self._visual.deepstack_visual_indexes:
-                idx = self._visual.deepstack_visual_indexes.index(layer_num)
-                deepstack_feature_lists.append(self._visual.deepstack_merger_list[idx](hidden_states))
+            if layer_num in deepstack_indexes:
+                idx = deepstack_indexes.index(layer_num)
+                deepstack_feature_lists.append(cast("torch.Tensor", deepstack_mergers[idx](hidden_states)))
 
-        hidden_states = self._visual.merger(hidden_states)
+        hidden_states = cast("torch.Tensor", self._visual.merger(hidden_states))
         return hidden_states, deepstack_feature_lists
 
-    def __getattr__(self, name: str) -> object:
+    def __getattr__(self, name: str) -> nn.Module | torch.Tensor:
         """Delegate unknown attributes to the wrapped vision model.
 
         Returns:
@@ -236,4 +245,4 @@ class GraphSafeQwen3VLVisionModel(nn.Module):
         try:
             return super().__getattr__(name)
         except AttributeError:
-            return getattr(self._visual, name)
+            return cast("nn.Module | torch.Tensor", getattr(self._visual, name))

@@ -6,6 +6,7 @@
 from typing import Any
 
 import gym_pusht  # noqa: F401
+import numpy as np
 import torch
 
 from physicalai.data.observation import Observation
@@ -80,7 +81,7 @@ class PushTGym(GymnasiumGym):
         """
         obs = self.convert_raw_to_observation(raw_obs=raw_obs)
         if self.task_description:
-            obs.task = [self.task_description]
+            obs.task = np.asarray([self.task_description])
         return obs.to_torch(device=self.device)
 
     @staticmethod

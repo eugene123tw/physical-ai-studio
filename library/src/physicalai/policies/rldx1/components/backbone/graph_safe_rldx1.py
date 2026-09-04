@@ -40,7 +40,7 @@ Port status (v1 = OpenVINO / ONNX, CPU, no motion / memory / RTC):
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import torch
 from torch import nn
@@ -151,7 +151,7 @@ class GraphSafeRldx1Model(nn.Module):
             for key, value in batch.items()
         }
         # Inject the baked embodiment_id (dropped from the graph inputs).
-        cast_batch[EMBODIMENT_ID] = self.embodiment_id
+        cast_batch[EMBODIMENT_ID] = cast("torch.Tensor", self.embodiment_id)
 
         # A mask-free backbone_output skips the eager get_action's
         # ``encoder_attention_mask.all()`` guard (None short-circuits); an

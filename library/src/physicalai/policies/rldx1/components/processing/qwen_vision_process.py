@@ -56,8 +56,13 @@ def fetch_image(ele: dict[str, str | Image.Image], image_patch_size: int = 14) -
         )
         raise ValueError(msg)
 
-    min_pixels = int(ele.get("min_pixels", IMAGE_MIN_TOKEN_NUM * patch_factor**2))
-    max_pixels = int(ele.get("max_pixels", IMAGE_MAX_TOKEN_NUM * patch_factor**2))
+    min_pixels_raw = ele.get("min_pixels", IMAGE_MIN_TOKEN_NUM * patch_factor**2)
+    max_pixels_raw = ele.get("max_pixels", IMAGE_MAX_TOKEN_NUM * patch_factor**2)
+    if isinstance(min_pixels_raw, Image.Image) or isinstance(max_pixels_raw, Image.Image):
+        msg = "min_pixels/max_pixels must be numeric metadata values."
+        raise TypeError(msg)
+    min_pixels = int(min_pixels_raw)
+    max_pixels = int(max_pixels_raw)
     area = height * width
     if not min_pixels <= area <= max_pixels:
         msg = (

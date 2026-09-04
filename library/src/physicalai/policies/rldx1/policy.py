@@ -45,8 +45,9 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import contextmanager
+from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import torch
 from huggingface_hub import hf_hub_download
@@ -84,7 +85,6 @@ from physicalai.policies.rldx1.stats_helpers import (
     merge_explicit_features,
     resolve_feature_shape,
 )
-from physicalai.policies.utils.features import infer_shape_from_stats
 from physicalai.train.schedulers import cosine_decay_with_warmup_scheduler
 from physicalai.train.utils import reformat_dataset_to_match_policy
 
@@ -322,7 +322,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         self.save_hyperparameters(ignore=["config"])
 
         self.model: Rldx1Model | None = None  # type: ignore[assignment]
-        self._preprocessor: Rldx1Preprocessor | None = None
+        self._preprocessor: torch.nn.Module = cast("torch.nn.Module", None)
         self._postprocessor: Rldx1Postprocessor | None = None
 
         # Per-view VTC frame buffer for rollout. Populated every env-step via
@@ -872,7 +872,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
                 schema.append(
                     InferenceFeature(
                         ftype=InferenceFeatureType.STATE,
-                        shape=infer_shape_from_stats(feature),
+                        shape=resolve_feature_shape(feature),
                         name=STATE,
                         dtype=InferenceFeatureDtype.FLOAT32,
                     ),
@@ -885,7 +885,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
                 schema.append(
                     InferenceFeature(
                         ftype=InferenceFeatureType.VISUAL,
-                        shape=infer_shape_from_stats(feature),
+                        shape=resolve_feature_shape(feature),
                         name=name,
                         dtype=InferenceFeatureDtype.FLOAT32,
                     ),
@@ -935,6 +935,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
             ),
         ]
 
+    @property
     def extra_export_args(self) -> dict[str, ExportParameters]:
         """Additional export arguments for model conversion.
 
@@ -982,8 +983,9 @@ class Rldx1(ExportablePolicyMixin, Policy):
         if self._preprocessor is None:
             msg = "Cannot build token composer params before transforms are initialized."
             raise RuntimeError(msg)
+        preprocessor = cast("Rldx1Preprocessor", self._preprocessor)
         token_composer_params = build_rldx1_token_composer_params(
-            tokenizer=self._preprocessor.tokenizer,
+            tokenizer=preprocessor.tokenizer,
             image_resolution=image_resolution,
             num_views=int(self.config.num_views or 1),
             num_frames=int(self.config.video_length),
@@ -1093,7 +1095,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         image_grid_thw: torch.Tensor,
         num_views: torch.Tensor,
         embodiment_id: torch.Tensor,
-    ) -> torch.nn.Module:
+    ) -> GraphSafeRldx1Model:
         """Build the export-only graph-safe view over a trained model.
 
         The returned module shares parameters with ``model`` by reference (no
@@ -1115,12 +1117,13 @@ class Rldx1(ExportablePolicyMixin, Policy):
         if outputs_schema and outputs_schema[0].shape:
             action_dim = int(outputs_schema[0].shape[-1])
 
-        if self._preprocessor is None:
+        if self._preprocessor is None or self._dataset_stats is None:
             msg = "No preprocessor available to build compress reference ids."
             raise RuntimeError(msg)
+        preprocessor = cast("Rldx1Preprocessor", self._preprocessor)
         image_resolution = export_image_resolution_from_stats(self._dataset_stats)
         token_composer_params = build_rldx1_token_composer_params(
-            tokenizer=self._preprocessor.tokenizer,
+            tokenizer=preprocessor.tokenizer,
             image_resolution=image_resolution,
             num_views=int(self.config.num_views or 1),
             num_frames=int(self.config.video_length),
@@ -1180,26 +1183,38 @@ class Rldx1(ExportablePolicyMixin, Policy):
     @torch.no_grad()
     def to_onnx(
         self,
-        output_path: PathLike | str,
-        input_sample: dict[str, torch.Tensor] | None = None,
-        **export_kwargs: object,
-    ) -> None:
-        """Export to ONNX using graph-safe tracing."""
+        output_path: BytesIO | Path | str | None = None,
+        input_sample: Any | None = None,
+        **kwargs: Any,
+    ) -> Any:  # noqa: ANN401
+        """Export to ONNX using graph-safe tracing.
+
+        Returns:
+            The backend export result returned by the base export path.
+
+        Raises:
+            ValueError: If ``output_path`` is not provided.
+        """
+        if output_path is None:
+            msg = "output path is required for ONNX export"
+            raise ValueError(msg)
         if input_sample is None:
             input_sample = self._get_default_export_input_sample()
+        sample_tensors = cast("dict[str, torch.Tensor]", input_sample)
         # OV/ONNX mislower a bf16-traced graph; trace in fp32 (lossless round-trip).
         with (
             fp32_weights_for_export(self.model),
             self._graph_safe_export_model(
-                input_ids=input_sample["input_ids"],
-                image_grid_thw=input_sample["image_grid_thw"],
-                embodiment_id=input_sample["embodiment_id"],
-                num_views=input_sample["num_views"],
+                input_ids=sample_tensors["input_ids"],
+                image_grid_thw=sample_tensors["image_grid_thw"],
+                embodiment_id=sample_tensors["embodiment_id"],
+                num_views=sample_tensors["num_views"],
             ),
         ):
-            traced_sample = cast_sample_fp32(input_sample)
+            traced_sample = cast_sample_fp32(sample_tensors)
             trimmed_sample = trim_export_sample(traced_sample)
-            super().to_onnx(output_path, input_sample=trimmed_sample, **export_kwargs)
+            base = cast("Any", super())
+            return base.to_onnx(output_path, input_sample=trimmed_sample, **kwargs)
 
     @torch.no_grad()
     def to_openvino(
@@ -1224,7 +1239,8 @@ class Rldx1(ExportablePolicyMixin, Policy):
         ):
             traced_sample = cast_sample_fp32(input_sample)
             trimmed_sample = trim_export_sample(traced_sample)
-            super().to_openvino(output_path, input_sample=trimmed_sample, **export_kwargs)
+            base = cast("Any", super())
+            base.to_openvino(output_path, input_sample=trimmed_sample, **export_kwargs)
 
     @torch.no_grad()
     def _get_default_export_input_sample(self) -> dict[str, torch.Tensor]:
@@ -1238,8 +1254,15 @@ class Rldx1(ExportablePolicyMixin, Policy):
 
         Returns:
             Preprocessed tensor-only input sample suitable for export tracing.
+
+        Raises:
+            RuntimeError: If the policy does not provide a sample input or
+                preprocessor for export tracing.
         """
         sample = self.sample_input
+        if sample is None:
+            msg = "No sample input available for export."
+            raise RuntimeError(msg)
         sample = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in sample.items()}
 
         export_vtc = VtcWindowBuffer(
@@ -1251,7 +1274,8 @@ class Rldx1(ExportablePolicyMixin, Policy):
         if self._preprocessor is None:
             msg = "No preprocessor available to build export sample."
             raise RuntimeError(msg)
-        processed_sample = self._preprocessor(model_input)
+        preprocessor = cast("Rldx1Preprocessor", self._preprocessor)
+        processed_sample = preprocessor(model_input)
         tensor_sample = {k: v for k, v in processed_sample.items() if isinstance(v, torch.Tensor)}
 
         if self.model is None:

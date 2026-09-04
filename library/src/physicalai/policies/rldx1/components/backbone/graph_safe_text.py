@@ -24,6 +24,8 @@ no data-dependent mask is built.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import torch
 from torch import nn
 from transformers.modeling_outputs import BaseModelOutputWithPast
@@ -65,7 +67,8 @@ def _find_compress_info(
         A dict with ``compress_layer_idx`` / ``static_begin`` / ``static_end`` /
         ``static_out_len``, or ``None`` when no compression happens.
     """
-    for idx, layer in enumerate(language_model.layers):
+    language_model_any = cast("Any", language_model)
+    for idx, layer in enumerate(language_model_any.layers):
         if (
             hasattr(layer, "layer")
             and hasattr(layer, "internal_projection")
@@ -73,7 +76,8 @@ def _find_compress_info(
         ):
             with torch.no_grad():
                 dummy = torch.zeros(1, input_ids.shape[1], 1, device=input_ids.device)
-                begin_idx, end_idx = layer.get_removing_indices(dummy, input_ids, num_views=[num_views])
+                num_views_list = [int(num_views)] if num_views is not None else None
+                begin_idx, end_idx = layer.get_removing_indices(dummy, input_ids, num_views=num_views_list)
             begin = int(begin_idx[0, 0].item())
             end = int(end_idx[0, 0].item())
             if begin >= end:
@@ -151,8 +155,8 @@ class GraphSafeQwen3VLTextModel(nn.Module):
         # constants, which trips a fake-tensor check).
         pre_cu, self.pre_max_seqlen = _compute_fa_kwargs(length_pre, device)
         post_cu, self.post_max_seqlen = _compute_fa_kwargs(length_post, device)
-        self.register_buffer("pre_cu_seqlens", pre_cu)  # type: ignore[misc, operator]
-        self.register_buffer("post_cu_seqlens", post_cu)  # type: ignore[misc, operator]
+        nn.Module.register_buffer(self, "pre_cu_seqlens", pre_cu)
+        nn.Module.register_buffer(self, "post_cu_seqlens", post_cu)
 
     def forward(  # noqa: PLR0914
         self,
@@ -181,7 +185,7 @@ class GraphSafeQwen3VLTextModel(nn.Module):
         Returns:
             ``BaseModelOutputWithPast`` with the final hidden states.
         """
-        tm = self._text_model
+        tm = cast("Any", self._text_model)
 
         if inputs_embeds is None:
             inputs_embeds = tm.embed_tokens(input_ids)
@@ -279,7 +283,7 @@ class GraphSafeQwen3VLTextModel(nn.Module):
         mask = torch.zeros(batch, 1, length, length, dtype=dtype, device=device)
         return mask.masked_fill(~keep, torch.finfo(dtype).min)
 
-    def __getattr__(self, name: str) -> object:
+    def __getattr__(self, name: str) -> nn.Module | torch.Tensor:
         """Delegate unknown attributes to the wrapped text model.
 
         Returns:
@@ -288,4 +292,4 @@ class GraphSafeQwen3VLTextModel(nn.Module):
         try:
             return super().__getattr__(name)
         except AttributeError:
-            return getattr(self._text_model, name)
+            return cast("nn.Module | torch.Tensor", getattr(self._text_model, name))

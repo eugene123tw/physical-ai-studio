@@ -147,7 +147,9 @@ class LayerWrapper(nn.Module):
             else:
                 kwargs["image_wise_encoding"] = kwargs["image_wise_encoding"].bool().item()
 
-        num_views = kwargs["num_views"] if kwargs.get("image_wise_encoding") else None
+        num_views: list[int] | None = None
+        if kwargs.get("image_wise_encoding") and kwargs.get("num_views") is not None:
+            num_views = [int(kwargs["num_views"])]
 
         bsz, seq_len, _dim = hidden_states.shape
 
@@ -162,7 +164,7 @@ class LayerWrapper(nn.Module):
             begin_idx, end_idx = self.get_removing_indices(
                 hidden_states,
                 input_ids,
-                num_views=[num_views],
+                num_views=num_views,
             )
 
             compress_mask = (end_idx > begin_idx).reshape(-1)

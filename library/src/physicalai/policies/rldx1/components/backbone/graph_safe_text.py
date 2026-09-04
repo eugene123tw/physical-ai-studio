@@ -28,9 +28,16 @@ import torch
 from torch import nn
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
+_POSITION_IDS_NDIM_2D = 2
+_MROPE_AXES = 3
+
 
 def _compute_fa_kwargs(seq_len: int, device: torch.device) -> tuple[torch.Tensor, int]:
-    """Static flash-attention varlen kwargs for one contiguous sequence."""
+    """Static flash-attention varlen kwargs for one contiguous sequence.
+
+    Returns:
+        A tuple ``(cu_seqlens, max_seqlen)`` for one contiguous sequence.
+    """
     cu = torch.tensor([0, seq_len], dtype=torch.int32, device=device)
     return cu, int(seq_len)
 
@@ -100,6 +107,21 @@ class GraphSafeQwen3VLTextModel(nn.Module):
         num_views: int | None = None,
         compress_input_ids: torch.Tensor | None = None,
     ) -> None:
+        """Initialize the graph-safe text decoder wrapper.
+
+        Args:
+            text_model: Wrapped eager Qwen3-VL decoder.
+            input_ids: Fixed export token ids.
+            n_cog_tokens: Number of appended cognition tokens.
+            attn_impl: Attention backend name.
+            num_views: Number of camera views for VTC span logic.
+            compress_input_ids: Optional canonical ids used to resolve the
+                static compression span.
+
+        Raises:
+            ValueError: If ``compress_input_ids`` length differs from
+                ``input_ids`` length.
+        """
         super().__init__()
         self._text_model = text_model
         self.attn_impl = attn_impl
@@ -129,10 +151,10 @@ class GraphSafeQwen3VLTextModel(nn.Module):
         # constants, which trips a fake-tensor check).
         pre_cu, self.pre_max_seqlen = _compute_fa_kwargs(length_pre, device)
         post_cu, self.post_max_seqlen = _compute_fa_kwargs(length_post, device)
-        self.register_buffer("pre_cu_seqlens", pre_cu)
-        self.register_buffer("post_cu_seqlens", post_cu)
+        self.register_buffer("pre_cu_seqlens", pre_cu)  # type: ignore[misc, operator]
+        self.register_buffer("post_cu_seqlens", post_cu)  # type: ignore[misc, operator]
 
-    def forward(
+    def forward(  # noqa: PLR0914
         self,
         input_ids: torch.Tensor | None = None,
         inputs_embeds: torch.Tensor | None = None,
@@ -164,8 +186,8 @@ class GraphSafeQwen3VLTextModel(nn.Module):
         if inputs_embeds is None:
             inputs_embeds = tm.embed_tokens(input_ids)
 
-        if position_ids is not None and position_ids.ndim == 2:
-            position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
+        if position_ids is not None and position_ids.ndim == _POSITION_IDS_NDIM_2D:
+            position_ids = position_ids[None, ...].expand(_MROPE_AXES, position_ids.shape[0], -1)
 
         hidden_states = inputs_embeds
         if position_embeddings is None:
@@ -234,7 +256,7 @@ class GraphSafeQwen3VLTextModel(nn.Module):
                 hidden_states = hidden_states[0]
 
             if deepstack_add is not None and idx < deepstack_add.shape[0]:
-                hidden_states = hidden_states + deepstack_add[idx]
+                hidden_states += deepstack_add[idx]
 
         hidden_states = tm.norm(hidden_states)
         return BaseModelOutputWithPast(last_hidden_state=hidden_states)
@@ -258,7 +280,11 @@ class GraphSafeQwen3VLTextModel(nn.Module):
         return mask.masked_fill(~keep, torch.finfo(dtype).min)
 
     def __getattr__(self, name: str) -> object:
-        """Delegate unknown attributes to the wrapped text model."""
+        """Delegate unknown attributes to the wrapped text model.
+
+        Returns:
+            The attribute from this wrapper or the wrapped text model.
+        """
         try:
             return super().__getattr__(name)
         except AttributeError:

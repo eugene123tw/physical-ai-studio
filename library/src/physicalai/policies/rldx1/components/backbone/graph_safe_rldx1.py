@@ -136,7 +136,12 @@ class GraphSafeRldx1Model(nn.Module):
         Returns:
             Predicted action tensor of shape ``(B, action_horizon, action_dim)``.
         """
-        backbone_features = self.gs_backbone(batch)  # (B, n_cog, D)
+        backbone_features = self.gs_backbone(
+            input_ids=batch[INPUT_IDS],
+            position_ids=batch[POSITION_IDS],
+            attention_mask=batch[ATTENTION_MASK],
+            pixel_values=batch[PIXEL_VALUES],
+        )
 
         # Match Rldx1Model.prepare_input: cast floating inputs (e.g. state) to the
         # model dtype so they agree with the bf16 weights (get_action skips that cast).

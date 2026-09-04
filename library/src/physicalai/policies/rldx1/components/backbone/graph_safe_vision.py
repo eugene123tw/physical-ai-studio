@@ -25,10 +25,13 @@ originals back so the trained model is left untouched after export.
 from __future__ import annotations
 
 import sys
+from typing import cast
 
 import torch
-import torch.nn.functional as F
 from torch import nn
+from torch.nn import functional
+
+_GRID_THW_NDIM_3D = 3
 
 
 class GraphSafeQwen3VLVisionAttention(nn.Module):
@@ -39,6 +42,13 @@ class GraphSafeQwen3VLVisionAttention(nn.Module):
     """
 
     def __init__(self, attn: nn.Module, static_lengths: list[int], static_max_seqlen: int) -> None:
+        """Initialize the graph-safe vision attention wrapper.
+
+        Args:
+            attn: Wrapped eager attention module.
+            static_lengths: Precomputed per-window sequence lengths.
+            static_max_seqlen: Precomputed maximum window length.
+        """
         super().__init__()
         self.qkv = attn.qkv
         self.proj = attn.proj
@@ -54,12 +64,12 @@ class GraphSafeQwen3VLVisionAttention(nn.Module):
 
         # Resolve attention helpers from the module that defines the wrapped attn
         # (the vendored modeling_qwen3_vl), then select at runtime via config.
-        _vis_mod = sys.modules[type(attn).__module__]
-        self._apply_rope_vision = _vis_mod.apply_rotary_pos_emb_vision
-        _all_attn_fns = _vis_mod.ALL_ATTENTION_FUNCTIONS
-        self._fa2_fn = _all_attn_fns.get("flash_attention_2")
-        self._sdpa_fn = _all_attn_fns.get("sdpa")
-        self._eager_fn = _vis_mod.eager_attention_forward
+        vis_mod = sys.modules[type(attn).__module__]
+        self._apply_rope_vision = vis_mod.apply_rotary_pos_emb_vision
+        all_attn_fns = vis_mod.ALL_ATTENTION_FUNCTIONS
+        self._fa2_fn = all_attn_fns.get("flash_attention_2")
+        self._sdpa_fn = all_attn_fns.get("sdpa")
+        self._eager_fn = vis_mod.eager_attention_forward
 
     @property
     def _use_fa2(self) -> bool:
@@ -77,14 +87,19 @@ class GraphSafeQwen3VLVisionAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        cu_seqlens: torch.Tensor,
-        rotary_pos_emb: torch.Tensor | None = None,
+        cu_seqlens: torch.Tensor,  # noqa: ARG002
+        rotary_pos_emb: torch.Tensor | None = None,  # noqa: ARG002
         position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
-        **kwargs: object,
+        **_kwargs: object,
     ) -> torch.Tensor:
-        """Run vision self-attention using the static window split."""
+        """Run vision self-attention using the static window split.
+
+        Returns:
+            Projected attention output with the same sequence length as input.
+        """
         seq_length = hidden_states.shape[0]
         q, k, v = self.qkv(hidden_states).reshape(seq_length, 3, self.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
+        position_embeddings = cast("tuple[torch.Tensor, torch.Tensor]", position_embeddings)
         cos, sin = position_embeddings
         q, k = self._apply_rope_vision(q, k, cos, sin)
 
@@ -101,7 +116,7 @@ class GraphSafeQwen3VLVisionAttention(nn.Module):
         splits = [torch.split(t, self.static_lengths, dim=2) for t in (q, k, v)]
         attn_output = torch.cat(
             [
-                F.scaled_dot_product_attention(
+                functional.scaled_dot_product_attention(
                     qi,
                     ki,
                     vi,
@@ -130,9 +145,15 @@ class GraphSafeQwen3VLVisionModel(nn.Module):
     """
 
     def __init__(self, visual: nn.Module, grid_thw: torch.Tensor) -> None:
+        """Initialize graph-safe vision model buffers and attention wrappers.
+
+        Args:
+            visual: Wrapped eager Qwen3-VL vision module.
+            grid_thw: Static image-grid descriptor used for precomputation.
+        """
         super().__init__()
         self._visual = visual
-        grid_thw = grid_thw.reshape(-1, 3) if grid_thw.ndim == 3 else grid_thw
+        grid_thw = grid_thw.reshape(-1, 3) if grid_thw.ndim == _GRID_THW_NDIM_3D else grid_thw
 
         with torch.no_grad():
             pos_embeds = visual.fast_pos_embed_interpolate(grid_thw)
@@ -144,17 +165,17 @@ class GraphSafeQwen3VLVisionModel(nn.Module):
                 dim=0,
                 dtype=torch.int32,
             )
-            cu_seqlens = F.pad(cu, (1, 0), value=0)
+            cu_seqlens = functional.pad(cu, (1, 0), value=0)
 
             lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
 
         # Register precomputed tensors as buffers so torch.export treats them as
         # buffers, not lifted constants (non-persistent buffers are lifted as
         # constants, which trips a fake-tensor check).
-        self.register_buffer("pos_embeds", pos_embeds)
-        self.register_buffer("pos_cos", emb.cos())
-        self.register_buffer("pos_sin", emb.sin())
-        self.register_buffer("cu_seqlens", cu_seqlens)
+        self.register_buffer("pos_embeds", pos_embeds)  # type: ignore[misc, operator]
+        self.register_buffer("pos_cos", emb.cos())  # type: ignore[misc, operator]
+        self.register_buffer("pos_sin", emb.sin())  # type: ignore[misc, operator]
+        self.register_buffer("cu_seqlens", cu_seqlens)  # type: ignore[misc, operator]
         self.max_seqlen = max(lengths)
         self.split_sizes = (grid_thw.prod(-1) // visual.spatial_merge_size**2).tolist()
 
@@ -186,7 +207,7 @@ class GraphSafeQwen3VLVisionModel(nn.Module):
             :meth:`Qwen3VLVisionModel.forward` output.
         """
         hidden_states = self._visual.patch_embed(hidden_states)
-        hidden_states = hidden_states + self.pos_embeds
+        hidden_states += self.pos_embeds
 
         seq_len, _ = hidden_states.size()
         hidden_states = hidden_states.reshape(seq_len, -1)
@@ -207,7 +228,11 @@ class GraphSafeQwen3VLVisionModel(nn.Module):
         return hidden_states, deepstack_feature_lists
 
     def __getattr__(self, name: str) -> object:
-        """Delegate unknown attributes to the wrapped vision model."""
+        """Delegate unknown attributes to the wrapped vision model.
+
+        Returns:
+            The attribute from this wrapper or the wrapped vision model.
+        """
         try:
             return super().__getattr__(name)
         except AttributeError:

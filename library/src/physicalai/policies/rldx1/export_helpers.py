@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import torch
 
@@ -17,6 +17,8 @@ from physicalai.data.observation import STATE
 from .constants import ATTENTION_MASK, EMBODIMENT_ID, IMAGE_GRID_THW, INPUT_IDS, PIXEL_VALUES, POSITION_IDS
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from physicalai.policies.rldx1.config import Rldx1Config
     from physicalai.policies.rldx1.model import Rldx1Model
 
@@ -27,6 +29,12 @@ _PLACEHOLDER_TOKEN_ID = 248068
 # Pad token value is irrelevant numerically: pads are masked as attention keys
 # and their own outputs are discarded (only cog tokens are read), so 0 is fine.
 _PAD_TOKEN_ID = 0
+
+
+class _TokenizerLike(Protocol):
+    def __call__(self, text: str, *, add_special_tokens: bool) -> dict[str, list[int]]: ...
+
+    def convert_tokens_to_ids(self, token: str) -> int: ...
 
 
 def export_image_resolution_from_stats(dataset_stats: dict[str, dict[str, Any]] | None) -> tuple[int, int]:
@@ -51,13 +59,17 @@ def export_image_resolution_from_stats(dataset_stats: dict[str, dict[str, Any]] 
 
 def build_rldx1_token_composer_params(
     *,
-    tokenizer: Any,
+    tokenizer: _TokenizerLike,
     image_resolution: tuple[int, int],
     num_views: int,
     num_frames: int,
     max_token_len: int,
 ) -> dict[str, Any]:
-    """Build manifest params for runtime RLDX-1 token composition."""
+    """Build manifest params for runtime RLDX-1 token composition.
+
+    Returns:
+        A manifest-serializable parameter mapping for ``rldx1_token_composer``.
+    """
     image_height, image_width = int(image_resolution[0]), int(image_resolution[1])
     patch_size = 16
     merge_size = 2
@@ -88,7 +100,11 @@ def build_rldx1_token_composer_params(
 
 
 def build_compress_reference_ids(token_composer_params: dict[str, Any]) -> torch.Tensor:
-    """Build canonical ``input_ids`` whose image-token span matches runtime."""
+    """Build canonical ``input_ids`` whose image-token span matches runtime.
+
+    Returns:
+        A ``(1, max_token_len)`` tensor with runtime-aligned image token span.
+    """
     special = token_composer_params["special_ids"]
     vision_block = [
         special["vision_start"],
@@ -105,7 +121,11 @@ def build_compress_reference_ids(token_composer_params: dict[str, Any]) -> torch
 
 
 def cast_sample_fp32(sample: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Cast floating tensors in an export sample to fp32 (ints untouched)."""
+    """Cast floating tensors in an export sample to fp32 (ints untouched).
+
+    Returns:
+        A shallow-copied sample where floating tensors are ``float32``.
+    """
     return {
         key: value.float() if isinstance(value, torch.Tensor) and value.is_floating_point() else value
         for key, value in sample.items()
@@ -113,7 +133,11 @@ def cast_sample_fp32(sample: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]
 
 
 def trim_export_sample(input_sample: dict[str, torch.Tensor] | None) -> dict[str, torch.Tensor] | None:
-    """Trim export sample to the graph-safe model's declared inputs."""
+    """Trim export sample to the graph-safe model's declared inputs.
+
+    Returns:
+        A filtered sample containing only declared tracing inputs, or ``None``.
+    """
     if input_sample is None:
         return None
     input_names = [PIXEL_VALUES, INPUT_IDS, POSITION_IDS, ATTENTION_MASK, STATE]
@@ -121,13 +145,14 @@ def trim_export_sample(input_sample: dict[str, torch.Tensor] | None) -> dict[str
 
 
 @contextmanager
-def fp32_weights_for_export(model: torch.nn.Module | None):
+def fp32_weights_for_export(model: torch.nn.Module | None) -> Generator[None, None, None]:
     """Cast model floats to fp32 for tracing, then restore per-tensor dtypes.
 
     OpenVINO/ONNX do not lower a bf16-traced graph faithfully (the vision
     patch-embed and downstream ops produce garbage), so tracing must run in
     fp32. ``bf16 -> fp32 -> bf16`` round-trips losslessly, and per-tensor
     restore preserves mixed-dtype modules (e.g. an fp32 ``cog_emb``).
+
     """
     if model is None:
         yield
@@ -141,14 +166,14 @@ def fp32_weights_for_export(model: torch.nn.Module | None):
     try:
         yield
     finally:
-        by_name = {name: t for name, t in [*model.named_parameters(), *model.named_buffers()]}
+        by_name = dict([*model.named_parameters(), *model.named_buffers()])
         for name, dtype in saved.items():
             tensor = by_name.get(name)
             if tensor is not None:
                 tensor.data = tensor.data.to(dtype)
 
 
-def build_padded_sample(
+def build_padded_sample(  # noqa: PLR0914
     model: Rldx1Model,
     *,
     input_ids: torch.Tensor,

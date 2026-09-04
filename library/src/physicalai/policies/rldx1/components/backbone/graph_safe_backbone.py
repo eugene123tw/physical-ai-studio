@@ -23,7 +23,7 @@ from torch import nn
 from physicalai.policies.rldx1.components.backbone.graph_safe_text import GraphSafeQwen3VLTextModel
 from physicalai.policies.rldx1.components.backbone.graph_safe_vision import GraphSafeQwen3VLVisionModel
 
-from ...constants import ATTENTION_MASK, INPUT_IDS, PIXEL_VALUES, POSITION_IDS
+_PIXEL_VALUES_FLAT_NDIM = 3
 
 if TYPE_CHECKING:
     from physicalai.policies.rldx1.config import Rldx1Config
@@ -88,23 +88,27 @@ class GraphSafeQwen3VLBackbone(nn.Module):
         """Undo the vision encoder's in-place attention swap."""
         self.gs_visual.restore()
 
-    def forward(self, vl_input: dict[str, torch.Tensor]) -> torch.Tensor:
+    def forward(  # noqa: PLR0914
+        self,
+        input_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        pixel_values: torch.Tensor,
+    ) -> torch.Tensor:
         """Encode the VLM inputs into backbone features.
 
-        Reads ``input_ids`` / ``position_ids`` / ``attention_mask`` from the
-        runtime input dict so one exported model serves many prompts.
+        Args:
+            input_ids: Token ids for the text input.
+            position_ids: Position ids for the text input.
+            attention_mask: Attention mask for the text input.
+            pixel_values: Image tensor for the visual input.
 
         Returns:
             Backbone features ``(B, M_out, D)`` -- the cog tokens in
             ``cog_only`` mode.
         """
-        input_ids = vl_input[INPUT_IDS]
-        position_ids = vl_input[POSITION_IDS]
-        attention_mask = vl_input[ATTENTION_MASK]
         image_mask_2d = input_ids == self.image_token_id
-
-        pixel_values = vl_input[PIXEL_VALUES]
-        if pixel_values.ndim == 3:
+        if pixel_values.ndim == _PIXEL_VALUES_FLAT_NDIM:
             pixel_values = pixel_values.reshape(-1, pixel_values.shape[-1])
         pixel_values = pixel_values.type(self.gs_visual.dtype)
 

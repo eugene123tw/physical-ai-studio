@@ -65,6 +65,7 @@ from physicalai.export.backends import (
     TorchExportParameters,
 )
 from physicalai.policies.base import Policy
+from physicalai.policies.rldx1.components.backbone.graph_safe_rldx1 import GraphSafeRldx1Model
 from physicalai.policies.rldx1.config import Rldx1Config
 from physicalai.policies.rldx1.export_helpers import (
     build_compress_reference_ids,
@@ -92,7 +93,7 @@ try:
 except ImportError:
     OptimizerLRScheduler = Any  # type: ignore[assignment, misc]
 
-from .constants import ATTENTION_MASK, INPUT_IDS, PIXEL_VALUES, POSITION_IDS, STATE
+from .constants import ATTENTION_MASK, INPUT_IDS, PIXEL_VALUES, POSITION_IDS
 from .export_helpers import build_padded_sample, cast_sample_fp32, fp32_weights_for_export, trim_export_sample
 from .preprocessor import make_rldx1_transforms
 from .vtc_buffer import VtcWindowBuffer
@@ -851,6 +852,9 @@ class Rldx1(ExportablePolicyMixin, Policy):
             real-time chunking control tensors when ``enable_rtc`` is set on the model.
             Returns ``None`` if the underlying model or dataset stats have not been
             initialized yet.
+
+        Raises:
+            ValueError: If no visual feature is present in dataset stats.
         """
         if self.model is None or self._dataset_stats is None:
             return None
@@ -939,6 +943,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
 
         Raises:
             ValueError: If dataset stats are not available for export.
+            RuntimeError: If policy transforms are not initialized.
         """
         if self._dataset_stats is None:
             msg = (
@@ -992,16 +997,17 @@ class Rldx1(ExportablePolicyMixin, Policy):
             # During export self.model may be a GraphSafeRldx1Model (gs_backbone)
             # or the regular Rldx1Model (backbone).
             backbone = getattr(self.model, "backbone", None) or getattr(self.model, "gs_backbone", None)
-            qwen_config = backbone.qwen_config
-            rope_specs = [
-                ComponentSpec(
-                    type="rldx1_rope",
-                    image_token_id=qwen_config.image_token_id,
-                    vision_start_token_id=qwen_config.vision_start_token_id,
-                    spatial_merge_size=qwen_config.vision_config.spatial_merge_size,
-                    n_cog_tokens=self.config.n_cog_tokens,
-                ),
-            ]
+            if backbone is not None:
+                qwen_config = backbone.qwen_config
+                rope_specs = [
+                    ComponentSpec(
+                        type="rldx1_rope",
+                        image_token_id=qwen_config.image_token_id,
+                        vision_start_token_id=qwen_config.vision_start_token_id,
+                        spatial_merge_size=qwen_config.vision_config.spatial_merge_size,
+                        n_cog_tokens=self.config.n_cog_tokens,
+                    ),
+                ]
 
         extra_args: dict[str, ExportParameters] = {}
         num_views = int(self.config.num_views or 1)
@@ -1099,9 +1105,11 @@ class Rldx1(ExportablePolicyMixin, Policy):
         Returns:
             An ``nn.Module`` with the same ``forward(batch)`` contract as
             :class:`Rldx1Model`, safe to hand to the tracer.
-        """
-        from physicalai.policies.rldx1.components.backbone.graph_safe_rldx1 import GraphSafeRldx1Model
 
+        Raises:
+            RuntimeError: If preprocessor state required for static compression
+                references is unavailable.
+        """
         outputs_schema = self.outputs_schema or []
         action_dim = self.config.max_action_dim
         if outputs_schema and outputs_schema[0].shape:
@@ -1174,7 +1182,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         self,
         output_path: PathLike | str,
         input_sample: dict[str, torch.Tensor] | None = None,
-        **export_kwargs: Any,
+        **export_kwargs: object,
     ) -> None:
         """Export to ONNX using graph-safe tracing."""
         if input_sample is None:
@@ -1198,7 +1206,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         self,
         output_path: PathLike | str,
         input_sample: dict[str, torch.Tensor] | None = None,
-        **export_kwargs: Any,
+        **export_kwargs: object,
     ) -> None:
         """Export to OpenVINO using graph-safe tracing."""
         if input_sample is None:
@@ -1240,6 +1248,9 @@ class Rldx1(ExportablePolicyMixin, Policy):
         )
         model_input = export_vtc.prepare(sample)
 
+        if self._preprocessor is None:
+            msg = "No preprocessor available to build export sample."
+            raise RuntimeError(msg)
         processed_sample = self._preprocessor(model_input)
         tensor_sample = {k: v for k, v in processed_sample.items() if isinstance(v, torch.Tensor)}
 

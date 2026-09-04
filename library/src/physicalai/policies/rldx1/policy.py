@@ -45,7 +45,6 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import contextmanager
-from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -1181,26 +1180,16 @@ class Rldx1(ExportablePolicyMixin, Policy):
             self.model = original
 
     @torch.no_grad()
-    def to_onnx(
+    def to_onnx(  # pyrefly: ignore[bad-override, bad-override-param-name]
         self,
-        output_path: BytesIO | Path | str | None = None,
-        input_sample: Any | None = None,
-        **kwargs: Any,
-    ) -> Any:  # noqa: ANN401
-        """Export to ONNX using graph-safe tracing.
-
-        Returns:
-            The backend export result returned by the base export path.
-
-        Raises:
-            ValueError: If ``output_path`` is not provided.
-        """
-        if output_path is None:
-            msg = "output path is required for ONNX export"
-            raise ValueError(msg)
+        output_path: PathLike | str,
+        input_sample: dict[str, torch.Tensor] | None = None,
+        **export_kwargs: dict[str, object],
+    ) -> None:
+        """Export to ONNX using graph-safe tracing."""
         if input_sample is None:
             input_sample = self._get_default_export_input_sample()
-        sample_tensors = cast("dict[str, torch.Tensor]", input_sample)
+        sample_tensors = input_sample
         # OV/ONNX mislower a bf16-traced graph; trace in fp32 (lossless round-trip).
         with (
             fp32_weights_for_export(self.model),
@@ -1213,8 +1202,7 @@ class Rldx1(ExportablePolicyMixin, Policy):
         ):
             traced_sample = cast_sample_fp32(sample_tensors)
             trimmed_sample = trim_export_sample(traced_sample)
-            base = cast("Any", super())
-            return base.to_onnx(output_path, input_sample=trimmed_sample, **kwargs)
+            super().to_onnx(output_path, input_sample=trimmed_sample, **export_kwargs)
 
     @torch.no_grad()
     def to_openvino(

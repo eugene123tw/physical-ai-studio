@@ -211,7 +211,7 @@ class GraphSafeQwen3VLVisionModel(nn.Module):
             :meth:`Qwen3VLVisionModel.forward` output.
         """
         hidden_states = cast("torch.Tensor", self._visual.patch_embed(hidden_states))
-        hidden_states += cast(torch.Tensor, self.pos_embeds)
+        hidden_states += cast("torch.Tensor", self.pos_embeds)
 
         seq_len, _ = hidden_states.size()
         hidden_states = hidden_states.reshape(seq_len, -1)

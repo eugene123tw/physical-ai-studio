@@ -109,7 +109,7 @@ class LayerWrapper(nn.Module):
         padded_rev = torch.nn.utils.rnn.pad_sequence(rev, batch_first=True, padding_value=0)
         return padded_rev.flip(1)
 
-    def forward(  # noqa: PLR0912, PLR0914, PLR0915
+    def forward(  # noqa: C901, PLR0912, PLR0914, PLR0915
         self,
         hidden_states: torch.Tensor,
         input_ids: torch.Tensor | None = None,

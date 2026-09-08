@@ -221,7 +221,7 @@ class Rldx1ExportMixin(ExportablePolicyMixin):
         extra_args["openvino"] = OpenVINOExportParameters(
             inputs=[PIXEL_VALUES, INPUT_IDS, POSITION_IDS, ATTENTION_MASK, STATE],
             outputs=output_names,
-            compress_to_fp16=True,
+            compress_to_fp16=False,
             via_onnx=False,
             export_tokenizer=True,
             exporter_kwargs={},

@@ -88,7 +88,6 @@ def build_rldx1_token_composer_params(
     special_ids = {name: int(tokenizer.convert_tokens_to_ids(token)) for name, token in special_tokens.items()}
 
     return {
-        "formalize_language": True,
         "prefix_ids": [int(value) for value in prefix_ids],
         "suffix_ids": [int(value) for value in suffix_ids],
         "special_ids": special_ids,

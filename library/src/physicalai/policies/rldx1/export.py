@@ -55,8 +55,8 @@ class Rldx1ExportMixin(ExportablePolicyMixin):
 
     # Structural typing for the concrete owner policy (Rldx1).
     config: Rldx1Config
-    model: Rldx1Model | None
-    _preprocessor: torch.nn.Module | None
+    model: torch.nn.Module
+    _preprocessor: torch.nn.Module
     _dataset_stats: DatasetStats | None
     _camera_names: list[str]
 
@@ -354,7 +354,7 @@ class Rldx1ExportMixin(ExportablePolicyMixin):
             msg = "Cannot export before the model is initialized (call setup / load a checkpoint first)."
             raise RuntimeError(msg)
 
-        original = self.model
+        original = cast("Rldx1Model", self.model)
 
         graph_safe = self._build_graph_safe_model(
             original,
@@ -452,7 +452,7 @@ class Rldx1ExportMixin(ExportablePolicyMixin):
             return tensor_sample
 
         padded_sample = build_padded_sample(
-            self.model,
+            cast("Rldx1Model", self.model),
             input_ids=tensor_sample["input_ids"],
             image_grid_thw=tensor_sample["image_grid_thw"],
             embodiment_id=tensor_sample["embodiment_id"],

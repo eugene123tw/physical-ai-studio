@@ -80,6 +80,11 @@ class Rldx1Config(Config):
     # truncates image-pad tokens and breaks the pixel_values alignment.
     tokenizer_max_length: int = 1024
 
+    # Export configuration
+    # OpenVINO weight compression to FP16 reduces model memory footprint and
+    # helps avoid OOM on lower-memory devices.
+    compress_to_fp16: bool = True
+
     # Video input configuration
     # ``use_video`` is an architectural invariant: every supported
     # checkpoint embeds VTC video tokens.

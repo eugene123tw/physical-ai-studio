@@ -140,6 +140,8 @@ class Rldx1(Rldx1ExportMixin, Policy):
             inference (upstream default ``True``). Set ``False`` (Pi05-style, no
             clip) for wide-range action spaces where ``QUANTILES`` bounds would
             truncate task-critical extremes (e.g. PushT).
+        compress_to_fp16: Whether OpenVINO export should compress model weights
+            to FP16 to reduce memory usage (default ``True``).
         env_action_dim: Environment action dimension. If provided, enables eager init.
         dataset_stats: Dataset normalization statistics for eager init.
         input_features: Explicit observation feature overrides (e.g. camera shapes), merged
@@ -196,6 +198,8 @@ class Rldx1(Rldx1ExportMixin, Policy):
         image_min_area: int | None = None,
         # Normalization
         clip_outliers: bool = True,
+        # Export
+        compress_to_fp16: bool = True,
         dataset_stats: dict[str, dict[str, list[float] | str | tuple]] | None = None,
         embodiment_tag: str = "general_embodiment",
         input_features: dict[str, Feature] | None = None,
@@ -245,6 +249,8 @@ class Rldx1(Rldx1ExportMixin, Policy):
                 image_min_area=image_min_area,
                 # Normalization
                 clip_outliers=clip_outliers,
+                # Export
+                compress_to_fp16=compress_to_fp16,
                 # Action prediciton
                 action_horizon=n_action_steps,
                 embodiment_tag=embodiment_tag,
@@ -288,6 +294,7 @@ class Rldx1(Rldx1ExportMixin, Policy):
                 image_min_area=image_min_area,
                 # Normalization
                 clip_outliers=clip_outliers,
+                compress_to_fp16=compress_to_fp16,
                 action_horizon=n_action_steps,
                 embodiment_tag=embodiment_tag,
                 tokenizer_max_length=tokenizer_max_length,
@@ -367,6 +374,8 @@ class Rldx1(Rldx1ExportMixin, Policy):
         image_min_area: int | None,
         # Normalization
         clip_outliers: bool,  # noqa: FBT001
+        # Export
+        compress_to_fp16: bool,  # noqa: FBT001
         embodiment_tag: str,
         # Action prediction
         action_horizon: int,
@@ -419,6 +428,7 @@ class Rldx1(Rldx1ExportMixin, Policy):
         hf_config["video_length"] = video_length
         hf_config["video_stride"] = video_stride
         hf_config["clip_outliers"] = clip_outliers
+        hf_config["compress_to_fp16"] = compress_to_fp16
         hf_config["image_min_area"] = image_min_area
         hf_config["action_horizon"] = action_horizon
         hf_config["embodiment_tag"] = embodiment_tag

@@ -57,11 +57,11 @@ from physicalai.policies.base import Policy
 from physicalai.policies.rldx1.config import Rldx1Config
 from physicalai.policies.rldx1.export import Rldx1ExportMixin
 from physicalai.policies.rldx1.model import Rldx1Model
-from physicalai.policies.rldx1.pretrained_utils import (
+from physicalai.policies.rldx1.utils.pretrain import (
     extract_camera_names,
     retrieve_safetensors_shards,
 )
-from physicalai.policies.rldx1.stats_helpers import (
+from physicalai.policies.rldx1.utils.stats import (
     extract_dataset_stats,
     infer_num_views_from_stats,
     merge_explicit_features,

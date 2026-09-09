@@ -14,7 +14,7 @@ import torch
 from physicalai.data import FeatureType
 from physicalai.data.observation import STATE
 
-from .constants import ATTENTION_MASK, EMBODIMENT_ID, IMAGE_GRID_THW, INPUT_IDS, PIXEL_VALUES, POSITION_IDS
+from ..constants import ATTENTION_MASK, EMBODIMENT_ID, IMAGE_GRID_THW, INPUT_IDS, PIXEL_VALUES, POSITION_IDS
 
 if TYPE_CHECKING:
     from collections.abc import Generator

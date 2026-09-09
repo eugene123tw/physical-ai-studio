@@ -27,15 +27,18 @@ from physicalai.export.backends import (
     TorchExportParameters,
 )
 from physicalai.policies.rldx1.components.backbone.graph_safe_rldx1 import GraphSafeRldx1Model
-from physicalai.policies.rldx1.export_helpers import (
+from physicalai.policies.rldx1.utils.export import (
     build_compress_reference_ids,
+    build_padded_sample,
     build_rldx1_token_composer_params,
+    cast_sample_fp32,
     export_image_resolution_from_stats,
+    fp32_weights_for_export,
+    trim_export_sample,
 )
-from physicalai.policies.rldx1.stats_helpers import get_dataset_stats_entry, resolve_feature_shape
+from physicalai.policies.rldx1.utils.stats import get_dataset_stats_entry, resolve_feature_shape
 
 from .constants import ATTENTION_MASK, INPUT_IDS, PIXEL_VALUES, POSITION_IDS
-from .export_helpers import build_padded_sample, cast_sample_fp32, fp32_weights_for_export, trim_export_sample
 from .vtc_buffer import VtcWindowBuffer
 
 if TYPE_CHECKING:

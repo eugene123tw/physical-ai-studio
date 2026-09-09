@@ -7,7 +7,7 @@
 The RLDX-1 weights ship as sharded ``safetensors`` files alongside a
 ``config.json``. These helpers resolve a HuggingFace repo (or local directory)
 to a local snapshot and load the merged state dict using the ``safetensors``
-backend only — never ``torch.load`` / pickle (lib.security rule 8).
+backend only - never ``torch.load`` / pickle (lib.security rule 8).
 
 This module also hosts lightweight policy utilities shared by construction,
 schema resolution, and export-graph preparation paths.

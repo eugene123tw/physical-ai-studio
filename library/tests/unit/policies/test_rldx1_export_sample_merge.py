@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from physicalai.policies.rldx1.export_helpers import trim_export_sample
+from physicalai.policies.rldx1.utils.export import trim_export_sample
 
 import torch
 

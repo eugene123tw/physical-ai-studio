@@ -42,13 +42,23 @@ if TYPE_CHECKING:
     from collections.abc import Generator
     from os import PathLike
 
+    from physicalai.policies.rldx1.config import Rldx1Config
     from physicalai.policies.rldx1.model import Rldx1Model
 
     from .preprocessor import Rldx1Preprocessor
 
+DatasetStats = dict[str, dict[str, Any]]
+
 
 class Rldx1ExportMixin(ExportablePolicyMixin):
     """RLDX-1-specific export behavior layered on ExportablePolicyMixin."""
+
+    # Structural typing for the concrete owner policy (Rldx1).
+    config: Rldx1Config
+    model: Rldx1Model | None
+    _preprocessor: torch.nn.Module | None
+    _dataset_stats: DatasetStats | None
+    _camera_names: list[str]
 
     @staticmethod
     def get_supported_export_backends() -> list[str | ExportBackend]:

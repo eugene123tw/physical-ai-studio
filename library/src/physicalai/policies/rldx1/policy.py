@@ -53,7 +53,6 @@ from huggingface_hub.errors import RemoteEntryNotFoundError
 from transformers.optimization import Adafactor
 
 from physicalai.data import Dataset, Observation
-from physicalai.data.observation import Feature
 from physicalai.policies.base import Policy
 from physicalai.policies.rldx1.config import Rldx1Config
 from physicalai.policies.rldx1.export import Rldx1ExportMixin
@@ -79,6 +78,8 @@ from .preprocessor import make_rldx1_transforms
 from .vtc_buffer import VtcWindowBuffer
 
 if TYPE_CHECKING:
+    from physicalai.data.observation import Feature
+
     from .preprocessor import Rldx1Postprocessor
 
 logger = logging.getLogger(__name__)

@@ -32,7 +32,6 @@ from physicalai.policies.rldx1.export_helpers import (
     build_rldx1_token_composer_params,
     export_image_resolution_from_stats,
 )
-from physicalai.policies.rldx1.model import Rldx1Model
 from physicalai.policies.rldx1.stats_helpers import get_dataset_stats_entry, resolve_feature_shape
 
 from .constants import ATTENTION_MASK, INPUT_IDS, PIXEL_VALUES, POSITION_IDS
@@ -43,6 +42,8 @@ if TYPE_CHECKING:
     from collections.abc import Generator
     from os import PathLike
 
+    from physicalai.policies.rldx1.model import Rldx1Model
+
     from .preprocessor import Rldx1Preprocessor
 
 
@@ -51,12 +52,24 @@ class Rldx1ExportMixin(ExportablePolicyMixin):
 
     @staticmethod
     def get_supported_export_backends() -> list[str | ExportBackend]:
-        """Get a list of export backends supported by policy."""
+        """Get a list of export backends supported by policy.
+
+        Returns:
+            list[str | ExportBackend]: Supported export backend identifiers.
+        """
         return [ExportBackend.TORCH, ExportBackend.ONNX, ExportBackend.OPENVINO]
 
     @property
     def inputs_schema(self) -> list[InferenceFeature] | None:
-        """Describe the policy's expected model inputs for export tracing."""
+        """Describe the policy's expected model inputs for export tracing.
+
+        Returns:
+            list[InferenceFeature] | None: Input schema for export tracing, or
+                ``None`` when the model or dataset statistics are unavailable.
+
+        Raises:
+            ValueError: If dataset statistics have no visual features.
+        """
         if self.model is None or self._dataset_stats is None:
             return None
 
@@ -131,7 +144,16 @@ class Rldx1ExportMixin(ExportablePolicyMixin):
 
     @property
     def extra_export_args(self) -> dict[str, ExportParameters]:
-        """Additional export arguments for model conversion."""
+        """Additional export arguments for model conversion.
+
+        Returns:
+            dict[str, ExportParameters]: Backend-specific export parameters.
+
+        Raises:
+            RuntimeError: If the preprocessor is not initialized.
+            ValueError: If dataset statistics are missing or contain no visual
+                features needed to derive export image resolution.
+        """
         if self._dataset_stats is None:
             msg = (
                 "Dataset stats are required for export. Initialize the policy with dataset_stats"
@@ -263,7 +285,15 @@ class Rldx1ExportMixin(ExportablePolicyMixin):
         num_views: torch.Tensor,
         embodiment_id: torch.Tensor,
     ) -> GraphSafeRldx1Model:
-        """Build the export-only graph-safe view over a trained model."""
+        """Build the export-only graph-safe view over a trained model.
+
+        Returns:
+            GraphSafeRldx1Model: Graph-safe wrapper used during export tracing.
+
+        Raises:
+            RuntimeError: If preprocessor or dataset statistics are not
+                available when constructing export-only state.
+        """
         outputs_schema = self.outputs_schema or []
         action_dim = self.config.max_action_dim
         if outputs_schema and outputs_schema[0].shape:
@@ -302,7 +332,14 @@ class Rldx1ExportMixin(ExportablePolicyMixin):
         embodiment_id: torch.Tensor,
         num_views: torch.Tensor,
     ) -> Generator[None, None, None]:
-        """Temporarily swap self.model for its graph-safe export view."""
+        """Temporarily swap self.model for its graph-safe export view.
+
+        Yields:
+            None: Control within a context where ``self.model`` is graph-safe.
+
+        Raises:
+            RuntimeError: If export is requested before model initialization.
+        """
         if self.model is None:
             msg = "Cannot export before the model is initialized (call setup / load a checkpoint first)."
             raise RuntimeError(msg)
@@ -374,7 +411,14 @@ class Rldx1ExportMixin(ExportablePolicyMixin):
 
     @torch.no_grad()
     def _get_default_export_input_sample(self) -> dict[str, torch.Tensor]:
-        """Build the default export sample using VTC-prepared model input."""
+        """Build the default export sample using VTC-prepared model input.
+
+        Returns:
+            dict[str, torch.Tensor]: Tensor-only sample ready for export.
+
+        Raises:
+            RuntimeError: If sample input or preprocessor is unavailable.
+        """
         sample = self.sample_input
         if sample is None:
             msg = "No sample input available for export."

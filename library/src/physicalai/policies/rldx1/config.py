@@ -117,7 +117,7 @@ class Rldx1Config(Config):
             "positional_embeddings": "rope_sa_only",
             "rope_theta": 10000.0,
             "temb_type": "input_token",
-            "gradient_checkpointing": False,
+            "gradient_checkpointing": True,
             "action_model_max_seq_len": 512,
             "pre_norm": "layer_norm",
             "qk_norm": "rms_norm",
@@ -243,8 +243,6 @@ class Rldx1Config(Config):
 
     # Precision & compute
     use_bf16: bool = True
-    # Top-level flag; ``diffusion_model_cfg["gradient_checkpointing"]`` above
-    # remains the one MSAT actually constructs from.
-    gradient_checkpointing: bool = False
+    gradient_checkpointing: bool = True
 
     attn_implementation: Literal["sdpa", "flash_attention_2"] = "sdpa"

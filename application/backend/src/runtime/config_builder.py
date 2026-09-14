@@ -149,10 +149,14 @@ def get_policy_name(export_dir: str) -> str | None:
     except (OSError, ValueError):
         return None
 
-    policy = manifest.get("policy")
-    if not isinstance(policy, dict):
+    if not isinstance(manifest, dict):
         return None
-    policy_name = policy.get("name")
+
+    policy_obj = manifest.get("policy")
+    if not isinstance(policy_obj, dict):
+        return None
+
+    policy_name = policy_obj.get("name")
     if not isinstance(policy_name, str) or not policy_name.strip():
         return None
     return policy_name

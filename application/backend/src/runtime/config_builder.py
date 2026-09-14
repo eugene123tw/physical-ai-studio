@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from physicalai.capture import ColorMode, SharedCamera
@@ -109,17 +110,56 @@ def policy_source_from_fragment(fragment: dict[str, Any]) -> PolicySource:
     args = fragment["init_args"]
     model_args = args["model"]["init_args"]
     exec_args = args["execution"]["init_args"]
+    policy_name = get_policy_name(model_args["export_dir"])
+    callbacks = _policy_callbacks(policy_name)
+    inference_model_kwargs: dict[str, Any] = {}
+    if callbacks:
+        inference_model_kwargs["callbacks"] = callbacks
     return PolicySource(
         model=InferenceModel(
             export_dir=model_args["export_dir"],
             policy_name=None,
             backend=model_args["backend"],
             device=model_args["device"],
+            **inference_model_kwargs,
         ),
         execution=SyncExecution(request_threshold=exec_args["request_threshold"]),
         action_queue=ChunkedActionQueue(smoother=LerpSmoother()),
         task=args.get("task"),
     )
+
+
+def get_policy_name(export_dir: str) -> str | None:
+    """Return ``policy.name`` from ``<export_dir>/manifest.json`` when present."""
+    manifest_path = Path(export_dir) / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        with manifest_path.open(encoding="utf-8") as manifest_file:
+            manifest = json.load(manifest_file)
+    except (OSError, ValueError):
+        return None
+
+    policy = manifest.get("policy")
+    if not isinstance(policy, dict):
+        return None
+    policy_name = policy.get("name")
+    if not isinstance(policy_name, str) or not policy_name.strip():
+        return None
+    return policy_name
+
+
+def _policy_callbacks(policy_name: str | None) -> list[Any]:
+    """Return optional runtime callbacks required by specific policy families."""
+    if policy_name != "rldx1":
+        return []
+
+    try:
+        from physicalai.inference.callbacks.rldx1_vtc import Rldx1VtcWindowCallback
+    except Exception:
+        return []
+
+    return [Rldx1VtcWindowCallback(video_length=4, video_stride=2)]
 
 
 def runtime_export_readme(document: dict[str, Any], *, unresolved: list[str]) -> str:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from tempfile import NamedTemporaryFile
 from typing import Any
 from uuid import uuid4
@@ -13,6 +14,8 @@ from runtime.config_builder import (
     POLICY_REQUEST_THRESHOLD,
     RUNTIME_FPS,
     build_runtime_config,
+    get_policy_name,
+    policy_source_from_fragment,
     policy_source_fragment,
     runtime_camera_keys,
     runtime_config_change_me,
@@ -259,6 +262,58 @@ def test_policy_source_fragment_matches_the_session_recipe() -> None:
 def test_empty_task_is_omitted_from_the_fragment() -> None:
     fragment = policy_source_fragment(export_dir="./exports/torch", backend="torch", device="cpu", task="")
     assert "task" not in fragment["init_args"]
+
+
+def test_get_policy_name_reads_manifest(tmp_path) -> None:
+    export_dir = tmp_path / "exports" / "openvino"
+    export_dir.mkdir(parents=True)
+    (export_dir / "manifest.json").write_text(json.dumps({"policy": {"name": "rldx1"}}), encoding="utf-8")
+
+    assert get_policy_name(str(export_dir)) == "rldx1"
+
+
+def test_get_policy_name_returns_none_without_manifest(tmp_path) -> None:
+    export_dir = tmp_path / "exports" / "openvino"
+    export_dir.mkdir(parents=True)
+
+    assert get_policy_name(str(export_dir)) is None
+
+
+def test_policy_source_from_fragment_adds_rldx1_callback(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    export_dir = tmp_path / "exports" / "openvino"
+    export_dir.mkdir(parents=True)
+    (export_dir / "manifest.json").write_text(json.dumps({"policy": {"name": "rldx1"}}), encoding="utf-8")
+
+    class CapturingInferenceModel:
+        def __init__(self, *args, **kwargs) -> None:
+            self.callbacks = kwargs.get("callbacks", [])
+            self.adapter = type("Adapter", (), {"input_names": ["state"]})()
+
+    monkeypatch.setattr("runtime.config_builder._policy_callbacks", lambda _policy_name: ["vtc-callback"])
+    monkeypatch.setattr("physicalai.inference.InferenceModel", CapturingInferenceModel)
+
+    fragment = policy_source_fragment(export_dir=str(export_dir), backend="openvino", device="CPU")
+    source = policy_source_from_fragment(fragment)
+
+    assert source._model.callbacks == ["vtc-callback"]
+
+
+def test_policy_source_from_fragment_skips_callbacks_for_other_policies(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    export_dir = tmp_path / "exports" / "openvino"
+    export_dir.mkdir(parents=True)
+    (export_dir / "manifest.json").write_text(json.dumps({"policy": {"name": "act"}}), encoding="utf-8")
+
+    class CapturingInferenceModel:
+        def __init__(self, *args, **kwargs) -> None:
+            self.callbacks = kwargs.get("callbacks", [])
+            self.adapter = type("Adapter", (), {"input_names": ["state"]})()
+
+    monkeypatch.setattr("physicalai.inference.InferenceModel", CapturingInferenceModel)
+
+    fragment = policy_source_fragment(export_dir=str(export_dir), backend="openvino", device="CPU")
+    source = policy_source_from_fragment(fragment)
+
+    assert source._model.callbacks == []
 
 
 async def test_inference_export_document_uses_the_policy_fragment(mocker: Any) -> None:

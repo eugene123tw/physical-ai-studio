@@ -124,7 +124,7 @@ explicit = false
 
 [tool.uv.sources]
 physicalai-train = { path = "../../library", editable = true }
-physicalai = { git = "https://github.com/openvinotoolkit/physicalai.git", rev = "8e4021703ef43387a835c6647b993cecc069ca85" }
+physicalai = { git = "https://github.com/openvinotoolkit/physicalai.git", rev = "e68aa45740ecc72ec880498dece98bbb9a455529" }
 physicalai-studio-plugin = { path = "../plugin", editable = true }
 # Keep torchao on PyPI for all extras.
 # The XPU index publishes `torchao` local-version wheels (e.g. `+xpu`) that can

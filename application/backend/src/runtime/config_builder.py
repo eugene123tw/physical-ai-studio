@@ -167,10 +167,7 @@ def _policy_callbacks(policy_name: str | None) -> list[Any]:
     if policy_name != "rldx1":
         return []
 
-    try:
-        from physicalai.inference.callbacks.rldx1_vtc import Rldx1VtcWindowCallback
-    except Exception:
-        return []
+    from physicalai.inference.callbacks.rldx1_vtc import Rldx1VtcWindowCallback
 
     return [Rldx1VtcWindowCallback(video_length=4, video_stride=2)]
 

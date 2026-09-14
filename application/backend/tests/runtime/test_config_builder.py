@@ -15,8 +15,8 @@ from runtime.config_builder import (
     RUNTIME_FPS,
     build_runtime_config,
     get_policy_name,
-    policy_source_from_fragment,
     policy_source_fragment,
+    policy_source_from_fragment,
     runtime_camera_keys,
     runtime_config_change_me,
     runtime_export_readme,
@@ -298,7 +298,9 @@ def test_policy_source_from_fragment_adds_rldx1_callback(tmp_path, monkeypatch: 
     assert source._model.callbacks == ["vtc-callback"]
 
 
-def test_policy_source_from_fragment_skips_callbacks_for_other_policies(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_policy_source_from_fragment_skips_callbacks_for_other_policies(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     export_dir = tmp_path / "exports" / "openvino"
     export_dir.mkdir(parents=True)
     (export_dir / "manifest.json").write_text(json.dumps({"policy": {"name": "act"}}), encoding="utf-8")

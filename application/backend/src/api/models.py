@@ -72,6 +72,7 @@ async def _runtime_recipe_texts(
         export_dir=f"./exports/{backend.value}",
         backend=backend.value,
         device=device,
+        policy_name=model.policy,
         task=(task.strip() or None) if task else None,
     )
     try:

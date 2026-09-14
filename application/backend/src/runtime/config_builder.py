@@ -71,6 +71,7 @@ def policy_source_fragment(
     export_dir: str,
     backend: str,
     device: str,
+    policy_name: str | None = None,
     task: str | None = None,
 ) -> dict[str, Any]:
     """Return the PolicySource recipe both the session and the export instantiate.
@@ -78,10 +79,16 @@ def policy_source_fragment(
     `` Omit ``policy_name`` so the manifest is read. Omit ``duration_frames`` so
     ``LerpSmoother`` keeps its upstream default of 5.
     """
+    resolved_policy_name = policy_name or get_policy_name(export_dir)
+    model_init_args: dict[str, Any] = {"export_dir": export_dir, "backend": backend, "device": device}
+    callback_configs = _policy_callback_configs(resolved_policy_name)
+    if callback_configs:
+        model_init_args["callbacks"] = callback_configs
+
     init_args: dict[str, Any] = {
         "model": Config(
             "physicalai.inference.InferenceModel",
-            {"export_dir": export_dir, "backend": backend, "device": device},
+            model_init_args,
         ).to_dict(),
         "execution": Config(
             "physicalai.runtime.SyncExecution",
@@ -110,8 +117,10 @@ def policy_source_from_fragment(fragment: dict[str, Any]) -> PolicySource:
     args = fragment["init_args"]
     model_args = args["model"]["init_args"]
     exec_args = args["execution"]["init_args"]
-    policy_name = get_policy_name(model_args["export_dir"])
-    callbacks = _policy_callbacks(policy_name)
+    callbacks = _instantiate_policy_callbacks(model_args.get("callbacks"))
+    if callbacks is None:
+        policy_name = get_policy_name(model_args["export_dir"])
+        callbacks = _policy_callbacks(policy_name)
     inference_model_kwargs: dict[str, Any] = {}
     if callbacks:
         inference_model_kwargs["callbacks"] = callbacks
@@ -160,6 +169,37 @@ def _policy_callbacks(policy_name: str | None) -> list[Any]:
         return []
 
     return [Rldx1VtcWindowCallback(video_length=4, video_stride=2)]
+
+
+def _policy_callback_configs(policy_name: str | None) -> list[dict[str, Any]]:
+    """Serialize callbacks into config documents for exportable PolicySource recipes."""
+    callbacks = _policy_callbacks(policy_name)
+    try:
+        return [to_config(callback).to_dict() for callback in callbacks]
+    except Exception:
+        return []
+
+
+def _instantiate_policy_callbacks(callback_configs: object) -> list[Any] | None:
+    """Instantiate serialized callback configs from ``policy_source_fragment``.
+
+    Returns ``None`` when callbacks are absent so legacy fragments can still
+    fall back to policy-name based callback injection.
+    """
+    if callback_configs is None:
+        return None
+    if not isinstance(callback_configs, list):
+        return []
+
+    callbacks: list[Any] = []
+    for callback_config in callback_configs:
+        if not isinstance(callback_config, dict):
+            return []
+        try:
+            callbacks.append(Config.from_dict(callback_config).instantiate())
+        except Exception:
+            return []
+    return callbacks
 
 
 def runtime_export_readme(document: dict[str, Any], *, unresolved: list[str]) -> str:

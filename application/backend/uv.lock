@@ -2999,8 +2999,8 @@ lint = [
 
 [[package]]
 name = "physicalai-studio-plugin"
-version = "0.1.0"
-source = { editable = "../plugin" }
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "physicalai" },
     { name = "pydantic" },

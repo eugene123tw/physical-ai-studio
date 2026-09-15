@@ -34,12 +34,12 @@ class _StubModelService:
         return self._model
 
 
-def _make_model(path: Path, *, policy: str = "act") -> Model:
+def _make_model(path: Path) -> Model:
     return Model(
         id=uuid4(),
         name="My Robot ACT Model @ v2",
         path=str(path),
-        policy=policy,
+        policy="act",
         properties={},
         project_id=uuid4(),
         dataset_id=uuid4(),
@@ -239,56 +239,6 @@ def test_openvino_export_download_with_recipe_includes_yaml_and_exports(tmp_path
         assert "pick" in yaml_text
         readme = archive.read("README.md").decode()
         assert "physicalai run --config runtime.yaml" in readme
-
-
-def test_openvino_export_download_with_recipe_includes_rldx1_callback_in_yaml(tmp_path, mocker) -> None:
-    model_dir = tmp_path / "model"
-    export_dir = model_dir / "exports" / "openvino"
-    export_dir.mkdir(parents=True)
-    (export_dir / "model.xml").write_text("<net/>")
-    (export_dir / "manifest.json").write_text('{"policy": {"name": "rldx1"}}')
-    model = _make_model(model_dir, policy="rldx1")
-    environment = _environment()
-
-    environment_service = SimpleNamespace(get_environment_by_id=mocker.AsyncMock(return_value=environment))
-
-    async def _build_runtime_config_with_fragment(*, action_source, **_) -> dict:
-        return Config(
-            "physicalai.runtime.RobotRuntime",
-            {
-                "robot": {
-                    "class_path": "physicalai.robot.SharedRobot",
-                    "init_args": {
-                        "name": "rt-follower",
-                        "robot": {"class_path": "tests.runtime.fakes.FakeRobot"},
-                    },
-                },
-                "fps": 30.0,
-                "action_source": action_source,
-            },
-        ).to_dict()
-
-    mocker.patch("api.models.build_runtime_config", side_effect=_build_runtime_config_with_fragment)
-    _override_export_download(model, environment_service=environment_service)
-    try:
-        client = TestClient(app)
-        response = client.get(
-            f"/api/models/{model.id}/exports/openvino/download",
-            params={
-                "environment_id": str(environment.id),
-                "device": "CPU",
-            },
-        )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-
-    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-        yaml_text = archive.read("runtime.yaml").decode()
-        assert "physicalai.inference.callbacks.Rldx1VtcWindowCallback" in yaml_text
-        assert "video_length: 4" in yaml_text
-        assert "video_stride: 2" in yaml_text
 
 
 def test_openvino_export_download_recipe_400_when_device_missing(tmp_path) -> None:

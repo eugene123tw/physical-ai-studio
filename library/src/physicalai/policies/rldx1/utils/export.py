@@ -75,9 +75,6 @@ def export_image_resolution_after_preprocessor_from_stats(
     Mirrors :class:`AspectAreaResizeAndCrop` geometry: area-budget resize then
     ``m_alignment`` center-crop. The runtime RLDX-1 preprocessor assumes this
     frozen post-transform shape.
-
-    Raises:
-        RuntimeError: If no visual stats entry is available.
     """
     orig_h, orig_w = export_image_resolution_from_stats(dataset_stats)
     current_area = orig_h * orig_w

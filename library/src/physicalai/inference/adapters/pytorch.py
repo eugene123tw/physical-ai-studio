@@ -184,9 +184,7 @@ class TorchAdapter(RuntimeAdapter):
             return {self._output_names[0]: self._tensor_to_numpy(torch_outputs)}
         if isinstance(torch_outputs, dict):
             # Dict output
-            return {
-                k: self._tensor_to_numpy(v) if isinstance(v, torch.Tensor) else v for k, v in torch_outputs.items()
-            }
+            return {k: self._tensor_to_numpy(v) if isinstance(v, torch.Tensor) else v for k, v in torch_outputs.items()}
         if isinstance(torch_outputs, (list, tuple)):
             # Multiple outputs as list/tuple
             outputs_iter = zip(self._output_names, torch_outputs, strict=True)
@@ -198,7 +196,11 @@ class TorchAdapter(RuntimeAdapter):
 
     @staticmethod
     def _tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
-        """Convert a tensor to numpy, upcasting dtypes numpy cannot represent."""
+        """Convert a tensor to numpy, upcasting dtypes numpy cannot represent.
+
+        Returns:
+            NumPy array converted from the input tensor.
+        """
         tensor = tensor.detach().cpu()
         # NumPy has no bfloat16 dtype; upcast to float32 before conversion.
         if tensor.dtype == torch.bfloat16:

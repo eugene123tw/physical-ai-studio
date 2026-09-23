@@ -325,7 +325,7 @@ class Rldx1(Rldx1ExportMixin, Policy):
             video_length=self.config.video_length,
             video_stride=self.config.video_stride,
         )
-        if input_features is None:
+        if input_features is None and pretrained_name_or_path is not None:
             input_features = get_default_input_features_for_model_id(pretrained_name_or_path)
         # Explicit Feature overrides win over anything auto-fetched/user-supplied above --
         # required for RLWRLD checkpoints, which never record camera shapes anywhere.

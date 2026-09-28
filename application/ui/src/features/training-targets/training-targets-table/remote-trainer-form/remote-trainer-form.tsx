@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, ReactNode, useState } from 'react';
 
 import {
     Button,
@@ -24,6 +24,7 @@ import { getApiErrorMessage, getSshHostKeyFingerprint } from '../../../../api/er
 import { SchemaRemoteTrainer } from '../../../../api/openapi-spec';
 import { ReactComponent as AwsIcon } from '../../../../assets/icons/aws-icon.svg';
 import { SshHostKeyConfirmation } from '../ssh-host-key-confirmation-dialog';
+import { INSECURE_TRAINER_URL_WARNING, isInsecureTrainerUrl } from './insecure-trainer-url';
 import { InfoHelp } from './ssh-tunnel-section';
 import { RemoteTrainerFormValues, useRemoteTrainerFormMutation } from './use-remote-trainer-form-mutation';
 import { useSshHostAliases } from './use-ssh-host-aliases';
@@ -41,12 +42,27 @@ type RemoteTrainerFormProps = {
     remoteTrainer?: SchemaRemoteTrainer;
     close: () => void;
     requestHostKeyConfirmation: (confirmation: SshHostKeyConfirmation) => void;
+    // Rendered above the connection-method tabs, between the Name field and
+    // the rest of the form. Used by `TrainingTargetForm` to inject its
+    // "SSH provisioned / Direct trainer URL" type switch so a single dialog
+    // covers both target kinds without duplicating this form's fields.
+    typeSwitch?: ReactNode;
+    // Seeds the Name field. Used by `TrainingTargetForm` to carry over a name
+    // already typed before switching the type switch to "Direct trainer URL",
+    // since that switch mounts this form fresh.
+    initialName?: string;
 };
 
 type SshHostSource = 'manual' | 'pick';
 
-export const RemoteTrainerForm = ({ remoteTrainer, close, requestHostKeyConfirmation }: RemoteTrainerFormProps) => {
-    const [name, setName] = useState(remoteTrainer?.name ?? '');
+export const RemoteTrainerForm = ({
+    remoteTrainer,
+    close,
+    requestHostKeyConfirmation,
+    typeSwitch,
+    initialName,
+}: RemoteTrainerFormProps) => {
+    const [name, setName] = useState(remoteTrainer?.name ?? initialName ?? '');
     const [url, setUrl] = useState(remoteTrainer?.url ?? '');
     const [connectionMode, setConnectionMode] = useState(remoteTrainer?.connection_mode ?? 'direct');
     const [sshHostSource, setSshHostSource] = useState<SshHostSource>(
@@ -127,6 +143,8 @@ export const RemoteTrainerForm = ({ remoteTrainer, close, requestHostKeyConfirma
         name.trim() !== '' &&
         (isSsh ? hasValidSshHost && Boolean(sshRemotePort) && Boolean(sshLocalPort) : url.trim() !== '');
 
+    const isInsecureUrl = isInsecureTrainerUrl(url);
+
     return (
         <Form onSubmit={handleSubmit} validationBehavior='native'>
             <Dialog width='size-6000'>
@@ -143,6 +161,7 @@ export const RemoteTrainerForm = ({ remoteTrainer, close, requestHostKeyConfirma
                             onChange={setName}
                             width='100%'
                         />
+                        {typeSwitch}
                         <Tabs
                             selectedKey={connectionMode}
                             onSelectionChange={(key) => setConnectionMode(key as 'direct' | 'ssh')}
@@ -173,7 +192,11 @@ export const RemoteTrainerForm = ({ remoteTrainer, close, requestHostKeyConfirma
                                     }
                                     width='100%'
                                 />
-                            ) : (
+                            ) : null}
+                            {!isSsh && isInsecureUrl && (
+                                <Text UNSAFE_className={classes.errorMessage}>{INSECURE_TRAINER_URL_WARNING}</Text>
+                            )}
+                            {isSsh && (
                                 <Flex direction='column' gap='size-100'>
                                     <div className={classes.fieldRow}>
                                         <NumberField

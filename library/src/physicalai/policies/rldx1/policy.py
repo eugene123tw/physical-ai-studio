@@ -124,8 +124,12 @@ class Rldx1(Rldx1ExportMixin, Policy):
         num_inference_timesteps: Number of flow-matching denoising steps at inference.
         backbone_use_lora: Whether to use LoRA on the backbone top layers.
             Default False (full fine-tuning). Set to True for LoRA.
+        backbone_lora_rank: LoRA rank for the backbone adapters.
+        backbone_lora_alpha: LoRA alpha (scaling) for the backbone adapters.
         action_use_lora: Whether to use LoRA on the MSAT action model.
             Default False (full fine-tuning). Set to True for LoRA (Paper Table 6, row 1).
+        action_model_lora_rank: LoRA rank for the MSAT action-model adapters.
+        action_model_lora_alpha: LoRA alpha (scaling) for the MSAT action-model adapters.
         learning_rate: Learning rate for the optimizer.
         weight_decay: Weight decay for the optimizer.
         warmup_ratio: Warmup ratio (0.0-1.0) of total training steps.
@@ -185,7 +189,11 @@ class Rldx1(Rldx1ExportMixin, Policy):
         tune_vlln: bool = True,
         num_inference_timesteps: int = 4,
         backbone_use_lora: bool = False,
+        backbone_lora_rank: int = 64,
+        backbone_lora_alpha: int = 64,
         action_model_use_lora: bool = False,
+        action_model_lora_rank: int = 64,
+        action_model_lora_alpha: int = 64,
         # Optimizer
         optim: Literal["adamw_torch", "adamw_torch_fused", "adafactor"] = "adamw_torch",
         learning_rate: float = 1e-4,
@@ -239,7 +247,11 @@ class Rldx1(Rldx1ExportMixin, Policy):
                 tune_projector=tune_projector,
                 num_inference_timesteps=num_inference_timesteps,
                 backbone_use_lora=backbone_use_lora,
+                backbone_lora_rank=backbone_lora_rank,
+                backbone_lora_alpha=backbone_lora_alpha,
                 action_model_use_lora=action_model_use_lora,
+                action_model_lora_rank=action_model_lora_rank,
+                action_model_lora_alpha=action_model_lora_alpha,
                 # optimizer
                 optim=optim,
                 learning_rate=learning_rate,
@@ -284,7 +296,11 @@ class Rldx1(Rldx1ExportMixin, Policy):
                 tune_projector=tune_projector,
                 num_inference_timesteps=num_inference_timesteps,
                 backbone_use_lora=backbone_use_lora,
+                backbone_lora_rank=backbone_lora_rank,
+                backbone_lora_alpha=backbone_lora_alpha,
                 action_model_use_lora=action_model_use_lora,
+                action_model_lora_rank=action_model_lora_rank,
+                action_model_lora_alpha=action_model_lora_alpha,
                 # optimizer
                 optim=optim,
                 learning_rate=learning_rate,
@@ -364,7 +380,11 @@ class Rldx1(Rldx1ExportMixin, Policy):
         tune_projector: bool,  # noqa: FBT001
         num_inference_timesteps: int,
         backbone_use_lora: bool,  # noqa: FBT001
+        backbone_lora_rank: int,
+        backbone_lora_alpha: int,
         action_model_use_lora: bool,  # noqa: FBT001
+        action_model_lora_rank: int,
+        action_model_lora_alpha: int,
         # optimizer
         optim: Literal["adamw_torch", "adamw_torch_fused", "adafactor"],
         learning_rate: float,
@@ -424,7 +444,11 @@ class Rldx1(Rldx1ExportMixin, Policy):
         hf_config["tune_projector"] = tune_projector
         hf_config["num_inference_timesteps"] = num_inference_timesteps
         hf_config["backbone_use_lora"] = backbone_use_lora
+        hf_config["backbone_lora_rank"] = backbone_lora_rank
+        hf_config["backbone_lora_alpha"] = backbone_lora_alpha
         hf_config["action_model_use_lora"] = action_model_use_lora
+        hf_config["action_model_lora_rank"] = action_model_lora_rank
+        hf_config["action_model_lora_alpha"] = action_model_lora_alpha
         hf_config["optim"] = optim
         hf_config["learning_rate"] = learning_rate
         hf_config["weight_decay"] = weight_decay
@@ -484,7 +508,11 @@ class Rldx1(Rldx1ExportMixin, Policy):
             tune_llm=config.tune_llm,
             backbone_trainable_params_fp32=config.backbone_trainable_params_fp32,
             backbone_use_lora=config.backbone_use_lora,
+            backbone_lora_rank=config.backbone_lora_rank,
+            backbone_lora_alpha=config.backbone_lora_alpha,
             action_model_use_lora=config.action_model_use_lora,
+            action_model_lora_rank=config.action_model_lora_rank,
+            action_model_lora_alpha=config.action_model_lora_alpha,
             gradient_checkpointing=config.gradient_checkpointing,
             diffusion_model_cfg=config.diffusion_model_cfg,
             backbone_lora_target_modules=config.backbone_lora_target_modules,

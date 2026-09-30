@@ -11,6 +11,7 @@ from .base import Policy
 from .lerobot import get_lerobot_policy
 from .molmoact2 import MolmoAct2, MolmoAct2Config, MolmoAct2Model
 from .pi05 import Pi05, Pi05Config, Pi05Model
+from .pi05_waypoint import Pi05Waypoint, Pi05WaypointConfig, Pi05WaypointModel
 from .rldx1 import Rldx1, Rldx1Config, Rldx1Model
 from .smolvla import SmolVLA, SmolVLAConfig, SmolVLAModel
 from .xr0 import XR0, XR0Config, XR0Model
@@ -28,6 +29,10 @@ __all__ = [  # noqa: RUF022  # grouped by policy family, not isort-sorted
     "Pi05",
     "Pi05Config",
     "Pi05Model",
+    # Pi05 waypoint hierarchy
+    "Pi05Waypoint",
+    "Pi05WaypointConfig",
+    "Pi05WaypointModel",
     # Base
     "Policy",
     # RLDX
@@ -115,7 +120,7 @@ def get_policy(policy_name: str, *, source: str = "physicalai", **kwargs) -> Pol
     raise ValueError(msg)
 
 
-def get_physicalai_policy_class(policy_name: str) -> type[Policy]:
+def get_physicalai_policy_class(policy_name: str) -> type[Policy]:  # noqa: PLR0911
     """Get a first-party policy class by name.
 
     Args:
@@ -135,11 +140,16 @@ def get_physicalai_policy_class(policy_name: str) -> type[Policy]:
         return MolmoAct2
     if policy_name == "pi05":
         return Pi05
+    if policy_name == "pi05_waypoint":
+        return Pi05Waypoint
     if policy_name == "rldx1":
         return Rldx1
     if policy_name == "smolvla":
         return SmolVLA
     if policy_name == "xr0":
         return XR0
-    msg = f"Unknown physicalai policy: {policy_name}. Supported policies: act, molmoact2, pi05, rldx1, smolvla, xr0"
+    msg = (
+        f"Unknown physicalai policy: {policy_name}. "
+        "Supported policies: act, molmoact2, pi05, pi05_waypoint, rldx1, smolvla, xr0"
+    )
     raise ValueError(msg)

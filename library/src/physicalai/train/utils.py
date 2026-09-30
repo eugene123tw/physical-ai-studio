@@ -58,7 +58,9 @@ def reformat_dataset_to_match_policy(policy: Policy, datamodule: DataModule) -> 
     if getattr(datamodule, "val_eval_dataset", None) is not None:
         datasets.append(datamodule.val_eval_dataset)
 
-    for lerobot_dataset in datasets:
+    for dataset in datasets:
+        # Wrappers such as WaypointDataset expose the frame dataset as `base_dataset`.
+        lerobot_dataset = getattr(dataset, "base_dataset", dataset)
         if not isinstance(lerobot_dataset, _LeRobotDatasetAdapter):
             continue
 

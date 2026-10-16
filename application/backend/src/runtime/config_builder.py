@@ -107,20 +107,24 @@ def policy_source_from_fragment(fragment: dict[str, Any]) -> PolicySource:
     from physicalai.inference import InferenceModel
     from physicalai.runtime import ChunkedActionQueue, LerpSmoother, PolicySource, SyncExecution
 
+    from physicalai.runtime.vtc_policy_source import VtcPolicySource, detach_vtc_window
+
     args = fragment["init_args"]
     model_args = args["model"]["init_args"]
     exec_args = args["execution"]["init_args"]
-    return PolicySource(
-        model=InferenceModel(
-            export_dir=model_args["export_dir"],
-            policy_name=None,
-            backend=model_args["backend"],
-            device=model_args["device"],
-        ),
-        execution=SyncExecution(request_threshold=exec_args["request_threshold"]),
-        action_queue=ChunkedActionQueue(smoother=LerpSmoother()),
-        task=args.get("task"),
+    model = InferenceModel(
+        export_dir=model_args["export_dir"],
+        policy_name=None,
+        backend=model_args["backend"],
+        device=model_args["device"],
     )
+    execution = SyncExecution(request_threshold=exec_args["request_threshold"])
+    action_queue = ChunkedActionQueue(smoother=LerpSmoother())
+    vtc_window = detach_vtc_window(model)
+    print("Detached VTC window:", vtc_window)
+    if vtc_window is not None:
+        return VtcPolicySource(model, execution, action_queue, vtc_window=vtc_window, task=args.get("task"))
+    return PolicySource(model=model, execution=execution, action_queue=action_queue, task=args.get("task"))
 
 
 def runtime_export_readme(document: dict[str, Any], *, unresolved: list[str]) -> str:

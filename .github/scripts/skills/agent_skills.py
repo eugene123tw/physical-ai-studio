@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import os
 import platform
 import re
-import subprocess
+import subprocess  # nosec B404 - only used below for a fixed, non-shell mklink fallback
 import sys
 from pathlib import Path
 
@@ -18,27 +19,45 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+_AUDIENCES = ("using", "contributing")
+_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+# Published (using/) skills share a flat install namespace; repo-local ones do not.
+_PUBLISHED_PREFIX = "pai-"
+
+
 def skill_dirs(root: Path) -> list[tuple[str, str]]:
-    """Return (bucket, skill_name) for each canonical skill directory."""
+    """Return (audience, skill_name) for each canonical skill directory."""
     found: list[tuple[str, str]] = []
-    for bucket in ("library", "application"):
-        bucket_path = root / "skills" / bucket
-        if not bucket_path.is_dir():
+    for audience in _AUDIENCES:
+        audience_path = root / "skills" / audience
+        if not audience_path.is_dir():
             continue
-        for child in sorted(bucket_path.iterdir()):
+        for child in sorted(audience_path.iterdir()):
             if child.is_dir() and (child / "SKILL.md").is_file():
-                found.append((bucket, child.name))
+                found.append((audience, child.name))
     return found
 
 
-def adapter_target(bucket: str, name: str) -> str:
-    return f"../../skills/{bucket}/{name}"
+def adapter_target(audience: str, name: str) -> str:
+    return f"../../skills/{audience}/{name}"
 
 
 def read_link(path: Path) -> str | None:
     if path.is_symlink():
         return os.readlink(path)
     return None
+
+
+def managed_adapter(root: Path, link: Path) -> bool:
+    """Recognize our generated symlinks (relative or absolute) or Windows junctions.
+
+    Returns:
+        True if the adapter points into the canonical ``skills/`` tree.
+    """
+    is_junction = platform.system() == "Windows" and link.is_dir() and not link.is_symlink()
+    if not link.is_symlink() and not is_junction:
+        return False
+    return link.resolve().is_relative_to((root / "skills").resolve())
 
 
 def resolves_to(link: Path, expected_target: str) -> bool:
@@ -71,20 +90,53 @@ def create_adapter(link: Path, target: str) -> None:
         raise RuntimeError(f"canonical skill missing: {abs_target}")
 
     if platform.system() == "Windows":
-        _create_windows_link(link, abs_target)
+        _create_windows_link(link, target, abs_target)
     else:
         link.symlink_to(target, target_is_directory=True)
 
 
-def _create_windows_link(link: Path, abs_target: Path) -> None:
+def _resolve_cmd_exe() -> Path:
+    """Resolve cmd.exe via the Win32 API, not env vars, so the path is never tainted."""
+    buf = ctypes.create_unicode_buffer(260)
+    if not ctypes.windll.kernel32.GetSystemDirectoryW(buf, len(buf)):  # type: ignore[attr-defined]
+        raise RuntimeError("failed to resolve the Windows system directory")
+    return Path(buf.value) / "cmd.exe"
+
+
+# cmd.exe re-parses its /c argument itself even with shell=False, so these are unsafe
+# regardless of quoting. A denylist (not an ASCII allowlist) is used deliberately here
+# so legitimate non-ASCII/`+`/`@`/`$` paths still work; this list is the full set of
+# cmd.exe metacharacters (including "(", ")", which earlier revisions of this check
+# omitted), not just the common ones.
+_CMD_METACHARACTERS = set('&|<>^"%!(),;\n\r\t')
+
+
+def _reject_unsafe_for_cmd(path: Path) -> None:
+    text = str(path)
+    if any(ch in _CMD_METACHARACTERS for ch in text):
+        raise RuntimeError(f"path contains characters unsafe for cmd.exe: {path}")
+
+
+def _create_windows_link(link: Path, target: str, abs_target: Path) -> None:
+    # Use the same relative target as POSIX so validation and stale detection agree.
     try:
-        link.symlink_to(abs_target, target_is_directory=True)
+        link.symlink_to(target, target_is_directory=True)
         return
     except OSError:
         pass
 
-    subprocess.run(
-        ["cmd", "/c", "mklink", "/J", str(link), str(abs_target)],
+    cmd_exe = _resolve_cmd_exe()
+    if not cmd_exe.is_file():
+        raise RuntimeError(f"cmd.exe not found at expected path: {cmd_exe}")
+    # link/abs_target are built from skill directory names, which can be introduced
+    # by an unreviewed PR and hit by `sync` locally (e.g. via pre-commit) before any
+    # human review completes, so they are not trustworthy inputs; validate explicitly
+    # rather than relying on review having already screened them.
+    _reject_unsafe_for_cmd(link)
+    _reject_unsafe_for_cmd(abs_target)
+
+    subprocess.run(  # nosec B603 - absolute cmd.exe path, no shell, paths validated above
+        [str(cmd_exe), "/c", "mklink", "/J", str(link), str(abs_target)],
         check=True,
         capture_output=True,
         text=True,
@@ -93,20 +145,32 @@ def _create_windows_link(link: Path, abs_target: Path) -> None:
 
 def cmd_sync(root: Path) -> int:
     adapters = (root / ".claude" / "skills", root / ".agents" / "skills")
+    locations = skill_dirs(root)
+    names = {name for _, name in locations}
+    if len(names) != len(locations) or any(len(name) > 64 or not _NAME_RE.fullmatch(name) for name in names):
+        print("Duplicate or invalid canonical skill names", file=sys.stderr)
+        return 1
 
-    for bucket, name in skill_dirs(root):
-        target = adapter_target(bucket, name)
+    for adapter_root in adapters:
+        adapter_root.mkdir(parents=True, exist_ok=True)
+        for link in adapter_root.iterdir():
+            if link.name not in names and managed_adapter(root, link):
+                if link.is_symlink():
+                    link.unlink()
+                else:
+                    raise RuntimeError(f"Stale Windows junction {link}; remove it and rerun {_SCRIPT} sync")
+
+    for audience, name in locations:
+        target = adapter_target(audience, name)
         for adapter_root in adapters:
             link = adapter_root / name
-            current = read_link(link)
-            if current == target and link.exists():
+            if resolves_to(link, target) and link.exists():
                 continue
             create_adapter(link, target)
 
-    names = sorted({name for _, name in skill_dirs(root)})
     for adapter_root in adapters:
         print(f"{adapter_root.relative_to(root)}:")
-        for name in names:
+        for name in sorted(names):
             if (adapter_root / name).exists():
                 print(f"  {name}")
     return 0
@@ -116,16 +180,24 @@ def cmd_check_adapters(root: Path) -> int:
     errors: list[str] = []
     adapters = (root / ".claude" / "skills", root / ".agents" / "skills")
 
-    for bucket, name in skill_dirs(root):
-        target = adapter_target(bucket, name)
+    locations = skill_dirs(root)
+    names = {name for _, name in locations}
+    if len(names) != len(locations):
+        errors.append("Duplicate canonical skill names across audiences")
+    for audience, name in locations:
+        target = adapter_target(audience, name)
         for adapter_root in adapters:
             link = adapter_root / name
             if resolves_to(link, target):
                 continue
             current = read_link(link)
-            errors.append(
-                f"{link}: expected adapter to {target!r}, got {current!r}"
-            )
+            errors.append(f"{link}: expected adapter to {target!r}, got {current!r}")
+
+    for adapter_root in adapters:
+        if adapter_root.is_dir():
+            for link in adapter_root.iterdir():
+                if link.name not in names and managed_adapter(root, link):
+                    errors.append(f"Stale adapter {link} (run: {_SCRIPT} sync)")
 
     if errors:
         for msg in errors:
@@ -149,13 +221,14 @@ def frontmatter_name(skill_md: Path) -> str | None:
 def cmd_validate(root: Path) -> int:
     errors: list[str] = []
 
-    for bucket in ("library", "application"):
-        bucket_dir = root / "skills" / bucket
-        if not bucket_dir.is_dir():
-            errors.append(f"Missing {bucket_dir}")
+    names: set[str] = set()
+    for audience in _AUDIENCES:
+        audience_dir = root / "skills" / audience
+        if not audience_dir.is_dir():
+            errors.append(f"Missing {audience_dir}")
             continue
 
-        for child in sorted(bucket_dir.iterdir()):
+        for child in sorted(audience_dir.iterdir()):
             if not child.is_dir():
                 continue
             skill_md = child / "SKILL.md"
@@ -163,6 +236,15 @@ def cmd_validate(root: Path) -> int:
                 continue
 
             name = child.name
+            if len(name) > 64 or not _NAME_RE.fullmatch(name):
+                errors.append(f"Invalid canonical skill name: {name}")
+            if name in names:
+                errors.append(f"Duplicate canonical skill name: {name}")
+            names.add(name)
+            if (audience == "using") != name.startswith(_PUBLISHED_PREFIX):
+                errors.append(
+                    f"{child}: using skills must start with {_PUBLISHED_PREFIX!r}; contributing skills must not",
+                )
             fm_name = frontmatter_name(skill_md)
             if not fm_name:
                 errors.append(f"{skill_md}: missing frontmatter name")
@@ -180,7 +262,7 @@ def cmd_validate(root: Path) -> int:
                     )
                     break
 
-            target = adapter_target(bucket, name)
+            target = adapter_target(audience, name)
             for adapter_root in (root / ".claude" / "skills", root / ".agents" / "skills"):
                 link = adapter_root / name
                 if not link.exists():
@@ -194,6 +276,12 @@ def cmd_validate(root: Path) -> int:
                     continue
                 if not (link / "SKILL.md").is_file():
                     errors.append(f"Broken adapter {link}")
+
+    for adapter_root in (root / ".claude" / "skills", root / ".agents" / "skills"):
+        if adapter_root.is_dir():
+            for link in adapter_root.iterdir():
+                if link.name not in names and managed_adapter(root, link):
+                    errors.append(f"Stale adapter {link} (run: {_SCRIPT} sync)")
 
     if errors:
         for msg in errors:

@@ -17,7 +17,7 @@ src/
 ├── features/       Domain feature modules (cameras/, datasets/, jobs/, models/, projects/, robots/, …)
 ├── query-client/   TanStack QueryClient factory and mutation-meta type definitions
 ├── routes/         Route-level page components (thin shells — logic lives in features/)
-├── test-utils/     Custom RTL render utility for unit tests
+├── test-utils/     Custom RTL render utility + `getMocked*` factories for tests
 ├── index.tsx       App entry point
 ├── providers.tsx   Global providers (QueryClientProvider, ThemeProvider, RouterProvider)
 ├── router.tsx      createBrowserRouter config + exported `paths` map
@@ -171,7 +171,7 @@ npm run format:check       # Prettier
 npm run lint               # ESLint (zero warnings allowed)
 npm run cyclic-deps-check  # Circular dependency check (madge)
 npm run type-check         # TypeScript (tsc --noEmit)
-npm run test:unit          # Vitest unit tests
+npm run test:unit          # Rstest unit tests
 npm run build              # Production build (catch any bundler errors)
 ```
 
@@ -203,7 +203,7 @@ npm run build              # Production build (catch any bundler errors)
 
 | Tool                                                                             | Role                                             |
 | -------------------------------------------------------------------------------- | ------------------------------------------------ |
-| [Vitest](https://vitest.dev/)                                                    | Test runner and assertions                       |
+| [Rstest](https://rstest.rs/)                                                      | Test runner and assertions                       |
 | [Testing Library](https://testing-library.com/docs/react-testing-library/intro/) | Component rendering and queries                  |
 | [MSW v2](https://mswjs.io/)                                                      | API mocking via `setupServer`                    |
 | [openapi-msw](https://github.com/christoph-fricke/openapi-msw)                   | Type-safe MSW handlers matching the OpenAPI spec |
@@ -218,7 +218,7 @@ npm run test:unit
 npm run test:unit:watch
 
 # Single file
-npx vitest run src/features/robots/environment-form/submit-new-environment-button.test.tsx
+npx rstest src/features/robots/environment-form/submit-new-environment-button.test.tsx
 ```
 
 ## File conventions
@@ -228,13 +228,36 @@ npx vitest run src/features/robots/environment-form/submit-new-environment-butto
 
 ## Key test infrastructure files
 
-| File                        | Purpose                                                                    |
-| --------------------------- | -------------------------------------------------------------------------- |
-| `src/setup-tests.ts`        | Global setup: env vars, MSW server lifecycle                               |
-| `src/msw-node-setup.ts`     | Exports the MSW `server` instance                                          |
-| `src/test-utils/render.tsx` | Custom `render` / `renderHook` wrapping Router, QueryClient, ThemeProvider |
-| `src/api/utils.ts`          | Exports `http` — the type-safe MSW handler builder                         |
-| `src/api/client.ts`         | Exports `$api` — the openapi-react-query client used by components         |
+| File                        | Purpose                                                                                             |
+| --------------------------- | --------------------------------------------------------------------------------------------------- |
+| `src/setup-tests.ts`        | Global setup: env vars, MSW server lifecycle                                                        |
+| `src/msw-node-setup.ts`     | Exports the MSW `server` instance                                                                   |
+| `src/test-utils/render.tsx` | Custom `render` / `renderHook` wrapping Router, QueryClient, ThemeProvider                          |
+| `src/api/utils.ts`          | Exports `http` — the type-safe MSW handler builder                                                  |
+| `src/api/client.ts`         | Exports `$api` — the openapi-react-query client used by components                                  |
+| `src/test-utils/mocks/`     | `getMocked*` factories (e.g. `mock-dataset.ts` → `getMockedDataset`) returning spec-typed mock data |
+
+Prefer a `getMocked*` factory from `src/test-utils/mocks/` over a hand-built object literal when
+mocking an MSW response or a component prop. Each factory takes a `Partial<T>` of the OpenAPI
+schema type and spreads it over sensible defaults, e.g.:
+
+```ts
+// src/test-utils/mocks/mock-dataset.ts
+
+import { SchemaDatasetOutput } from '../../api/openapi-spec';
+
+export const getMockedDataset = (overrides: Partial<SchemaDatasetOutput> = {}): SchemaDatasetOutput => ({
+    id: 'dataset-1',
+    name: 'pick-dataset',
+    default_task: 'manipulation',
+    project_id: 'project-1',
+    environment_id: 'environment-1',
+    ...overrides,
+});
+```
+
+If no factory exists yet for the schema type you need, add one under `src/test-utils/mocks/` named
+`mock-<name>.ts` rather than inlining the object in the test file.
 
 ## Writing a component test
 
@@ -258,7 +281,7 @@ render(<MyComponent />, {
 
 Provide `route` + `path` whenever the component (or any hook it calls) reads route params via `useParams` / `useProjectId`.
 
-### 2. Mock API calls with MSW — never `vi.mock` the API client
+### 2. Mock API calls with MSW — never `rs.mock` the API client
 
 Use `server.use()` to override handlers for a single test. Import `http` from `src/api/utils` for type-safe OpenAPI path handlers.
 

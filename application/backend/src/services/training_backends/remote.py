@@ -40,6 +40,7 @@ if TYPE_CHECKING:
 
     from loguru import Logger, Record
 
+    from schemas.job import TrainingDevice
     from services.training_backends._training_methods import TrainingMethod
     from services.training_backends.base import TrainingContext
 
@@ -77,10 +78,16 @@ class RemoteTrainingBackend:
 
     _last_progress_log: str | None = None
 
-    def __init__(self, base_url: str, *, trainer_name: str | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        trainer_name: str | None = None,
+        device: TrainingDevice | None = None,
+    ) -> None:
         settings = get_settings()
         self._base_url = base_url.rstrip("/")
-        self._timeout = settings.trainer_request_timeout_s
+        self._timeout = settings.trainer.request_timeout_s
         # Resolved once by _resolve_trust_env(): True honors proxy env vars,
         # False bypasses them. None means "not yet probed".
         self._trust_env: bool | None = None
@@ -88,10 +95,15 @@ class RemoteTrainingBackend:
         # Suppress duplicate consecutive progress lines (e.g. the trainer
         # re-emitting the final training state while it optimizes/exports).
         self._last_progress_log: str | None = None
-        # Prefix every log line from this backend with its trainer, so a job's
-        # log (and the shared "training" worker log) identify which remote
-        # server produced each line when several trainers run concurrently.
+        self._last_progress = SNAPSHOT_UPLOAD_PROGRESS
+        # An explicitly supplied device is sent to the trainer; otherwise the
+        # trainer selects its own device.
+        self._device = device
+        # Label every log line by trainer and selected GPU so parallel jobs on
+        # the same remote server remain distinguishable in the shared log.
         label = trainer_name or self._base_url
+        if device is not None:
+            label += f" · {device.type.upper()}{f' {device.index}' if device.index is not None else ''}"
 
         def _prefix_with_trainer(record: Record, label: str = label) -> None:
             record["message"] = f"[{label}] {record['message']}"
@@ -141,7 +153,7 @@ class RemoteTrainingBackend:
     async def get_training_devices(self) -> list[DeviceInfo]:
         """Fetch the compute devices available on the trainer service.
 
-        Lets the studio surface the remote server's real hardware (GPU/XPU) instead of the studio host's local device.
+        Reports the trainer's hardware (GPU/XPU) to Studio.
         Raises RemoteTrainingError on any transport or parsing failure so callers can fall back.
         """
         try:
@@ -207,7 +219,14 @@ class RemoteTrainingBackend:
         """Wait for the remote job, then download and extract its model."""
         await self._wait_for_completion(context, remote_job_id)
         context.progress(TRAINING_PROGRESS_END, message="Downloading trained model")
-        await self._download_and_extract(context, remote_job_id)
+        while True:
+            try:
+                await self._download_and_extract(context, remote_job_id)
+                break
+            except httpx.TransportError:
+                self._log.warning("Model download lost connection; waiting to resume")
+                await asyncio.sleep(_RECONNECT_BACKOFF_S)
+                await self._wait_for_completion(context, remote_job_id)
         await self._delete_remote_job(remote_job_id)
         context.progress(100, message="Model downloaded")
 
@@ -245,7 +264,7 @@ class RemoteTrainingBackend:
 
         settings = get_settings()
         # A large upload must not trip the short request timeout; guard stalls with a per-write gap.
-        stream_timeout = httpx.Timeout(self._timeout, write=settings.trainer_download_read_timeout_s)
+        stream_timeout = httpx.Timeout(self._timeout, write=settings.trainer.download_read_timeout_s)
         offset = await self._get_upload_offset(remote_job_id, total, stream_timeout)
         for attempt in range(_TRANSFER_RETRY_LIMIT + 1):
             if offset == total:
@@ -312,11 +331,42 @@ class RemoteTrainingBackend:
         )
 
     async def submit_job(self, context: TrainingContext) -> uuid.UUID:
-        """Submit the training job and return the remote job id."""
+        """Submit the training job and return the remote job id.
+
+        Sends the same spec a local run would execute, so both paths train from
+        one set of defaults. An explicit device names hardware on the trainer;
+        without one the trainer selects its own device.
+
+        The Hugging Face token is sent as a separate, top-level ``hf_token``
+        field rather than as part of ``spec.run_options``: the trainer never
+        persists that field to disk, only caches it in memory for the job it
+        was submitted for (see `trainer.schemas.SubmitJobRequest.hf_token`).
+        """
+        from services.training_backends.local import build_spec, resolve_hf_token
+
+        # An explicitly supplied device takes precedence; otherwise the trainer
+        # selects its own hardware.
+        device_update = (
+            {"device_type": str(self._device.type), "device_index": self._device.index}
+            if self._device is not None
+            else {"device_type": None, "device_index": None}
+        )
+        if self._device is not None:
+            devices = await self.get_training_devices()
+            if not any(device.type == self._device.type and device.index == self._device.index for device in devices):
+                raise RemoteTrainingError(
+                    f"Selected {self._device.type} device {self._device.index} is no longer available on the trainer"
+                )
+        spec = build_spec(context).model_copy(update=device_update)
+        hf_token = resolve_hf_token()
+
+        excluded = {"run_options"}
+        if spec.snapflow_start_epoch is None:
+            excluded.add("snapflow_start_epoch")
         body: dict[str, Any] = {
-            "payload": context.payload.model_dump(mode="json"),
-            "policy": context.model.policy,
+            "spec": spec.model_dump(mode="json", exclude=excluded),
             "dataset_transfer": "http",
+            "hf_token": hf_token.get_secret_value() if hf_token is not None else None,
         }
         async with await self._client() as client:
             response = await client.post(f"{self._base_url}/jobs", json=body)
@@ -339,23 +389,26 @@ class RemoteTrainingBackend:
         The job keeps running on the trainer regardless of this connection, so a
         dropped stream is recoverable: we reconnect with exponential backoff, and
         also poll the plain job endpoint as a fallback for middleboxes that break
-        long-lived SSE (see :meth:`_poll_state`). We only abandon the job once the
-        trainer has been continuously unreachable for ``trainer_stream_reconnect_max_s``
-        seconds.
+        long-lived SSE (see :meth:`_poll_state`). Prolonged outages are logged
+        but never mistaken for training failures.
         """
         settings = get_settings()
-        unreachable_budget_s = settings.trainer_stream_reconnect_max_s
-        max_backoff_s = settings.trainer_stream_reconnect_backoff_max_s
+        if isinstance(context.job.progress, int):
+            self._last_progress = max(self._last_progress, context.job.progress)
+        unreachable_budget_s = settings.trainer.stream_reconnect_max_s
+        max_backoff_s = settings.trainer.stream_reconnect_backoff_max_s
         backoff_s = _RECONNECT_BACKOFF_S
         # Monotonic timestamp of the last successful contact with the trainer
         # (an event received, or a successful poll). Resets the outage budget.
         last_contact = time.monotonic()
+        disconnected = False
+        warned = False
         while True:
             try:
                 completed, received_event = await self._consume_event_stream(context, remote_job_id)
             except httpx.HTTPError as exc:
                 # Connection-level failure while opening or reading the stream.
-                self._log.warning("Trainer event stream connection failed, reconnecting: {}", exc)
+                self._log.debug("Trainer event stream connection failed, reconnecting: {}", exc)
                 completed, received_event = False, False
 
             if completed:
@@ -371,12 +424,22 @@ class RemoteTrainingBackend:
                 return
 
             if received_event or reachable:
+                if disconnected:
+                    self._log.info("Trainer connection restored")
+                    # A message-less trainer state cannot clear the stored outage message.
+                    context.progress(self._last_progress, message="Trainer connection restored")
+                disconnected = warned = False
                 last_contact = time.monotonic()
                 backoff_s = _RECONNECT_BACKOFF_S
-            elif time.monotonic() - last_contact > unreachable_budget_s:
-                raise RemoteTrainingError(
-                    f"Trainer unreachable for over {unreachable_budget_s:.0f}s; abandoning progress tracking"
-                )
+            else:
+                if not disconnected:
+                    context.progress(self._last_progress, message="Trainer unreachable; waiting to reconnect")
+                    disconnected = True
+                if not warned and time.monotonic() - last_contact > unreachable_budget_s:
+                    self._log.warning(
+                        "Trainer unreachable for over {:.0f}s; waiting for connection", unreachable_budget_s
+                    )
+                    warned = True
 
             await asyncio.sleep(backoff_s)
             backoff_s = min(backoff_s * 2, max_backoff_s)
@@ -393,6 +456,10 @@ class RemoteTrainingBackend:
                 response = await client.get(f"{self._base_url}/jobs/{remote_job_id}")
                 response.raise_for_status()
                 data = response.json()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (404, 410):
+                raise RemoteTrainingError(f"Remote training job {remote_job_id} no longer exists") from exc
+            return False, False
         except httpx.HTTPError:
             return False, False
         if not isinstance(data, dict):
@@ -434,7 +501,7 @@ class RemoteTrainingBackend:
                         continue
                     if kind == "error":
                         # Transient read error: surface to the reconnect loop.
-                        self._log.warning("Trainer event stream read error: {}", payload)
+                        self._log.debug("Trainer event stream read error: {}", payload)
                         result = False, received_event
                         continue
 
@@ -488,16 +555,16 @@ class RemoteTrainingBackend:
         remote_progress = self._coerce_progress(state.get("progress"))
         raw_extra = state.get("extra_info")
         extra_info = self._sanitize_extra_info(raw_extra)
-        context.progress(
-            self._to_local_progress(remote_progress),
-            message=state.get("message"),
-            extra_info=extra_info,
-        )
-        if extra_info is not None:
-            line = render_progress_log(extra_info)
-            if line is not None and line != self._last_progress_log:
-                self._log.info(line)
-                self._last_progress_log = line
+        self._last_progress = max(self._last_progress, self._to_local_progress(remote_progress))
+        context.progress(self._last_progress, message=state.get("message"), extra_info=extra_info)
+        line = render_progress_log(extra_info) if extra_info else None
+        if line is None:
+            message = state.get("message")
+            if isinstance(message, str) and message:
+                line = message
+        if line is not None and line != self._last_progress_log:
+            self._log.info(line)
+            self._last_progress_log = line
 
         if status in _TERMINAL_STATES:
             if status == "completed":
@@ -542,7 +609,7 @@ class RemoteTrainingBackend:
         """Stream the model archive and extract it into the model directory."""
         settings = get_settings()
         tmp_archive = Path(tempfile.gettempdir()) / f"remote-model-{uuid.uuid4().hex}.zip"
-        stream_timeout = httpx.Timeout(self._timeout, read=settings.trainer_download_read_timeout_s)
+        stream_timeout = httpx.Timeout(self._timeout, read=settings.trainer.download_read_timeout_s)
         self._log.info("Downloading trained model artifact from trainer job {}", remote_job_id)
         started = time.monotonic()
         try:
@@ -614,6 +681,8 @@ class RemoteTrainingBackend:
                 raise RemoteTrainingError(f"Artifact download truncated: received {received} of {expected_bytes} bytes")
             except (httpx.HTTPError, RemoteTrainingError) as exc:
                 if attempt == _TRANSFER_RETRY_LIMIT:
+                    if isinstance(exc, httpx.TransportError):
+                        raise
                     raise RemoteTrainingError(str(exc) or "Model download could not be resumed") from exc
                 self._log.warning("Model download interrupted; resuming from {} bytes", received)
         raise RemoteTrainingError("Model download could not be resumed")
@@ -653,7 +722,17 @@ class RemoteTrainingBackend:
         archive.extract_to(output_dir, min_free_bytes=min_free_bytes)
 
     async def _handle_stop_request(self, context: TrainingContext, remote_job_id: uuid.UUID) -> None:
-        """Suspend on shutdown; cancel the remote job for a user stop request."""
+        """Cancel on a user stop request; suspend on shutdown.
+
+        Checked in this order because ``should_stop`` is a combined signal (user
+        cancel OR app shutdown): a user cancellation must win even when a backend
+        shutdown happens to be in flight at the same time, otherwise the job the
+        user explicitly stopped is left running on the trainer and gets silently
+        reattached to on the next startup.
+        """
+        if context.should_cancel_job():
+            await self._cancel(remote_job_id)
+            raise TrainingCanceledError("Training canceled")
         if context.should_suspend():
             raise TrainingSuspendedError("Studio shutting down; leaving remote training job running for reattach")
         await self._cancel(remote_job_id)

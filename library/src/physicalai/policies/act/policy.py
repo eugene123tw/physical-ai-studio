@@ -3,6 +3,7 @@
 
 """Lightning module for ACT policy."""
 
+import copy
 import json
 import logging
 from pathlib import Path
@@ -32,50 +33,6 @@ from physicalai.policies.base import Policy
 from physicalai.train.utils import reformat_dataset_to_match_policy
 
 logger = logging.getLogger(__name__)
-
-# LeRobot's checkpoint state dict uses a flat "model."/"normalize_inputs."/"normalize_targets."/
-# "unnormalize_outputs." prefix scheme, while physicalai's ACTModel nests the core network under
-# "_model." and splits normalization buffers into "_input_normalizer"/"_output_denormalizer" modules.
-_LEROBOT_ACT_PREFIX_MAP = {
-    "model.": "_model.",
-    "normalize_targets.buffer_action": "_input_normalizer.buffer_action",
-    "normalize_inputs.buffer_observation_state": "_input_normalizer.buffer_state",
-    "unnormalize_outputs.buffer_action": "_output_denormalizer.buffer_action",
-}
-
-
-def _remap_lerobot_act_state_dict(
-    state_dict: dict[str, torch.Tensor],
-    image_feature_names: list[str],
-) -> dict[str, torch.Tensor]:
-    """Remap a LeRobot ``ACTPolicy`` checkpoint state dict to physicalai's native ``ACT`` key names.
-
-    Args:
-        state_dict: State dict as loaded from a LeRobot ``model.safetensors`` checkpoint.
-        image_feature_names: Names of the camera/image input features declared in the checkpoint's
-            ``config.json`` (e.g. ``["observation.images.top"]``), used to remap per-camera
-            normalizer buffers. Single-camera checkpoints use the generic ``images`` buffer name;
-            multi-camera checkpoints key the buffer by feature name, matching ``ACTModel``'s layout.
-
-    Returns:
-        A new state dict with keys renamed to match physicalai's native ``ACTModel``/normalizer layout.
-    """
-    single_camera = len(image_feature_names) == 1
-    remapped: dict[str, torch.Tensor] = {}
-    for key, value in state_dict.items():
-        new_key = key
-        for old_prefix, new_prefix in _LEROBOT_ACT_PREFIX_MAP.items():
-            if key.startswith(old_prefix):
-                new_key = new_prefix + key[len(old_prefix) :]
-                break
-        else:
-            image_prefix = "normalize_inputs.buffer_observation_images_"
-            if key.startswith(image_prefix):
-                suffix = key.split(".")[-1]
-                image_key = f"buffer_{IMAGES}" if single_camera else key[len("normalize_inputs.") : -len(f".{suffix}")]
-                new_key = f"_input_normalizer.{image_key}.{suffix}"
-        remapped[new_key] = value
-    return remapped
 
 
 class ACT(ExportablePolicyMixin, Policy):
@@ -116,6 +73,8 @@ class ACT(ExportablePolicyMixin, Policy):
         optimizer_lr: Learning rate for the optimizer.
         optimizer_weight_decay: Weight decay for the optimizer.
         optimizer_grad_clip_norm: Maximum gradient norm for gradient clipping.
+        use_imagenet_stats: Whether to normalize 3-channel visual observations using ImageNet
+            mean and std instead of empirical dataset statistics.
         dataset_stats: Dataset normalization statistics for eager model initialization
             (used when restoring from a checkpoint).
 
@@ -164,10 +123,12 @@ class ACT(ExportablePolicyMixin, Policy):
         temporal_ensemble_coeff: float | None = None,
         dropout: float = 0.1,
         kl_weight: float = 10.0,
-        optimizer_lr: float = 1e-4,
+        optimizer_lr: float = 1e-5,
+        optimizer_lr_backbone: float = 1e-5,
         optimizer_weight_decay: float = 1e-4,
-        optimizer_grad_clip_norm: float = 10000.0,
+        optimizer_grad_clip_norm: float = 10.0,
         compile_model: bool = False,
+        use_imagenet_stats: bool = True,
         # Eager initialization (for checkpoint loading)
         dataset_stats: dict[str, Any] | None = None,
     ) -> None:
@@ -189,6 +150,7 @@ class ACT(ExportablePolicyMixin, Policy):
             self.config, dataset_stats, weights_file = self._from_hf(
                 pretrained_name_or_path,
                 optimizer_lr=optimizer_lr,
+                optimizer_lr_backbone=optimizer_lr_backbone,
                 optimizer_weight_decay=optimizer_weight_decay,
                 optimizer_grad_clip_norm=optimizer_grad_clip_norm,
                 compile_model=compile_model,
@@ -219,9 +181,11 @@ class ACT(ExportablePolicyMixin, Policy):
                 dropout=dropout,
                 kl_weight=kl_weight,
                 optimizer_lr=optimizer_lr,
+                optimizer_lr_backbone=optimizer_lr_backbone,
                 optimizer_weight_decay=optimizer_weight_decay,
                 optimizer_grad_clip_norm=optimizer_grad_clip_norm,
                 compile_model=compile_model,
+                use_imagenet_stats=use_imagenet_stats,
             )
 
         # Save config as hyperparameters for checkpoint restoration
@@ -237,6 +201,8 @@ class ACT(ExportablePolicyMixin, Policy):
 
         # Eager initialization if dataset_stats is provided
         if dataset_stats is not None:
+            if self.config.use_imagenet_stats and weights_file is None:
+                dataset_stats = _with_imagenet_stats(dataset_stats)
             self._initialize_model(dataset_stats, weights_file)
 
         self._dataset_stats = dataset_stats
@@ -246,6 +212,7 @@ class ACT(ExportablePolicyMixin, Policy):
         pretrained_name_or_path: str | Path,
         *,
         optimizer_lr: float,
+        optimizer_lr_backbone: float,
         optimizer_weight_decay: float,
         optimizer_grad_clip_norm: float,
         compile_model: bool,
@@ -256,6 +223,7 @@ class ACT(ExportablePolicyMixin, Policy):
             pretrained_name_or_path: HuggingFace repo ID or local directory containing
                 ``config.json`` and ``model.safetensors``.
             optimizer_lr: Learning rate override for the resolved config.
+            optimizer_lr_backbone: Backbone learning rate override for the resolved config.
             optimizer_weight_decay: Weight decay override for the resolved config.
             optimizer_grad_clip_norm: Gradient clip norm override for the resolved config.
             compile_model: Whether to apply ``torch.compile`` to the resolved model.
@@ -315,9 +283,11 @@ class ACT(ExportablePolicyMixin, Policy):
             dropout=hf_config["dropout"],
             kl_weight=hf_config["kl_weight"],
             optimizer_lr=optimizer_lr,
+            optimizer_lr_backbone=optimizer_lr_backbone,
             optimizer_weight_decay=optimizer_weight_decay,
             optimizer_grad_clip_norm=optimizer_grad_clip_norm,
             compile_model=compile_model,
+            use_imagenet_stats=hf_config.get("use_imagenet_stats", True),
         )
 
         return config, dataset_stats, weights_file
@@ -341,9 +311,10 @@ class ACT(ExportablePolicyMixin, Policy):
         """
         features: dict[str, Feature] = {}
         for stat in dataset_stats.values():
+            ftype = cast("FeatureType", stat["type"])
             features[str(stat["name"])] = Feature(
                 name=str(stat["name"]),
-                ftype=cast("FeatureType", stat["type"]),
+                ftype=ftype,
                 shape=cast("tuple[int, ...]", stat["shape"]),
                 normalization_data=NormalizationParameters(
                     mean=cast("list[float]", stat["mean"]),
@@ -424,7 +395,11 @@ class ACT(ExportablePolicyMixin, Policy):
             reformat_dataset_to_match_policy(self, datamodule)
             return
 
-        stats_dict = train_dataset.stats
+        stats_dict = (
+            _with_imagenet_stats(train_dataset.stats)
+            if self.config.use_imagenet_stats
+            else copy.deepcopy(train_dataset.stats)
+        )
 
         self.hparams["dataset_stats"] = stats_dict
 
@@ -456,7 +431,7 @@ class ACT(ExportablePolicyMixin, Policy):
 
     # select_action() is inherited from Policy base class - uses queue with predict_action_chunk()
 
-    def forward(self, batch: Observation) -> torch.Tensor | tuple[torch.Tensor, dict[str, float]]:
+    def forward(self, batch: Observation) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor | float]]:
         """Perform forward pass of the ACT policy.
 
         The return value depends on the model's training mode:
@@ -467,7 +442,7 @@ class ACT(ExportablePolicyMixin, Policy):
             batch (Observation): Input batch of observations
 
         Returns:
-            torch.Tensor | tuple[torch.Tensor, dict[str, float]]: In training mode, returns
+            torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor | float]]: In training mode, returns
                 tuple of (loss, loss_dict). In eval mode, returns action chunk tensor.
 
         Raises:
@@ -484,7 +459,7 @@ class ACT(ExportablePolicyMixin, Policy):
         # During evaluation, return action chunk predictions
         return self.predict_action_chunk(batch)
 
-    def compute_val_loss(self, batch: Observation) -> tuple[torch.Tensor, dict[str, float]]:
+    def compute_val_loss(self, batch: Observation) -> tuple[torch.Tensor, dict[str, torch.Tensor | float]]:
         """Compute validation loss on a batch.
 
         Delegates to the model's ``compute_val_loss`` without toggling
@@ -532,13 +507,26 @@ class ACT(ExportablePolicyMixin, Policy):
         Returns:
             Optimizer configuration dict.
         """
-        # Get trainable parameters
-        params = [p for p in self.parameters() if p.requires_grad]
+        backbone_params = []
+        other_params = []
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue
+            if ".backbone." in name:
+                backbone_params.append(param)
+            else:
+                other_params.append(param)
 
-        # Create optimizer (use config values)
+        param_groups: list[dict[str, Any]] = [
+            {"params": other_params, "lr": self.config.optimizer_lr},
+        ]
+        if backbone_params:
+            param_groups.append(
+                {"params": backbone_params, "lr": self.config.optimizer_lr_backbone},
+            )
+
         optimizer = torch.optim.AdamW(
-            params,
-            lr=self.config.optimizer_lr,
+            param_groups,
             weight_decay=self.config.optimizer_weight_decay,
         )
 
@@ -739,7 +727,7 @@ class ACT(ExportablePolicyMixin, Policy):
         extra_args["openvino"] = OpenVINOExportParameters(
             outputs=output_names,
             export_tokenizer=False,
-            compress_to_fp16=True,
+            compress_to_fp16=False,
             exporter_kwargs={},
             preprocessors_specs=preproc_specs,
             postprocessors_specs=postproc_specs,
@@ -754,3 +742,73 @@ class ACT(ExportablePolicyMixin, Policy):
         )
 
         return extra_args
+
+
+_RGB_CHANNELS = 3
+_IMAGENET_MEAN: list[float] = [0.485, 0.456, 0.406]
+_IMAGENET_STD: list[float] = [0.229, 0.224, 0.225]
+
+# LeRobot's checkpoint state dict uses a flat "model."/"normalize_inputs."/"normalize_targets."/
+# "unnormalize_outputs." prefix scheme, while physicalai's ACTModel nests the core network under
+# "_model." and splits normalization buffers into "_input_normalizer"/"_output_denormalizer" modules.
+_LEROBOT_ACT_PREFIX_MAP = {
+    "model.": "_model.",
+    "normalize_targets.buffer_action": "_input_normalizer.buffer_action",
+    "normalize_inputs.buffer_observation_state": "_input_normalizer.buffer_state",
+    "unnormalize_outputs.buffer_action": "_output_denormalizer.buffer_action",
+}
+
+
+def _remap_lerobot_act_state_dict(
+    state_dict: dict[str, torch.Tensor],
+    image_feature_names: list[str],
+) -> dict[str, torch.Tensor]:
+    """Remap a LeRobot ``ACTPolicy`` checkpoint state dict to physicalai's native ``ACT`` key names.
+
+    Args:
+        state_dict: State dict as loaded from a LeRobot ``model.safetensors`` checkpoint.
+        image_feature_names: Names of the camera/image input features declared in the checkpoint's
+            ``config.json`` (e.g. ``["observation.images.top"]``), used to remap per-camera
+            normalizer buffers. Single-camera checkpoints use the generic ``images`` buffer name;
+            multi-camera checkpoints key the buffer by feature name, matching ``ACTModel``'s layout.
+
+    Returns:
+        A new state dict with keys renamed to match physicalai's native ``ACTModel``/normalizer layout.
+    """
+    single_camera = len(image_feature_names) == 1
+    remapped: dict[str, torch.Tensor] = {}
+    for key, value in state_dict.items():
+        new_key = key
+        for old_prefix, new_prefix in _LEROBOT_ACT_PREFIX_MAP.items():
+            if key.startswith(old_prefix):
+                new_key = new_prefix + key[len(old_prefix) :]
+                break
+        else:
+            image_prefix = "normalize_inputs.buffer_observation_images_"
+            if key.startswith(image_prefix):
+                suffix = key.split(".")[-1]
+                image_key = f"buffer_{IMAGES}" if single_camera else key[len("normalize_inputs.") : -len(f".{suffix}")]
+                new_key = f"_input_normalizer.{image_key}.{suffix}"
+        remapped[new_key] = value
+    return remapped
+
+
+def _with_imagenet_stats(dataset_stats: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Return a copy of ``dataset_stats`` with ImageNet mean/std applied to RGB visual features.
+
+    Args:
+        dataset_stats: Per-feature normalization statistics.
+
+    Returns:
+        A deep copy of ``dataset_stats`` with RGB visual feature stats replaced.
+    """
+    stats = copy.deepcopy(dataset_stats)
+    for stat in stats.values():
+        shape = stat["shape"]
+        if (
+            FeatureType(stat["type"]) == FeatureType.VISUAL
+            and len(shape) >= _RGB_CHANNELS
+            and shape[0] == _RGB_CHANNELS
+        ):
+            stat["mean"], stat["std"] = list(_IMAGENET_MEAN), list(_IMAGENET_STD)
+    return stats

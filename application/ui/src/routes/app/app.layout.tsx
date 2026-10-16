@@ -1,16 +1,19 @@
 import { Suspense } from 'react';
 
-import { Flex, Grid, Loading, Tabs, View } from '@geti-ui/ui';
+import { Grid, Loading, Tabs, View } from '@geti-ui/ui';
 import { Outlet, useLocation } from 'react-router';
 
-import { AppLogo } from '../../components/app-logo/app-logo';
+import { AppFooter } from '../../components/app-footer/app-footer';
+import { featureFlags } from '../../config/feature-flags';
 import { AppSidebar } from './app-sidebar';
 import { disabledNavItemKeys } from './nav-items';
 
-import classes from './app.layout.module.css';
-
 const getSelectedNavKey = (pathname: string) => {
     const [, firstSegment] = pathname.split('/');
+
+    if (firstSegment === 'plugins' && !featureFlags.plugins) {
+        return 'projects';
+    }
 
     return firstSegment || 'projects';
 };
@@ -25,30 +28,32 @@ export const AppLayout = () => {
             aria-label='Main navigation'
             selectedKey={selectedKey}
             disabledKeys={disabledNavItemKeys}
-            UNSAFE_className={classes.layout}
             minHeight={0}
             height={'100%'}
             width={'100%'}
         >
             <Grid
-                areas={['header header', 'sidebar content']}
-                rows={['size-800', 'minmax(0, 1fr)']}
+                areas={['sidebar content', 'footer footer']}
+                rows={['minmax(0, 1fr)', 'size-400']}
                 columns={['size-3000', 'minmax(0, 1fr)']}
                 minHeight={0}
                 height='100%'
                 width={'100%'}
             >
-                <View gridArea='header' backgroundColor='gray-300'>
-                    <Flex height='100%' alignItems={'center'} marginX='1rem'>
-                        <AppLogo />
-                    </Flex>
-                </View>
                 <AppSidebar />
-                <View gridArea='content' minHeight={0} height='100%' backgroundColor={'gray-100'} padding='size-400'>
+                <View
+                    gridArea='content'
+                    minHeight={0}
+                    height='100%'
+                    backgroundColor={'gray-75'}
+                    position={'relative'}
+                    padding={'size-300'}
+                >
                     <Suspense fallback={<Loading mode='overlay' />}>
                         <Outlet />
                     </Suspense>
                 </View>
+                <AppFooter />
             </Grid>
         </Tabs>
     );

@@ -1,12 +1,16 @@
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, computed_field
 
-from schemas.base import BaseIDModel, Field
+from schemas.base import BaseIDModel, Field, UTCDatetime
+
+LORA_PROPERTY = "lora_enabled"
+DORA_PROPERTY = "lora_use_dora"
+SNAPFLOW_PROPERTY = "snapflow_enabled"
 
 
 class Model(BaseIDModel):
@@ -20,7 +24,7 @@ class Model(BaseIDModel):
     train_job_id: UUID | None = Field(None, description="ID of the training job that created this model")
     parent_model_id: UUID | None = Field(None, description="Parent model this was retrained from")
     version: int = Field(1, description="Model version, incremented on each retrain")
-    created_at: datetime | None = Field(None)
+    created_at: UTCDatetime | None = Field(None)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -41,6 +45,34 @@ class Model(BaseIDModel):
             backends.append(backend_dir.name)
 
         return sorted(backends)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def lora_enabled(self) -> bool:
+        """Whether this model was fine-tuned with LoRA/DoRA.
+
+        Read from ``properties`` (no column, no migration needed) but typed here so
+        clients don't reach into an untyped bag.
+        """
+        return bool(self.properties.get(LORA_PROPERTY))
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def lora_use_dora(self) -> bool:
+        """Whether this model's LoRA fine-tuning used the DoRA variant."""
+        return bool(self.properties.get(DORA_PROPERTY))
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def snapflow_enabled(self) -> bool:
+        """Whether this model's checkpoint is a SnapFlow-distilled one.
+
+        Read from ``properties`` rather than a column so surfacing it needed no
+        migration, but exposed as a typed field so clients do not have to reach
+        into an untyped bag to render it.
+        """
+        return bool(self.properties.get(SNAPFLOW_PROPERTY))
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -146,7 +178,7 @@ class BackendExportDetail(BaseModel):
     type: str
     size_bytes: int
     file_count: int
-    exported_at: datetime | None = None
+    exported_at: UTCDatetime | None = None
     io_spec: BackendIOSpec | None = None
 
     @classmethod
@@ -160,7 +192,7 @@ class BackendExportDetail(BaseModel):
             return None
 
         total_size = sum(f.stat().st_size for f in files)
-        exported_at = datetime.fromtimestamp(backend_dir.stat().st_mtime)
+        exported_at = datetime.fromtimestamp(backend_dir.stat().st_mtime, tz=UTC)
 
         return cls(
             type=backend_dir.name,
@@ -172,14 +204,23 @@ class BackendExportDetail(BaseModel):
 
 
 class TrainingSummary(BaseModel):
+    max_epochs: int | None = None
     max_steps: int | None = None
     batch_size: int | None = None
     auto_scale_batch_size: bool | None = None
     num_workers: int | str | None = None
     precision: str | None = None
     compile_model: bool | None = None
+    augment_images: bool | None = None
     val_split: float | None = None
     device_type: str | None = None
+    lora_enabled: bool | None = None
+    lora_rank: int | None = None
+    lora_alpha: int | None = None
+    lora_dropout: float | None = None
+    lora_use_dora: bool | None = None
+    snapflow_enabled: bool | None = None
+    snapflow_distill_epochs: int | None = None
 
 
 class ModelDetailResponse(BaseModel):

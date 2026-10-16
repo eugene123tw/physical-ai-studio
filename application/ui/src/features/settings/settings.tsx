@@ -1,10 +1,12 @@
-import { ReactNode } from 'react';
+import { ReactNode, Suspense } from 'react';
 
-import { Item, TabList, TabPanels, Tabs } from '@geti-ui/ui';
+import { Item, Loading, TabList, TabPanels, Tabs } from '@geti-ui/ui';
 import { useMatch } from 'react-router';
 
-import { paths } from '../../router';
-import { Compute } from './compute';
+import { paths } from '../../paths';
+import { GeneralSettings } from './general/general-settings';
+import { HotkeysSettings } from './hotkeys/hotkeys-settings';
+import { TrainingTargets } from './training-targets';
 
 type TabItem = {
     key: string;
@@ -16,41 +18,43 @@ type TabItem = {
 const useActiveTab = () => {
     const match = useMatch(paths.settings.index.path(':activeTab').pattern);
 
-    return match?.params?.activeTab ?? 'compute';
+    return match?.params?.activeTab ?? 'general';
 };
 
 export const SettingsView = () => {
     const activeTab = useActiveTab();
 
     const tabs: TabItem[] = [
-        /*{
+        {
             key: 'general',
             name: 'General',
             href: paths.settings.index.pattern,
-            content: <></>,
-        },*/
-        {
-            key: 'compute',
-            name: 'Compute',
-            href: paths.settings.compute.pattern,
-            content: <Compute />,
-        },
-        /*{
-            key: 'storage',
-            name: 'Storage',
-            href: paths.settings.storage.pattern,
-            content: <></>,
+            content: (
+                <Suspense fallback={<Loading />}>
+                    <GeneralSettings />
+                </Suspense>
+            ),
         },
         {
-            key: 'about',
-            name: 'About',
-            href: paths.settings.about.pattern,
-            content: <></>,
-        },*/
+            key: 'training-targets',
+            name: 'Training Targets',
+            href: paths.settings.trainingTargets.pattern,
+            content: <TrainingTargets />,
+        },
+        {
+            key: 'hotkeys',
+            name: 'Hotkeys',
+            href: paths.settings.hotkeys.pattern,
+            content: (
+                <Suspense fallback={<Loading />}>
+                    <HotkeysSettings />
+                </Suspense>
+            ),
+        },
     ];
 
     return (
-        <Tabs items={tabs} selectedKey={activeTab}>
+        <Tabs items={tabs} selectedKey={activeTab} height={'100%'} minHeight={0}>
             <TabList aria-label={'Settings tabs'}>
                 {(tabItem: TabItem) => (
                     <Item key={tabItem.key} href={tabItem.href}>
@@ -58,7 +62,9 @@ export const SettingsView = () => {
                     </Item>
                 )}
             </TabList>
-            <TabPanels>{(tabItem: TabItem) => <Item key={tabItem.key}>{tabItem.content}</Item>}</TabPanels>
+            <TabPanels minHeight={0} UNSAFE_style={{ overflowY: 'auto', scrollbarGutter: 'stable' }}>
+                {(tabItem: TabItem) => <Item key={tabItem.key}>{tabItem.content}</Item>}
+            </TabPanels>
         </Tabs>
     );
 };

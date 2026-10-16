@@ -1,21 +1,14 @@
 import { defineConfig, loadEnv } from '@rsbuild/core';
-import { pluginBabel } from '@rsbuild/plugin-babel';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginSvgr } from '@rsbuild/plugin-svgr';
 
-const { publicVars } = loadEnv({ prefixes: ['PUBLIC_'] });
-
-const DEFAULT_FALSE = '"false"';
+const { publicVars, rawPublicVars } = loadEnv({ prefixes: ['PUBLIC_'] });
+const apiProxyTarget = rawPublicVars.PUBLIC_API_PROXY_TARGET ?? 'http://localhost:7860';
 
 export default defineConfig({
     plugins: [
-        pluginReact(),
-        pluginBabel({
-            include: /\.[jt]sx?$/,
-            exclude: [/[\\/]node_modules[\\/]/],
-            babelLoaderOptions(opts) {
-                opts.plugins?.unshift('babel-plugin-react-compiler');
-            },
+        pluginReact({
+            reactCompiler: true,
         }),
 
         pluginSvgr({
@@ -32,10 +25,6 @@ export default defineConfig({
                 publicVars['import.meta.env.PUBLIC_API_BASE_URL'] ?? '"http://localhost:3000"',
             'process.env.PUBLIC_API_BASE_URL':
                 publicVars['process.env.PUBLIC_API_BASE_URL'] ?? '"http://localhost:3000"',
-            'import.meta.env.PUBLIC_ENABLE_REMOTE_TRAINERS':
-                publicVars['import.meta.env.PUBLIC_ENABLE_REMOTE_TRAINERS'] ?? DEFAULT_FALSE,
-            'process.env.PUBLIC_ENABLE_REMOTE_TRAINERS':
-                publicVars['process.env.PUBLIC_ENABLE_REMOTE_TRAINERS'] ?? DEFAULT_FALSE,
             // Needed to prevent an issue with spectrum's picker
             // eslint-disable-next-line max-len
             // https://github.com/adobe/react-spectrum/blob/6173beb4dad153aef74fc81575fd97f8afcf6cb3/packages/%40react-spectrum/overlays/src/OpenTransition.tsx#L40
@@ -48,6 +37,15 @@ export default defineConfig({
     },
     tools: {
         rspack: {
+            // Scalar intentionally imports user-provided plugins at runtime. Rspack
+            // cannot statically resolve that expression, but it is not bundled and
+            // does not affect the API reference's normal operation.
+            ignoreWarnings: [
+                {
+                    module: /@scalar[\\/]api-reference[\\/]dist[\\/]standalone[\\/]lib[\\/]load-plugins-from-urls\.js$/,
+                    message: /Critical dependency: the request of a dependency is an expression/,
+                },
+            ],
             watchOptions: {
                 ignored: ['**/src-tauri/**'],
             },
@@ -56,8 +54,7 @@ export default defineConfig({
     server: {
         proxy: {
             '/api': {
-                target: 'http://localhost:7860',
-                //target: 'http://192.168.2.117:7860',
+                target: apiProxyTarget,
                 changeOrigin: true,
                 ws: true,
                 //pathRewrite: { '^/api': '' }, // strip the /api prefix

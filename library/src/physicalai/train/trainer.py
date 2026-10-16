@@ -7,15 +7,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable  # noqa: TC003
 from typing import Any
 
 import lightning
 import torch
 from lightning.pytorch.callbacks import BatchSizeFinder, LearningRateMonitor
+from lightning.pytorch.loggers import Logger  # noqa: TC002
 from lightning.pytorch.strategies import DDPStrategy
+from physicalai.config import instantiate
 
 from physicalai.train.callbacks import PolicyDatasetInteraction
-from physicalai.training_config.instantiate import instantiate_obj_from_dict
 
 
 class Trainer(lightning.Trainer):
@@ -77,7 +79,7 @@ class Trainer(lightning.Trainer):
         num_nodes: int = 1,
         precision: Any = None,
         # Logging & Checkpointing
-        logger: Any = None,  # Keep Lightning's default (None = auto-create TensorBoardLogger)
+        logger: Logger | Iterable[Logger] | bool | None = None,  # Keep Lightning's default (None = auto TB logger)
         callbacks: list | Any | None = None,
         default_root_dir: str | Any | None = "experiments",  # Changed from None to "experiments"
         enable_checkpointing: bool | None = None,
@@ -94,7 +96,7 @@ class Trainer(lightning.Trainer):
         limit_val_batches: float | None = None,
         limit_test_batches: float | None = None,
         limit_predict_batches: float | None = None,
-        val_check_interval: float | None = None,
+        val_check_interval: int | float | None = None,  # noqa: PYI041
         check_val_every_n_epoch: int | None = 1,
         num_sanity_val_steps: int | None = 0,  # Default to 0 for embodied AI
         # Optimization
@@ -177,7 +179,7 @@ class Trainer(lightning.Trainer):
         normalized_callbacks: list[Any] = []
         for callback in user_callbacks:
             if isinstance(callback, dict) and "class_path" in callback:
-                normalized_callbacks.append(instantiate_obj_from_dict(callback))
+                normalized_callbacks.append(instantiate(callback))
             else:
                 normalized_callbacks.append(callback)
 

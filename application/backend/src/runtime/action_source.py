@@ -255,7 +255,7 @@ class StudioActionSource:
         for command in self._mailbox.drain():
             if isinstance(command, StartTaskCommand | StopTaskCommand | SetFollowerSourceCommand):
                 # Any explicit mode change takes the arm away from a return in progress.
-                self._cancel_return_home()
+                self._cancel_return_home(robot_state)
             if isinstance(command, LoadModelCommand):
                 self._handle_load_model(command)
             elif isinstance(command, StartTaskCommand):
@@ -277,6 +277,7 @@ class StudioActionSource:
         self._cancel_arming()
         self._follower_source = "hold"
         current = np.array(robot_state.joint_positions, dtype=np.float32, copy=True)
+        self._reset_interpolation()
         travel = float(np.max(np.abs(self._home_target - current), initial=0.0))
         if travel == 0.0:
             self._return_home = None
@@ -305,18 +306,21 @@ class StudioActionSource:
             if error[worst] > RETURN_HOME_MAX_TRACKING_ERROR:
                 self._abort_return_home(measured, joint_index=worst, error=float(error[worst]))
                 return
+        if move.step >= move.steps:
+            # Finish only after an observation has tracked the final command.
+            self._return_home = None
+            self._emit_state()
+            return
         move.step += 1
         t = move.step / move.steps
         move.last_command = (move.start * (1.0 - t) + move.target * t).astype(np.float32)
         self._hold_target = move.last_command.copy()
-        if move.step >= move.steps:
-            self._return_home = None
-            self._emit_state()
 
     def _abort_return_home(self, measured: np.ndarray, *, joint_index: int, error: float) -> None:
         self._return_home = None
         # Hold where the arm actually is so the servos stop pushing against whatever blocked it.
         self._hold_target = measured.copy()
+        self._reset_interpolation()
         joint_names = list(self._follower.joint_names)
         joint = joint_names[joint_index] if joint_index < len(joint_names) else str(joint_index)
         message = (
@@ -327,11 +331,19 @@ class StudioActionSource:
         self._event_sink.emit(ErrorEvent(message=message, error_code="return_home_aborted"))
         self._emit_state()
 
-    def _cancel_return_home(self) -> None:
+    def _cancel_return_home(self, robot_state: RobotObservation) -> None:
         if self._return_home is None:
             return
         self._return_home = None
+        # Hold the measured pose: a later "hold" request is a no-op while already holding.
+        self._hold_target = np.array(robot_state.joint_positions, dtype=np.float32, copy=True)
+        self._reset_interpolation()
         self._emit_state()
+
+    def _reset_interpolation(self) -> None:
+        # RobotRuntime blends each new action from the previous target, not the measured pose.
+        if self._interpolator is not None:
+            self._interpolator.reset()
 
     def _handle_set_interpolation(self, command: SetInterpolationCommand) -> None:
         if self._interpolator is None:

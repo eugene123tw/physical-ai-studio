@@ -224,6 +224,15 @@ describe('InferenceViewer', () => {
 
         expect(setInterpolation.mutate).toHaveBeenCalledWith(3, expect.anything());
     });
+
+    it('locks the interpolation slider until the session confirms a change', async () => {
+        const { setInterpolation } = mockSession({ interpolationMultiplier: 2 });
+        setInterpolation.isPending = true;
+
+        renderViewer();
+
+        expect(await screen.findByRole('slider', { name: 'Interpolation' })).toBeDisabled();
+    });
 });
 
 describe('InferenceViewer task prompt', () => {

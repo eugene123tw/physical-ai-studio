@@ -120,6 +120,8 @@ export const InferenceViewer = ({ tasks }: InferenceViewerProps) => {
                         step={1}
                         value={pendingInterpolation ?? state.interpolation_multiplier}
                         getValueLabel={(value) => `${value}x`}
+                        // Locked until the session confirms, so a stale confirmation cannot override a newer pick.
+                        isDisabled={setInterpolation.isPending}
                         onChange={setPendingInterpolation}
                         onChangeEnd={(value) => {
                             if (value === state.interpolation_multiplier) {

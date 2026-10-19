@@ -126,8 +126,31 @@ def test_return_home_glides_back_to_the_session_start_pose_then_holds() -> None:
 
     np.testing.assert_allclose(commands[0], [8, 16])
     np.testing.assert_allclose(commands[-1], [0, 0])
+    # The return stays active until an observation confirms the final command.
+    assert source.state_data().returning_home is True
+    np.testing.assert_allclose(source.update(_observation([0, 0], 8), {}, 7), [0, 0])
     assert source.state_data().returning_home is False
     np.testing.assert_allclose(source.update(_observation([0, 0], 10), {}, 9), [0, 0])
+
+
+def test_return_home_aborts_when_the_arm_is_blocked_short_of_home() -> None:
+    follower = FakeRobot([_observation([0, 0], 1)])
+    source, mailbox, events = _source(follower=follower, leader=None, fps=2)
+    source.update(_observation([0, 0], 1), {}, 0)
+    mailbox.apply(ReturnHomeCommand())
+    commands = [source.update(_observation([10, 0], 2), {}, 1)]
+    for step in range(4):
+        commands.append(source.update(_observation(list(commands[-1]), 3 + step), {}, 2 + step))
+    np.testing.assert_allclose(commands[-1], [0, 0])
+    _drain(events)
+
+    # Blocked 1.6 units (16% of the move) short of the final command.
+    action = source.update(_observation([1.6, 0], 8), {}, 7)
+
+    np.testing.assert_allclose(action, [1.6, 0])
+    emitted = _drain(events)
+    assert any(event.event == "error" and event.error_code == "return_home_aborted" for event in emitted)
+    assert source.state_data().returning_home is False
 
 
 def test_return_home_aborts_and_holds_the_measured_pose_when_the_arm_is_blocked() -> None:
@@ -159,6 +182,73 @@ def test_a_mode_change_cancels_return_home() -> None:
     held = source.update(_observation(list(first), 3), {}, 2)
 
     np.testing.assert_allclose(held, first)
+    assert source.state_data().returning_home is False
+
+
+def test_stop_return_holds_the_measured_pose() -> None:
+    follower = FakeRobot([_observation([0, 0], 1)])
+    source, mailbox, _ = _source(follower=follower, leader=None, fps=10)
+    source.update(_observation([0, 0], 1), {}, 0)
+    mailbox.apply(ReturnHomeCommand())
+    source.update(_observation([10, 0], 2), {}, 1)
+
+    # The source is already "hold", so this request only cancels the return.
+    mailbox.apply(SetFollowerSourceCommand(follower_source="hold"))
+    held = source.update(_observation([9.5, 0], 3), {}, 2)
+
+    np.testing.assert_allclose(held, [9.5, 0])
+    assert source.state_data().returning_home is False
+
+
+def _interpolated_source(
+    follower: FakeRobot,
+) -> tuple[StudioActionSource, InMemoryCommandMailbox, AdjustableLinearInterpolator]:
+    mailbox = InMemoryCommandMailbox()
+    interpolator = AdjustableLinearInterpolator(multiplier=3)
+    source = StudioActionSource(
+        follower=follower,
+        leader=None,
+        mailbox=mailbox,
+        event_sink=QueueEventSink(),
+        fps=10,
+        interpolator=interpolator,
+    )
+    source.connect(bus=object(), session_id="test")
+    return source, mailbox, interpolator
+
+
+def _first_substep(interpolator: AdjustableLinearInterpolator, action: np.ndarray) -> np.ndarray:
+    # Mirror RobotRuntime: add the source action, then send substep 0.
+    interpolator.add(action)
+    return interpolator.get(0)
+
+
+def test_return_home_does_not_blend_from_a_stale_target() -> None:
+    follower = FakeRobot([_observation([0], 1)])
+    source, mailbox, interpolator = _interpolated_source(follower)
+    source.update(_observation([0], 1), {}, 0)
+    interpolator.add(np.array([100.0], dtype=np.float32))
+
+    mailbox.apply(ReturnHomeCommand())
+    action = source.update(_observation([10], 2), {}, 1)
+
+    np.testing.assert_allclose(_first_substep(interpolator, action), action)
+    assert float(action[0]) < 10
+
+
+def test_return_home_abort_does_not_blend_from_a_stale_target() -> None:
+    follower = FakeRobot([_observation([0], 1)])
+    source, mailbox, interpolator = _interpolated_source(follower)
+    source.update(_observation([0], 1), {}, 0)
+    mailbox.apply(ReturnHomeCommand())
+    first = source.update(_observation([10], 2), {}, 1)
+    interpolator.add(first)
+
+    # The arm overshoots the 9.6 command by 24% of the move.
+    action = source.update(_observation([12], 3), {}, 2)
+
+    np.testing.assert_allclose(action, [12])
+    np.testing.assert_allclose(_first_substep(interpolator, action), [12])
     assert source.state_data().returning_home is False
 
 

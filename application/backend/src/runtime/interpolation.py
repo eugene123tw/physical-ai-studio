@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import override
-
 from physicalai.runtime import LinearInterpolator
 
 MIN_INTERPOLATION_MULTIPLIER = 1
@@ -32,7 +30,6 @@ class AdjustableLinearInterpolator(LinearInterpolator):
             )
         self._requested = multiplier
 
-    @override
     def needs_new_action(self) -> bool:
         done = super().needs_new_action()
         if done:

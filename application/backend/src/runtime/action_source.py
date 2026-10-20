@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -21,6 +20,7 @@ from runtime.contract import (
     StopTaskCommand,
 )
 from runtime.policy_loader import PolicyLoader, model_identity, requires_task
+from runtime.return_home import RETURN_HOME_DURATION_S, ReturnHomeBlockedError, ReturnHomeSource
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -34,20 +34,6 @@ if TYPE_CHECKING:
     from runtime.contract import CommandMailbox, EventSink, FollowerSource
     from runtime.interpolation import AdjustableLinearInterpolator
     from runtime.policy_loader import ModelIdentity, ObservationSnapshot
-
-# Same duration and collision threshold as RobotRuntime's return_to_initial_state.
-RETURN_HOME_DURATION_S = 2.5
-RETURN_HOME_MAX_TRACKING_ERROR = 0.15
-
-
-@dataclass
-class _ReturnHome:
-    start: np.ndarray
-    target: np.ndarray
-    travel: float
-    steps: int
-    last_command: np.ndarray
-    step: int = 0
 
 
 class StudioActionSource:
@@ -69,13 +55,12 @@ class StudioActionSource:
         self._leader = leader
         self._mailbox = mailbox
         self._event_sink = event_sink
-        self._fps = fps
         self._interpolator = interpolator
         self._max_leader_failures = max(1, int(3 * fps))
         self._follower_source: FollowerSource = "hold"
         self._hold_target: np.ndarray | None = None
         self._home_target: np.ndarray | None = None
-        self._return_home: _ReturnHome | None = None
+        self._return_home: ReturnHomeSource | None = None
         self._last_leader_action: np.ndarray | None = None
         self._last_leader_timestamp: float | None = None
         self._leader_failures = 0
@@ -152,7 +137,7 @@ class StudioActionSource:
         leader_action = self._read_leader(robot_state) if self._leader_reads_enabled else self._last_leader_action
         policy_action = self._policy_action(robot_state, camera_frames, step)
         if self._return_home is not None:
-            self._advance_return_home(robot_state)
+            self._step_return_home(robot_state, camera_frames, step)
 
         if self._follower_source == "teleop" and leader_action is not None:
             return leader_action
@@ -278,53 +263,38 @@ class StudioActionSource:
         self._follower_source = "hold"
         current = np.array(robot_state.joint_positions, dtype=np.float32, copy=True)
         self._reset_interpolation()
-        travel = float(np.max(np.abs(self._home_target - current), initial=0.0))
-        if travel == 0.0:
-            self._return_home = None
-            self._hold_target = self._home_target.copy()
-        else:
-            self._return_home = _ReturnHome(
-                start=current,
-                target=self._home_target.copy(),
-                travel=travel,
-                steps=max(int(RETURN_HOME_DURATION_S * self._fps), 1),
-                last_command=current,
-            )
-            self._hold_target = current.copy()
-            logger.info("Returning follower to its session start pose over {:.1f}s", RETURN_HOME_DURATION_S)
+        self._return_home = ReturnHomeSource(start=current, target=self._home_target)
+        self._hold_target = current
+        logger.info("Returning follower to its session start pose over {:.1f}s", RETURN_HOME_DURATION_S)
         self._emit_state()
 
-    def _advance_return_home(self, robot_state: RobotObservation) -> None:
-        """Step the hold target towards home, aborting if the arm stops following."""
+    def _step_return_home(
+        self,
+        robot_state: RobotObservation,
+        camera_frames: Mapping[str, Frame],
+        step: int,
+    ) -> None:
         move = self._return_home
         if move is None:
             return
-        measured = np.asarray(robot_state.joint_positions, dtype=np.float32)
-        if move.step > 0:
-            error = np.abs(measured - move.last_command) / move.travel
-            worst = int(np.argmax(error))
-            if error[worst] > RETURN_HOME_MAX_TRACKING_ERROR:
-                self._abort_return_home(measured, joint_index=worst, error=float(error[worst]))
-                return
-        if move.step >= move.steps:
-            # Finish only after an observation has tracked the final command.
+        try:
+            self._hold_target = move.update(robot_state, camera_frames, step)
+        except ReturnHomeBlockedError as exc:
+            self._abort_return_home(exc)
+            return
+        if move.finished:
             self._return_home = None
             self._emit_state()
-            return
-        move.step += 1
-        t = move.step / move.steps
-        move.last_command = (move.start * (1.0 - t) + move.target * t).astype(np.float32)
-        self._hold_target = move.last_command.copy()
 
-    def _abort_return_home(self, measured: np.ndarray, *, joint_index: int, error: float) -> None:
+    def _abort_return_home(self, exc: ReturnHomeBlockedError) -> None:
         self._return_home = None
         # Hold where the arm actually is so the servos stop pushing against whatever blocked it.
-        self._hold_target = measured.copy()
+        self._hold_target = exc.measured.copy()
         self._reset_interpolation()
         joint_names = list(self._follower.joint_names)
-        joint = joint_names[joint_index] if joint_index < len(joint_names) else str(joint_index)
+        joint = joint_names[exc.joint_index] if exc.joint_index < len(joint_names) else str(exc.joint_index)
         message = (
-            f"Return home stopped: joint '{joint}' is off by {error:.0%} of the move (possible collision). "
+            f"Return home stopped: joint '{joint}' is off by {exc.error:.0%} of the move (possible collision). "
             "Holding the current pose."
         )
         logger.warning(message)

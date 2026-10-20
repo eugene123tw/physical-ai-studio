@@ -113,59 +113,41 @@ def _drain(events: QueueEventSink) -> list:
 
 def test_return_home_glides_back_to_the_session_start_pose_then_holds() -> None:
     follower = FakeRobot([_observation([0, 0], 1)])
-    source, mailbox, _ = _source(follower=follower, leader=None, fps=2)
+    source, mailbox, _ = _source(follower=follower, leader=None)
     source.update(_observation([0, 0], 1), {}, 0)
 
     mailbox.apply(ReturnHomeCommand())
-    # RETURN_HOME_DURATION_S * fps = 5 steps, each tracked perfectly by the arm.
-    commands = [source.update(_observation([10, 20], 3), {}, 2)]
+    # The move lasts RETURN_HOME_DURATION_S (2.5 s) of observation time.
+    start = source.update(_observation([10, 20], 3), {}, 1)
     assert source.follower_source == "hold"
     assert source.state_data().returning_home is True
-    for step in range(4):
-        commands.append(source.update(_observation(list(commands[-1]), 4 + step), {}, 3 + step))
+    middle = source.update(_observation([10, 20], 4), {}, 2)
+    end = source.update(_observation([6, 12], 5.5), {}, 3)
 
-    np.testing.assert_allclose(commands[0], [8, 16])
-    np.testing.assert_allclose(commands[-1], [0, 0])
+    np.testing.assert_allclose(start, [10, 20])
+    np.testing.assert_allclose(middle, [6, 12])
+    np.testing.assert_allclose(end, [0, 0])
     # The return stays active until an observation confirms the final command.
     assert source.state_data().returning_home is True
-    np.testing.assert_allclose(source.update(_observation([0, 0], 8), {}, 7), [0, 0])
+    np.testing.assert_allclose(source.update(_observation([0, 0], 6), {}, 4), [0, 0])
     assert source.state_data().returning_home is False
-    np.testing.assert_allclose(source.update(_observation([0, 0], 10), {}, 9), [0, 0])
-
-
-def test_return_home_aborts_when_the_arm_is_blocked_short_of_home() -> None:
-    follower = FakeRobot([_observation([0, 0], 1)])
-    source, mailbox, events = _source(follower=follower, leader=None, fps=2)
-    source.update(_observation([0, 0], 1), {}, 0)
-    mailbox.apply(ReturnHomeCommand())
-    commands = [source.update(_observation([10, 0], 2), {}, 1)]
-    for step in range(4):
-        commands.append(source.update(_observation(list(commands[-1]), 3 + step), {}, 2 + step))
-    np.testing.assert_allclose(commands[-1], [0, 0])
-    _drain(events)
-
-    # Blocked 1.6 units (16% of the move) short of the final command.
-    action = source.update(_observation([1.6, 0], 8), {}, 7)
-
-    np.testing.assert_allclose(action, [1.6, 0])
-    emitted = _drain(events)
-    assert any(event.event == "error" and event.error_code == "return_home_aborted" for event in emitted)
-    assert source.state_data().returning_home is False
+    np.testing.assert_allclose(source.update(_observation([0, 0], 7), {}, 5), [0, 0])
 
 
 def test_return_home_aborts_and_holds_the_measured_pose_when_the_arm_is_blocked() -> None:
     follower = FakeRobot([_observation([0, 0], 1)])
-    source, mailbox, events = _source(follower=follower, leader=None, fps=10)
+    source, mailbox, events = _source(follower=follower, leader=None)
     source.update(_observation([0, 0], 1), {}, 0)
     mailbox.apply(ReturnHomeCommand())
     source.update(_observation([10, 0], 2), {}, 1)
+    source.update(_observation([10, 0], 2.25), {}, 2)
+    source.update(_observation([10, 0], 2.5), {}, 3)
     _drain(events)
 
-    # The arm falls 2.2 units behind a 10-unit move: past the 15% threshold.
-    action = source.update(_observation([10, 0], 3), {}, 2)
-    action = source.update(_observation([7, 0], 4), {}, 3)
+    # The arm stays at 10 while the 8 command asks it to move: 20% of a 10-unit move.
+    action = source.update(_observation([10, 0], 2.75), {}, 4)
 
-    np.testing.assert_allclose(action, [7, 0])
+    np.testing.assert_allclose(action, [10, 0])
     emitted = _drain(events)
     assert any(event.event == "error" and event.error_code == "return_home_aborted" for event in emitted)
     assert source.state_data().returning_home is False
@@ -173,7 +155,7 @@ def test_return_home_aborts_and_holds_the_measured_pose_when_the_arm_is_blocked(
 
 def test_a_mode_change_cancels_return_home() -> None:
     follower = FakeRobot([_observation([0, 0], 1)])
-    source, mailbox, _ = _source(follower=follower, leader=None, fps=10)
+    source, mailbox, _ = _source(follower=follower, leader=None)
     source.update(_observation([0, 0], 1), {}, 0)
     mailbox.apply(ReturnHomeCommand())
     first = source.update(_observation([10, 0], 2), {}, 1)
@@ -187,7 +169,7 @@ def test_a_mode_change_cancels_return_home() -> None:
 
 def test_stop_return_holds_the_measured_pose() -> None:
     follower = FakeRobot([_observation([0, 0], 1)])
-    source, mailbox, _ = _source(follower=follower, leader=None, fps=10)
+    source, mailbox, _ = _source(follower=follower, leader=None)
     source.update(_observation([0, 0], 1), {}, 0)
     mailbox.apply(ReturnHomeCommand())
     source.update(_observation([10, 0], 2), {}, 1)
@@ -232,8 +214,8 @@ def test_return_home_does_not_blend_from_a_stale_target() -> None:
     mailbox.apply(ReturnHomeCommand())
     action = source.update(_observation([10], 2), {}, 1)
 
-    np.testing.assert_allclose(_first_substep(interpolator, action), action)
-    assert float(action[0]) < 10
+    np.testing.assert_allclose(action, [10])
+    np.testing.assert_allclose(_first_substep(interpolator, action), [10])
 
 
 def test_return_home_abort_does_not_blend_from_a_stale_target() -> None:
@@ -244,8 +226,8 @@ def test_return_home_abort_does_not_blend_from_a_stale_target() -> None:
     first = source.update(_observation([10], 2), {}, 1)
     interpolator.add(first)
 
-    # The arm overshoots the 9.6 command by 24% of the move.
-    action = source.update(_observation([12], 3), {}, 2)
+    # The arm is 2 units (20% of the move) off the 10 command.
+    action = source.update(_observation([12], 2.25), {}, 2)
 
     np.testing.assert_allclose(action, [12])
     np.testing.assert_allclose(_first_substep(interpolator, action), [12])

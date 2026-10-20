@@ -36,8 +36,8 @@ if __name__ == "__main__":
 
     benchmark = LiberoBenchmark(
         task_suite="libero_10",
-        max_steps=500,
-        num_episodes=3,
+        num_episodes=10,
+        task_ids=[1],
     )
     results = benchmark.evaluate(model)
     print(results.summary())

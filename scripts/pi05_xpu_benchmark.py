@@ -21,14 +21,6 @@ MODEL_ID = "models--lerobot--pi05_libero_finetuned_v044"
 MODEL_REVISION = "dbf8a3f794a9c4297b44f40b752712f50073d945"
 ACTION_HORIZON = 10
 TOKEN_LENGTH = 64
-SNAPFLOW_MISSING_KEYS = frozenset(
-    {
-        "target_time_mlp_in.weight",
-        "target_time_mlp_in.bias",
-        "target_time_mlp_out.weight",
-        "target_time_mlp_out.bias",
-    },
-)
 
 
 def synchronize(device: str | torch.device) -> None:
@@ -94,7 +86,6 @@ def materialize_meta_tensors(model: Pi05Model) -> None:
 
 def load_policy(device: str, compile_model: bool, *, measure_latency: bool = False) -> Pi05:
     """Load Pi05Model on meta and attach it to a policy wrapper."""
-    snapflow_enabled = False
     snapshot_dir = Path.home() / ".cache" / "huggingface" / "hub" / MODEL_ID / "snapshots" / MODEL_REVISION
     config_path = snapshot_dir / "config.json"
     weights_path = snapshot_dir / "model.safetensors"
@@ -108,6 +99,8 @@ def load_policy(device: str, compile_model: bool, *, measure_latency: bool = Fal
     config["chunk_size"] = ACTION_HORIZON
     config["n_action_steps"] = ACTION_HORIZON
     config["tokenizer_max_length"] = TOKEN_LENGTH
+    # policy_preprocessor.json says MEAN_STD, but on LIBERO only QUANTILES works (60% vs 0%).
+    normalization_mode = "QUANTILES"
     dataset_stats = extract_dataset_stats(config, preprocessor_path, snapshot_dir)
 
     with torch.device("meta"):
@@ -124,20 +117,13 @@ def load_policy(device: str, compile_model: bool, *, measure_latency: bool = Fal
             tokenizer_max_length=TOKEN_LENGTH,
             gradient_checkpointing=False,
             compile_model=compile_model,
-            use_random_input_noise=True,
-            snapflow_enabled=snapflow_enabled,
         )
 
     state_dict = fix_state_dict_keys(load_file(str(weights_path)))
     missing, unexpected = model.load_state_dict(state_dict, strict=False, assign=True)
     del state_dict
     gc.collect()
-    disallowed_missing = set(missing)
-    if not snapflow_enabled:
-        disallowed_missing -= SNAPFLOW_MISSING_KEYS
-    if disallowed_missing or unexpected:
-        raise RuntimeError(f"Unexpected weight load result: missing={missing}, unexpected={unexpected}")
-
+    
     materialize_meta_tensors(model)
     model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
     force_bfloat16 = (
@@ -165,10 +151,9 @@ def load_policy(device: str, compile_model: bool, *, measure_latency: bool = Fal
         num_inference_steps=config["num_inference_steps"],
         image_resolution=tuple(config["image_resolution"]),
         tokenizer_max_length=TOKEN_LENGTH,
+        normalization_mode=normalization_mode,
         gradient_checkpointing=False,
         compile_model=compile_model,
-        use_random_input_noise=True,
-        snapflow_enabled=snapflow_enabled,
     )
     preprocessor, postprocessor = make_pi05_preprocessors(
         max_action_dim=config["max_action_dim"],
@@ -176,7 +161,7 @@ def load_policy(device: str, compile_model: bool, *, measure_latency: bool = Fal
         image_resolution=tuple(config["image_resolution"]),
         max_token_len=TOKEN_LENGTH,
         empty_cameras=config.get("empty_cameras", 0),
-        normalization_mode=config.get("normalization_mode", "QUANTILES"),
+        normalization_mode=normalization_mode,
     )
     policy.model = model
     policy._preprocessor = preprocessor

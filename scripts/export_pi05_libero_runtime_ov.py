@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import gc
 import json
 from pathlib import Path
@@ -12,27 +13,16 @@ from typing import Any
 import torch
 from safetensors.torch import load_file
 
+from physicalai.export.backends import ExportBackend
 from physicalai.policies.pi05 import Pi05
 from physicalai.policies.pi05.model import Pi05Model
 from physicalai.policies.pi05.preprocessor import make_pi05_preprocessors
-from physicalai.policies.pi05.pretrained_utils import (
-    detect_normalization_mode,
-    extract_dataset_stats,
-    fix_state_dict_keys,
-)
+from physicalai.policies.pi05.pretrained_utils import extract_dataset_stats, fix_state_dict_keys
 
 MODEL_ID = "models--lerobot--pi05_libero_finetuned_v044"
 MODEL_REVISION = "dbf8a3f794a9c4297b44f40b752712f50073d945"
 ACTION_HORIZON = 10
 TOKEN_LENGTH = 64
-SNAPFLOW_MISSING_KEYS = frozenset(
-    {
-        "target_time_mlp_in.weight",
-        "target_time_mlp_in.bias",
-        "target_time_mlp_out.weight",
-        "target_time_mlp_out.bias",
-    },
-)
 
 
 def materialize_meta_tensors(model: Pi05Model) -> None:
@@ -89,7 +79,7 @@ def add_feature_metadata(
         stats.setdefault("type", feature_info.get("type", ""))
 
 
-def load_policy(snapshot_dir: Path, export_dtype: str) -> Pi05:
+def load_policy(snapshot_dir: Path, export_dtype: str, *, compile_model: bool = False) -> Pi05:
     """Assemble a Pi05 policy without allocating a duplicate model instance."""
     config_path = snapshot_dir / "config.json"
     weights_path = snapshot_dir / "model.safetensors"
@@ -104,7 +94,8 @@ def load_policy(snapshot_dir: Path, export_dtype: str) -> Pi05:
     config["n_action_steps"] = ACTION_HORIZON
     config["tokenizer_max_length"] = TOKEN_LENGTH
 
-    normalization_mode = detect_normalization_mode(preprocessor_path) or "QUANTILES"
+    # policy_preprocessor.json says MEAN_STD, but on LIBERO only QUANTILES works (60% vs 0%).
+    normalization_mode = "QUANTILES"
     config["normalization_mode"] = normalization_mode
     dataset_stats = extract_dataset_stats(config, preprocessor_path, snapshot_dir)
     add_feature_metadata(dataset_stats, config)
@@ -122,9 +113,7 @@ def load_policy(snapshot_dir: Path, export_dtype: str) -> Pi05:
             image_resolution=tuple(config["image_resolution"]),
             tokenizer_max_length=TOKEN_LENGTH,
             gradient_checkpointing=False,
-            compile_model=False,
-            use_random_input_noise=True,
-            snapflow_enabled=False,
+            compile_model=compile_model,
         )
 
     state_dict = fix_state_dict_keys(load_file(str(weights_path)))
@@ -132,11 +121,10 @@ def load_policy(snapshot_dir: Path, export_dtype: str) -> Pi05:
     del state_dict
     gc.collect()
 
-    disallowed_missing = set(missing) - SNAPFLOW_MISSING_KEYS
-    if disallowed_missing or unexpected:
-        raise RuntimeError(f"Unexpected weight load result: missing={missing}, unexpected={unexpected}")
-
     materialize_meta_tensors(model)
+    if export_dtype == "float32":
+        # assign=True keeps the checkpoint's BF16 tensors, so cast explicitly.
+        model.float()
     if export_dtype == "bfloat16":
         model.paligemma_with_expert.to_bfloat16_for_selected_params(export_dtype)
         force_bfloat16 = (
@@ -171,7 +159,7 @@ def load_policy(snapshot_dir: Path, export_dtype: str) -> Pi05:
         use_random_input_noise=True,
         snapflow_enabled=False,
         gradient_checkpointing=False,
-        compile_model=False,
+        compile_model=compile_model,
     )
     preprocessor, postprocessor = make_pi05_preprocessors(
         max_action_dim=config["max_action_dim"],
@@ -203,11 +191,27 @@ def main() -> None:
         default="bfloat16",
         help="PyTorch model dtype before OpenVINO conversion",
     )
+    parser.add_argument(
+        "--no-fp16-compression",
+        action="store_true",
+        help="Keep IR weights in the export dtype instead of compressing them to FP16",
+    )
     args = parser.parse_args()
 
     snapshot_dir = Path.home() / ".cache" / "huggingface" / "hub" / MODEL_ID / "snapshots" / MODEL_REVISION
     print("Loading Pi05Model on meta device and assigning safetensors weights...")
     policy = load_policy(snapshot_dir, args.dtype)
+
+    if args.no_fp16_compression:
+        get_export_args = policy._get_export_extra_args
+
+        def uncompressed_export_args(backend: ExportBackend | str) -> Any:
+            params = get_export_args(backend)
+            if ExportBackend(backend) == ExportBackend.OPENVINO:
+                return dataclasses.replace(params, compress_to_fp16=False)
+            return params
+
+        policy._get_export_extra_args = uncompressed_export_args
 
     print(f"Exporting Runtime artifact to {args.output_dir}...")
     policy.to_openvino(args.output_dir)

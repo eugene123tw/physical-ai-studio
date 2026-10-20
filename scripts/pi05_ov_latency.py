@@ -43,7 +43,7 @@ def main() -> None:
         default=DEFAULT_EXPORT_DIR,
         help="OpenVINO Runtime package containing pi05.xml and manifest.json",
     )
-    parser.add_argument("--device", default="CPU", help="OpenVINO device, such as CPU or GPU (default: CPU)")
+    parser.add_argument("--device", default="GPU", help="OpenVINO device, such as CPU or GPU (default: GPU)")
     parser.add_argument("--num-warmup", type=int, default=10, help="Warmup iterations (default: 10)")
     parser.add_argument("--num-iters", type=int, default=100, help="Timed iterations (default: 100)")
     args = parser.parse_args()

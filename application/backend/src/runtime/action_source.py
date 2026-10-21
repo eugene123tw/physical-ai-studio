@@ -10,7 +10,6 @@ from physicalai.runtime import WorkerDiedError
 from runtime.contract import (
     ErrorEvent,
     LoadModelCommand,
-    ReturnHomeCommand,
     SetFollowerSourceCommand,
     SetInterpolationCommand,
     StartRecordingCommand,
@@ -20,10 +19,9 @@ from runtime.contract import (
     StopTaskCommand,
 )
 from runtime.policy_loader import PolicyLoader, model_identity, requires_task
-from runtime.return_home import RETURN_HOME_DURATION_S, ReturnHomeBlockedError, ReturnHomeSource
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from pathlib import Path
 
     from physicalai.capture.frame import Frame
@@ -50,17 +48,18 @@ class StudioActionSource:
         camera_keys: Sequence[str] = (),
         models_dir: Path | None = None,
         interpolator: AdjustableLinearInterpolator | None = None,
+        returning_home: Callable[[], bool] | None = None,
     ) -> None:
         self._follower = follower
         self._leader = leader
         self._mailbox = mailbox
         self._event_sink = event_sink
         self._interpolator = interpolator
+        # RobotRuntime performs the return; the session that requested it reports whether one is pending.
+        self._returning_home = returning_home or (lambda: False)
         self._max_leader_failures = max(1, int(3 * fps))
         self._follower_source: FollowerSource = "hold"
         self._hold_target: np.ndarray | None = None
-        self._home_target: np.ndarray | None = None
-        self._return_home: ReturnHomeSource | None = None
         self._last_leader_action: np.ndarray | None = None
         self._last_leader_timestamp: float | None = None
         self._leader_failures = 0
@@ -107,7 +106,7 @@ class StudioActionSource:
             dataset_loaded=None if recording is None else recording.dataset_loaded,
             is_recording=None if recording is None else recording.is_recording,
             episodes_recorded=None if recording is None else recording.episodes_recorded,
-            returning_home=self._return_home is not None,
+            returning_home=self._returning_home(),
             interpolation_multiplier=None if self._interpolator is None else self._interpolator.requested_multiplier,
         )
 
@@ -128,16 +127,12 @@ class StudioActionSource:
     ) -> np.ndarray:
         self._last_robot_state = robot_state
         self._last_camera_frames = camera_frames
-        if self._home_target is None:
-            self._home_target = np.array(robot_state.joint_positions, dtype=np.float32, copy=True)
         self._drain_commands(robot_state)
         if self._hold_target is None:
             self._hold_target = np.array(robot_state.joint_positions, dtype=np.float32, copy=True)
 
         leader_action = self._read_leader(robot_state) if self._leader_reads_enabled else self._last_leader_action
         policy_action = self._policy_action(robot_state, camera_frames, step)
-        if self._return_home is not None:
-            self._step_return_home(robot_state, camera_frames, step)
 
         if self._follower_source == "teleop" and leader_action is not None:
             return leader_action
@@ -150,8 +145,6 @@ class StudioActionSource:
         self._bus = None
         self._session_id = None
         self._hold_target = None
-        self._home_target = None
-        self._return_home = None
         self._last_leader_action = None
         self._last_leader_timestamp = None
         self._leader_failures = 0
@@ -238,9 +231,6 @@ class StudioActionSource:
 
     def _drain_commands(self, robot_state: RobotObservation) -> None:
         for command in self._mailbox.drain():
-            if isinstance(command, StartTaskCommand | StopTaskCommand | SetFollowerSourceCommand):
-                # Any explicit mode change takes the arm away from a return in progress.
-                self._cancel_return_home(robot_state)
             if isinstance(command, LoadModelCommand):
                 self._handle_load_model(command)
             elif isinstance(command, StartTaskCommand):
@@ -251,69 +241,8 @@ class StudioActionSource:
                 self._handle_set_follower_source(command, robot_state)
             elif isinstance(command, StartRecordingCommand):
                 self._handle_start_recording(command)
-            elif isinstance(command, ReturnHomeCommand):
-                self._handle_return_home(robot_state)
             elif isinstance(command, SetInterpolationCommand):
                 self._handle_set_interpolation(command)
-
-    def _handle_return_home(self, robot_state: RobotObservation) -> None:
-        if self._home_target is None:
-            return
-        self._cancel_arming()
-        self._follower_source = "hold"
-        current = np.array(robot_state.joint_positions, dtype=np.float32, copy=True)
-        self._reset_interpolation()
-        self._return_home = ReturnHomeSource(start=current, target=self._home_target)
-        self._hold_target = current
-        logger.info("Returning follower to its session start pose over {:.1f}s", RETURN_HOME_DURATION_S)
-        self._emit_state()
-
-    def _step_return_home(
-        self,
-        robot_state: RobotObservation,
-        camera_frames: Mapping[str, Frame],
-        step: int,
-    ) -> None:
-        move = self._return_home
-        if move is None:
-            return
-        try:
-            self._hold_target = move.update(robot_state, camera_frames, step)
-        except ReturnHomeBlockedError as exc:
-            self._abort_return_home(exc)
-            return
-        if move.finished:
-            self._return_home = None
-            self._emit_state()
-
-    def _abort_return_home(self, exc: ReturnHomeBlockedError) -> None:
-        self._return_home = None
-        # Hold where the arm actually is so the servos stop pushing against whatever blocked it.
-        self._hold_target = exc.measured.copy()
-        self._reset_interpolation()
-        joint_names = list(self._follower.joint_names)
-        joint = joint_names[exc.joint_index] if exc.joint_index < len(joint_names) else str(exc.joint_index)
-        message = (
-            f"Return home stopped: joint '{joint}' is off by {exc.error:.0%} of the move (possible collision). "
-            "Holding the current pose."
-        )
-        logger.warning(message)
-        self._event_sink.emit(ErrorEvent(message=message, error_code="return_home_aborted"))
-        self._emit_state()
-
-    def _cancel_return_home(self, robot_state: RobotObservation) -> None:
-        if self._return_home is None:
-            return
-        self._return_home = None
-        # Hold the measured pose: a later "hold" request is a no-op while already holding.
-        self._hold_target = np.array(robot_state.joint_positions, dtype=np.float32, copy=True)
-        self._reset_interpolation()
-        self._emit_state()
-
-    def _reset_interpolation(self) -> None:
-        # RobotRuntime blends each new action from the previous target, not the measured pose.
-        if self._interpolator is not None:
-            self._interpolator.reset()
 
     def _handle_set_interpolation(self, command: SetInterpolationCommand) -> None:
         if self._interpolator is None:

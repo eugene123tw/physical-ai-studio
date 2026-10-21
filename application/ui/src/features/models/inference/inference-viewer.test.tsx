@@ -199,15 +199,16 @@ describe('InferenceViewer', () => {
         expect(returnHome.mutate).toHaveBeenCalled();
     });
 
-    it('stops a return in progress by switching to hold', async () => {
+    it('keeps Return Home pending while the follower returns', async () => {
         const user = userEvent.setup();
-        const { setFollowerSource } = mockSession({ returningHome: true });
+        const { returnHome, setFollowerSource } = mockSession({ returningHome: true });
 
         renderViewer();
 
-        await user.click(await screen.findByRole('button', { name: 'Stop Return' }));
+        await user.click(await screen.findByRole('button', { name: /Return Home/ }));
 
-        expect(setFollowerSource.mutate).toHaveBeenCalledWith('hold');
+        expect(returnHome.mutate).not.toHaveBeenCalled();
+        expect(setFollowerSource.mutate).not.toHaveBeenCalled();
     });
 
     it('shows the session interpolation multiplier and changes it', async () => {

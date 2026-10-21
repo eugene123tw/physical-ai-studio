@@ -145,24 +145,15 @@ export const InferenceViewer = ({ tasks }: InferenceViewerProps) => {
                                 Runtime export
                             </Button>
                         )}
-                        {state.returning_home ? (
-                            <Button
-                                variant='secondary'
-                                isPending={setFollowerSource.isPending}
-                                onPress={() => setFollowerSource.mutate('hold')}
-                            >
-                                Stop Return
-                            </Button>
-                        ) : (
-                            <Button
-                                variant='secondary'
-                                isPending={returnHome.isPending}
-                                isDisabled={startTask.isPending || stopTask.isPending || setFollowerSource.isPending}
-                                onPress={() => returnHome.mutate()}
-                            >
-                                Return Home
-                            </Button>
-                        )}
+                        {/* RobotRuntime cannot interrupt the move, so the button stays pending until it ends. */}
+                        <Button
+                            variant='secondary'
+                            isPending={returnHome.isPending || state.returning_home}
+                            isDisabled={startTask.isPending || stopTask.isPending || setFollowerSource.isPending}
+                            onPress={() => returnHome.mutate()}
+                        >
+                            Return Home
+                        </Button>
                         {state.follower_source === 'policy' ? (
                             <Button variant='primary' isPending={stopTask.isPending} onPress={() => stopTask.mutate()}>
                                 <Pause fill='white' />

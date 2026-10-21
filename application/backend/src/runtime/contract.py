@@ -70,7 +70,11 @@ class StartRecordingCommand(CommandBase):
 
 
 class ReturnHomeCommand(CommandBase):
-    """Glide the follower back to the pose it had when the session started, then hold."""
+    """Have RobotRuntime move the follower back to the pose its current run started from, then hold.
+
+    The session stops the run with ``return_to_initial_state=True`` and starts the next one
+    once the move ends. The move cannot be cancelled; an aborted move only logs.
+    """
 
     command: Literal["return_home"] = "return_home"
 

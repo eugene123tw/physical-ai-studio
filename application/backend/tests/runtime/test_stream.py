@@ -1,3 +1,4 @@
+import queue
 import threading
 
 import numpy as np
@@ -116,3 +117,52 @@ def test_event_sink_coalesces_observations_without_dropping_state() -> None:
         "data": {"joint.pos": 2.0},
         "actions": None,
     }
+
+
+def _shutdown(reason: str = "stop_requested") -> LifecycleEvent:
+    return LifecycleEvent(session_id="test", timestamp=1, event="shutdown", metadata={"reason": reason, "steps": 3})
+
+
+def _drain(events: QueueEventSink) -> list:
+    emitted = []
+    while True:
+        try:
+            emitted.append(events.get_nowait())
+        except queue.Empty:
+            return emitted
+
+
+def test_shutdown_is_published_by_default() -> None:
+    events = QueueEventSink()
+    callback = StreamCallback(event_sink=events, follower_source=lambda: "hold")
+
+    callback.on_lifecycle(_shutdown())
+
+    (event,) = _drain(events)
+    assert event.event == "lifecycle"
+    assert event.data.event == "shutdown"
+    assert event.data.reason == "stop_requested"
+
+
+def test_deferred_shutdown_is_dropped_when_the_run_restarts() -> None:
+    events = QueueEventSink()
+    callback = StreamCallback(event_sink=events, follower_source=lambda: "hold", defer_shutdown=lambda: True)
+
+    callback.on_lifecycle(_shutdown())
+    assert _drain(events) == []
+
+    callback.release_deferred_shutdown(publish=False)
+    callback.release_deferred_shutdown(publish=True)
+    assert _drain(events) == []
+
+
+def test_deferred_shutdown_is_published_when_the_session_ends_instead() -> None:
+    events = QueueEventSink()
+    callback = StreamCallback(event_sink=events, follower_source=lambda: "hold", defer_shutdown=lambda: True)
+
+    callback.on_lifecycle(_shutdown())
+    callback.release_deferred_shutdown(publish=True)
+
+    (event,) = _drain(events)
+    assert event.data.event == "shutdown"
+    assert event.data.metadata == {"reason": "stop_requested", "steps": 3}

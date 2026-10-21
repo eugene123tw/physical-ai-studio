@@ -27,6 +27,7 @@ class StreamCallback:
         ready: threading.Event | None = None,
         start_allowed: Callable[[], bool] | None = None,
         lifecycle_lock: threading.Lock | None = None,
+        defer_shutdown: Callable[[], bool] | None = None,
     ) -> None:
         self._event_sink = event_sink
         self._follower_source = follower_source
@@ -35,6 +36,8 @@ class StreamCallback:
         self.ready = ready or threading.Event()
         self._start_allowed = start_allowed or (lambda: True)
         self._lifecycle_lock = lifecycle_lock or threading.Lock()
+        self._defer_shutdown = defer_shutdown or (lambda: False)
+        self._deferred_shutdown: LifecycleEvent | None = None
 
     def on_tick(self, event: TickEvent) -> None:
         # Positions only: the browser maps ".pos" features onto the URDF model.
@@ -61,12 +64,22 @@ class StreamCallback:
                 )
                 self._event_sink.emit(StateEvent(data=state))
         elif event.event == "shutdown":
-            self._event_sink.emit(
-                LifecycleEvent(
-                    data=LifecycleData(
-                        event="shutdown",
-                        reason=event.metadata.get("reason"),
-                        metadata=event.metadata,
-                    )
+            shutdown = LifecycleEvent(
+                data=LifecycleData(
+                    event="shutdown",
+                    reason=event.metadata.get("reason"),
+                    metadata=event.metadata,
                 )
             )
+            # Clients treat "shutdown" as the session ending, so a run that is
+            # about to be restarted must not publish it.
+            if self._defer_shutdown():
+                self._deferred_shutdown = shutdown
+                return
+            self._event_sink.emit(shutdown)
+
+    def release_deferred_shutdown(self, *, publish: bool) -> None:
+        """Publish or drop the shutdown event held back by ``defer_shutdown``."""
+        shutdown, self._deferred_shutdown = self._deferred_shutdown, None
+        if publish and shutdown is not None:
+            self._event_sink.emit(shutdown)

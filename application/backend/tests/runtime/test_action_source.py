@@ -4,14 +4,7 @@ import numpy as np
 import pytest
 
 from runtime.action_source import StudioActionSource
-from runtime.contract import (
-    InMemoryCommandMailbox,
-    QueueEventSink,
-    ReturnHomeCommand,
-    SetFollowerSourceCommand,
-    SetInterpolationCommand,
-    StopTaskCommand,
-)
+from runtime.contract import InMemoryCommandMailbox, QueueEventSink, SetFollowerSourceCommand, SetInterpolationCommand
 from runtime.interpolation import AdjustableLinearInterpolator
 
 from .fakes import FakeObservation, FakeRobot
@@ -111,127 +104,20 @@ def _drain(events: QueueEventSink) -> list:
             return emitted
 
 
-def test_return_home_glides_back_to_the_session_start_pose_then_holds() -> None:
-    follower = FakeRobot([_observation([0, 0], 1)])
-    source, mailbox, _ = _source(follower=follower, leader=None)
-    source.update(_observation([0, 0], 1), {}, 0)
-
-    mailbox.apply(ReturnHomeCommand())
-    # The move lasts RETURN_HOME_DURATION_S (2.5 s) of observation time.
-    start = source.update(_observation([10, 20], 3), {}, 1)
-    assert source.follower_source == "hold"
-    assert source.state_data().returning_home is True
-    middle = source.update(_observation([10, 20], 4), {}, 2)
-    end = source.update(_observation([6, 12], 5.5), {}, 3)
-
-    np.testing.assert_allclose(start, [10, 20])
-    np.testing.assert_allclose(middle, [6, 12])
-    np.testing.assert_allclose(end, [0, 0])
-    # The return stays active until an observation confirms the final command.
-    assert source.state_data().returning_home is True
-    np.testing.assert_allclose(source.update(_observation([0, 0], 6), {}, 4), [0, 0])
-    assert source.state_data().returning_home is False
-    np.testing.assert_allclose(source.update(_observation([0, 0], 7), {}, 5), [0, 0])
-
-
-def test_return_home_aborts_and_holds_the_measured_pose_when_the_arm_is_blocked() -> None:
-    follower = FakeRobot([_observation([0, 0], 1)])
-    source, mailbox, events = _source(follower=follower, leader=None)
-    source.update(_observation([0, 0], 1), {}, 0)
-    mailbox.apply(ReturnHomeCommand())
-    source.update(_observation([10, 0], 2), {}, 1)
-    source.update(_observation([10, 0], 2.25), {}, 2)
-    source.update(_observation([10, 0], 2.5), {}, 3)
-    _drain(events)
-
-    # The arm stays at 10 while the 8 command asks it to move: 20% of a 10-unit move.
-    action = source.update(_observation([10, 0], 2.75), {}, 4)
-
-    np.testing.assert_allclose(action, [10, 0])
-    emitted = _drain(events)
-    assert any(event.event == "error" and event.error_code == "return_home_aborted" for event in emitted)
-    assert source.state_data().returning_home is False
-
-
-def test_a_mode_change_cancels_return_home() -> None:
-    follower = FakeRobot([_observation([0, 0], 1)])
-    source, mailbox, _ = _source(follower=follower, leader=None)
-    source.update(_observation([0, 0], 1), {}, 0)
-    mailbox.apply(ReturnHomeCommand())
-    first = source.update(_observation([10, 0], 2), {}, 1)
-
-    mailbox.apply(StopTaskCommand())
-    held = source.update(_observation(list(first), 3), {}, 2)
-
-    np.testing.assert_allclose(held, first)
-    assert source.state_data().returning_home is False
-
-
-def test_stop_return_holds_the_measured_pose() -> None:
-    follower = FakeRobot([_observation([0, 0], 1)])
-    source, mailbox, _ = _source(follower=follower, leader=None)
-    source.update(_observation([0, 0], 1), {}, 0)
-    mailbox.apply(ReturnHomeCommand())
-    source.update(_observation([10, 0], 2), {}, 1)
-
-    # The source is already "hold", so this request only cancels the return.
-    mailbox.apply(SetFollowerSourceCommand(follower_source="hold"))
-    held = source.update(_observation([9.5, 0], 3), {}, 2)
-
-    np.testing.assert_allclose(held, [9.5, 0])
-    assert source.state_data().returning_home is False
-
-
-def _interpolated_source(
-    follower: FakeRobot,
-) -> tuple[StudioActionSource, InMemoryCommandMailbox, AdjustableLinearInterpolator]:
-    mailbox = InMemoryCommandMailbox()
-    interpolator = AdjustableLinearInterpolator(multiplier=3)
+def test_state_reports_the_return_home_flag_owned_by_the_session() -> None:
+    returning = {"value": False}
     source = StudioActionSource(
-        follower=follower,
+        follower=FakeRobot([_observation([0, 0], 1)]),
         leader=None,
-        mailbox=mailbox,
+        mailbox=InMemoryCommandMailbox(),
         event_sink=QueueEventSink(),
-        fps=10,
-        interpolator=interpolator,
+        fps=30,
+        returning_home=lambda: returning["value"],
     )
-    source.connect(bus=object(), session_id="test")
-    return source, mailbox, interpolator
 
-
-def _first_substep(interpolator: AdjustableLinearInterpolator, action: np.ndarray) -> np.ndarray:
-    # Mirror RobotRuntime: add the source action, then send substep 0.
-    interpolator.add(action)
-    return interpolator.get(0)
-
-
-def test_return_home_does_not_blend_from_a_stale_target() -> None:
-    follower = FakeRobot([_observation([0], 1)])
-    source, mailbox, interpolator = _interpolated_source(follower)
-    source.update(_observation([0], 1), {}, 0)
-    interpolator.add(np.array([100.0], dtype=np.float32))
-
-    mailbox.apply(ReturnHomeCommand())
-    action = source.update(_observation([10], 2), {}, 1)
-
-    np.testing.assert_allclose(action, [10])
-    np.testing.assert_allclose(_first_substep(interpolator, action), [10])
-
-
-def test_return_home_abort_does_not_blend_from_a_stale_target() -> None:
-    follower = FakeRobot([_observation([0], 1)])
-    source, mailbox, interpolator = _interpolated_source(follower)
-    source.update(_observation([0], 1), {}, 0)
-    mailbox.apply(ReturnHomeCommand())
-    first = source.update(_observation([10], 2), {}, 1)
-    interpolator.add(first)
-
-    # The arm is 2 units (20% of the move) off the 10 command.
-    action = source.update(_observation([12], 2.25), {}, 2)
-
-    np.testing.assert_allclose(action, [12])
-    np.testing.assert_allclose(_first_substep(interpolator, action), [12])
     assert source.state_data().returning_home is False
+    returning["value"] = True
+    assert source.state_data().returning_home is True
 
 
 def test_set_interpolation_requests_a_new_multiplier_and_publishes_it() -> None:

@@ -24,7 +24,9 @@ from runtime.contract import (
     ErrorEvent,
     InMemoryCommandMailbox,
     LoadDatasetCommand,
+    ReturnHomeCommand,
     SaveEpisodeCommand,
+    SetFollowerSourceCommand,
     StateEvent,
 )
 from runtime.dataset_features import build_lerobot_dataset_features
@@ -87,6 +89,8 @@ class RuntimeSession:
         self._command_worker = CommandWorker()
         self._runtime: RobotRuntime | None = None
         self._disconnect_requested = False
+        # Set while RobotRuntime is stopping to return home and run() has not restarted yet.
+        self._return_home_requested = False
         self._lifecycle_lock = threading.Lock()
 
     async def setup(self) -> None:
@@ -112,6 +116,7 @@ class RuntimeSession:
             fps=float(init_args["fps"]),
             camera_keys=tuple(self._cameras),
             interpolator=self._interpolator,
+            returning_home=lambda: self._return_home_requested,
         )
         self._action_source.bind_recording(self._recording)
         action_source = self._action_source
@@ -122,6 +127,7 @@ class RuntimeSession:
             ready=self.ready,
             start_allowed=lambda: not self._disconnect_requested,
             lifecycle_lock=self._lifecycle_lock,
+            defer_shutdown=lambda: self._return_home_requested,
         )
         self._recording_callback = RecordingCallback(
             recording=self._recording,
@@ -154,6 +160,9 @@ class RuntimeSession:
                 self._disconnect_requested = True
                 if self._runtime is not None:
                     self._runtime.stop()
+            return
+        if isinstance(command, ReturnHomeCommand):
+            self._request_return_home()
             return
         if isinstance(command, LoadDatasetCommand):
             self._command_worker.submit("load_dataset", lambda: self._load_dataset(command))
@@ -194,12 +203,55 @@ class RuntimeSession:
             runtime.connect()
             if self._disconnect_requested or stop_signal.is_set():
                 return
-            runtime.run(stop_event=stop_signal)
+            self._run_until_session_ends(runtime, stop_signal)
         except RobotError as exc:
             follower_connected = self._follower is not None and self._follower.is_connected()
             leader_setup_failed = follower_connected and not self.ready.is_set()
             robot_name = self._leader_name if leader_setup_failed else self._follower_name
             raise translate_robot_error(exc, robot_name=robot_name) from exc
+
+    def _request_return_home(self) -> None:
+        """Stop the run so RobotRuntime moves the follower back to the pose the run started from.
+
+        The session restarts the run afterwards with the follower holding. Ignored
+        before the first run starts, after a disconnect, and while a return is in progress.
+        """
+        with self._lifecycle_lock:
+            runtime = self._runtime
+            if runtime is None or not self.ready.is_set() or self._disconnect_requested:
+                return
+            if not self._return_home_requested:
+                self._return_home_requested = True
+                # Through the mailbox so the control thread latches the hold pose itself.
+                self._mailbox.apply(SetFollowerSourceCommand(follower_source="hold"))
+                runtime.stop(return_to_initial_state=True)
+                logger.info("Returning the follower to its start pose")
+        self._emit_state()
+
+    def _run_until_session_ends(self, runtime: RobotRuntime, stop_signal: StopSignal) -> None:
+        """Run the control loop, starting a new run after each return home.
+
+        RobotRuntime returns home while it shuts a run down, so every return
+        ends one ``run()``; the session continues with the next.
+        """
+        while True:
+            completed = False
+            try:
+                runtime.run(stop_event=stop_signal)
+                completed = True
+            finally:
+                restart = self._finish_return_home(stop_signal) and completed
+                if self._stream_callback is not None:
+                    self._stream_callback.release_deferred_shutdown(publish=not restart)
+            if not restart:
+                return
+
+    def _finish_return_home(self, stop_signal: StopSignal) -> bool:
+        """Clear a return-home request and report whether the session should run again."""
+        with self._lifecycle_lock:
+            requested = self._return_home_requested
+            self._return_home_requested = False
+            return requested and not self._disconnect_requested and not stop_signal.is_set()
 
     async def teardown(self) -> None:
         # Finalize first: a dataset that will not copy back must not prevent

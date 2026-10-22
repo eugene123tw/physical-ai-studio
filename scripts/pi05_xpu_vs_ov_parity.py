@@ -331,9 +331,10 @@ def main() -> None:
     parser.add_argument("--ov-device", default="GPU")
     parser.add_argument(
         "--ov-precision",
-        choices=("auto", "default", "f16", "f32", "bf16"),
+        choices=("auto", "default", "dynamic", "f16", "f32", "bf16"),
         default="auto",
-        help="OV INFERENCE_PRECISION_HINT; 'auto' follows --dtype, 'default' uses the device default",
+        help="OV INFERENCE_PRECISION_HINT; 'auto' follows --dtype, 'default' uses the device default, "
+        "'dynamic' keeps the IR's original element types",
     )
     parser.add_argument("--compile", action="store_true", help="torch.compile the PyTorch model")
     parser.add_argument("--task-suite", default="libero_10")

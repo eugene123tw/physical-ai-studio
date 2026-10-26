@@ -116,7 +116,7 @@ def run_openvino(args: argparse.Namespace, np_obs: dict[str, Any]) -> dict[str, 
     adapter_kwargs: dict[str, str] = {}
     if requested == "default":
         pass
-    elif requested == "bf16" and "BF16" not in capabilities:
+    elif requested == "bf16" and "BF16" not in capabilities and args.ov_precision == "auto":
         print(f"[WARN] {args.ov_device} has no BF16 support ({capabilities}); using the device default precision.")
     else:
         adapter_kwargs["INFERENCE_PRECISION_HINT"] = requested
